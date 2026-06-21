@@ -1,0 +1,13 @@
+{
+  "refreshIntervalSeconds": 300,
+  "showOnHover": true,
+  "providers": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "kind": "official-subscription",
+      "tool": "codex",
+      "enabled": true
+    }
+  ]
+}

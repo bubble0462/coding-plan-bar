@@ -1,0 +1,66 @@
+{
+  "name": "coding-plan-bar",
+  "version": "0.3.2",
+  "productName": "Coding Plan Bar",
+  "description": "Windows tray quota monitor for Codex and optional coding-plan providers.",
+  "main": "src/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "start": "electron .",
+    "dist": "electron-builder --win --x64",
+    "pack": "electron-builder --dir",
+    "smoke:electron": "electron . --smoke-startup",
+    "screenshot": "electron scripts/capture-popup.js",
+    "screenshot:settings": "electron scripts/capture-settings.js",
+    "screenshot:settings:templates": "electron scripts/capture-settings.js --templates",
+    "check": "node --check src/main.js && node --check src/config-store.js && node --check src/layout.js && node --check src/preload.js && node --check src/providers.js && node --check src/renderer/renderer.js && node --check src/settings/settings.js && node --check scripts/capture-popup.js && node --check scripts/capture-settings.js",
+    "smoke": "node scripts/smoke-test.js"
+  },
+  "keywords": [
+    "electron",
+    "windows",
+    "tray",
+    "codex",
+    "claude",
+    "coding-plan"
+  ],
+  "author": "",
+  "license": "MIT",
+  "build": {
+    "appId": "com.bubble.coding-plan-bar",
+    "productName": "Coding Plan Bar",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "config.example.json",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Coding Plan Bar"
+    }
+  },
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.3"
+  }
+}
