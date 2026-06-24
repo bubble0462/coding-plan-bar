@@ -8,9 +8,11 @@
   --muted: #667085;
   --border: #d7dee8;
   --blue: #2563eb;
+  --blue-soft: #dbeafe;
   --green: #16a34a;
   --amber: #d97706;
   --red: #dc2626;
+  --ring: 0 0 0 3px rgba(37, 99, 235, 0.12);
   --shadow: 0 18px 48px rgba(15, 23, 42, 0.2), 0 2px 8px rgba(15, 23, 42, 0.08);
   font-family:
     "Segoe UI",
@@ -51,17 +53,88 @@ button {
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.55);
   border-radius: 8px;
-  background: linear-gradient(180deg, var(--panel), #edf3fb);
+  background:
+    radial-gradient(circle at 18% -8%, rgba(59, 130, 246, 0.18), transparent 34%),
+    radial-gradient(circle at 88% 12%, rgba(45, 212, 191, 0.13), transparent 30%),
+    linear-gradient(180deg, var(--panel), #edf3fb);
   box-shadow: var(--shadow);
 }
 
+.panel-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(15, 23, 42, 0.025) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.48), transparent 58%);
+  opacity: 0.7;
+}
+
+/* Ambient aurora glow: two slow-drifting radial blobs behind the cards. */
+.panel-shell::before {
+  background-image:
+    radial-gradient(circle at 20% -8%, rgba(59, 130, 246, 0.12), transparent 40%),
+    radial-gradient(circle at 85% 110%, rgba(45, 212, 191, 0.1), transparent 38%),
+    linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(15, 23, 42, 0.025) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px;
+  animation: cpb-aurora 14s var(--ease-soft) infinite alternate;
+}
+
+@keyframes cpb-aurora {
+  from {
+    background-position: 0% 0%, 0% 0%, 0 0, 0 0;
+  }
+  to {
+    background-position: 8% 6%, -6% -8%, 0 0, 0 0;
+  }
+}
+
+.panel-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.panel-shell.is-loading::after {
+  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.11), transparent);
+  transform: translateX(-120%);
+  animation: cpb-panel-scan 1.45s var(--ease-out) infinite;
+}
+
 .header {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 14px 14px 10px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid rgba(215, 222, 232, 0.76);
+}
+
+.header::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.4), transparent);
+  opacity: 0;
+  transform: scaleX(0.55);
+  transition:
+    opacity 260ms var(--ease-out),
+    transform 260ms var(--ease-out);
+}
+
+#app[data-hover="true"] .header::after {
+  opacity: 1;
+  transform: scaleX(1);
 }
 
 .header > div:first-child {
@@ -77,6 +150,23 @@ button {
   line-height: 1.2;
   font-weight: 700;
   letter-spacing: 0;
+  background: linear-gradient(90deg, #0f172a 0%, #1e3a8a 50%, #0f172a 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: cpb-title-sheen 6s var(--ease-soft) infinite;
+}
+
+@keyframes cpb-title-sheen {
+  0%,
+  70%,
+  100% {
+    background-position: 100% 0;
+  }
+  85% {
+    background-position: 0% 0;
+  }
 }
 
 .header p {
@@ -96,6 +186,7 @@ button {
 
 .icon-button,
 .footer-button {
+  position: relative;
   height: 28px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -105,6 +196,27 @@ button {
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
+  overflow: hidden;
+}
+
+/* Glare sweep across buttons on hover (glare-hover inspired). */
+.icon-button::after,
+.footer-button::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(120deg, transparent 30%, rgba(37, 99, 235, 0.16) 50%, transparent 70%);
+  transform: translateX(-130%);
+  transition: transform 480ms var(--ease-out);
+  pointer-events: none;
+}
+
+.icon-button:hover::after,
+.footer-button:hover::after {
+  transform: translateX(130%);
 }
 
 .icon-button {
@@ -128,9 +240,12 @@ button {
   border-color: #9fb2ca;
   background: #f8fbff;
   color: var(--blue);
+  box-shadow: var(--ring);
 }
 
 .provider-list {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -138,6 +253,7 @@ button {
   min-height: 0;
   overflow: hidden;
   padding: 10px 10px 8px;
+  scroll-behavior: smooth;
 }
 
 .provider-list.is-scrollable {
@@ -154,13 +270,35 @@ button {
   border-radius: 8px;
   background: #c5d0df;
   background-clip: padding-box;
+  transition: background-color 160ms var(--ease-out);
+}
+
+.provider-list::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+  background-clip: padding-box;
 }
 
 .provider {
+  position: relative;
+  overflow: hidden;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.9);
+}
+
+.provider::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), transparent 42%);
+  opacity: 0;
+  transition: opacity 220ms var(--ease-out);
+}
+
+.provider:hover::before {
+  opacity: 1;
 }
 
 .provider-top {
@@ -186,6 +324,11 @@ button {
   font-size: 13px;
   line-height: 1.2;
   font-weight: 700;
+  transition: color 180ms var(--ease-out);
+}
+
+.provider:hover .provider-title h2 {
+  color: var(--blue);
 }
 
 .provider-title p {
@@ -195,6 +338,11 @@ button {
   white-space: nowrap;
   color: var(--muted);
   font-size: 10px;
+  transition: color 180ms var(--ease-out);
+}
+
+.provider:hover .provider-title p {
+  color: #475569;
 }
 
 .status-dot {
@@ -272,11 +420,26 @@ button {
 }
 
 .progress-track {
+  position: relative;
   height: 7px;
   margin: 5px 0 4px;
   overflow: hidden;
   border-radius: 6px;
   background: #e5eaf2;
+}
+
+.progress-track::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.7), transparent);
+  opacity: 0;
+}
+
+.provider:hover .progress-track::after {
+  opacity: 1;
+  animation: cpb-track-sheen 900ms var(--ease-out);
 }
 
 .progress-bar {
@@ -395,14 +558,17 @@ button {
 }
 
 .footer {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 9px 12px 11px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid rgba(215, 222, 232, 0.82);
   color: var(--muted);
   font-size: 10px;
+  backdrop-filter: blur(10px);
 }
 
 .footer-button {
@@ -420,6 +586,7 @@ button {
   border-right: 1px solid rgba(148, 163, 184, 0.55);
   border-bottom: 1px solid rgba(148, 163, 184, 0.55);
   background: #edf3fb;
+  box-shadow: 3px 3px 10px rgba(15, 23, 42, 0.08);
 }
 
 /* ===== Interactions & motion ===== */
@@ -470,6 +637,24 @@ button {
   }
 }
 
+@keyframes cpb-track-sheen {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes cpb-panel-scan {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(120%);
+  }
+}
+
 /* Provider cards: calmer, layered shadow on hover. */
 .provider {
   transition:
@@ -480,7 +665,7 @@ button {
 }
 
 .provider:hover {
-  transform: translateY(-2px);
+  transform: translateY(-2px) scale(1.004);
   border-color: #bcd3f4;
   box-shadow:
     0 10px 24px rgba(15, 23, 42, 0.09),
@@ -488,12 +673,50 @@ button {
   background: #ffffff;
 }
 
+/* Animated light streak along the top edge on hover (star-border inspired). */
+.provider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 60%;
+  height: 1.5px;
+  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.7), transparent);
+  transform: translateX(-120%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms var(--ease-out);
+}
+
+.provider:hover::after {
+  opacity: 1;
+  animation: cpb-streak 900ms var(--ease-out);
+}
+
+@keyframes cpb-streak {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(200%);
+  }
+}
+
 .status-pill,
-.status-dot {
+.status-dot,
+.balance-mark {
   transition:
     background-color 260ms var(--ease-out),
     box-shadow 260ms var(--ease-out),
     transform 200ms var(--ease-out);
+}
+
+.provider:hover .status-pill {
+  transform: translateY(-1px);
+}
+
+.provider:hover .balance-mark {
+  transform: scaleY(1.12);
 }
 
 /* Attention indicators: a slow breathe for warnings, a ping for errors. */
@@ -545,27 +768,9 @@ button {
   mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
 }
 
-/* Entrance: focus pull with a gentle blur each time the popup is shown. */
-#app.is-entering .panel-shell {
-  animation: cpb-panel-in 260ms var(--ease-out);
-}
-
-@keyframes cpb-panel-in {
-  from {
-    opacity: 0;
-    transform: translateY(6px) scale(0.994);
-    filter: blur(5px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-    filter: blur(0);
-  }
-}
-
 /* Staggered card reveal on first data load only. */
 .provider.is-fresh {
-  animation: cpb-card-in 340ms var(--ease-out) both;
+  animation: cpb-card-in 420ms var(--ease-spring) both;
   animation-delay: var(--enter-delay, 0ms);
 }
 
@@ -579,19 +784,139 @@ button {
   animation-delay: calc(var(--enter-delay, 0ms) + 240ms);
 }
 
+/* Status pill pops in with the card on first load. */
+.provider.is-fresh .status-pill {
+  animation: cpb-pill-pop 360ms var(--ease-spring) both;
+  animation-delay: calc(var(--enter-delay, 0ms) + 80ms);
+}
+
+@keyframes cpb-pill-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.6) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
 .empty-state,
 .fatal {
   animation: cpb-rise 300ms var(--ease-out) both;
 }
 
+/* Empty state gently floats after settling in, signalling it's interactive. */
+.empty-state {
+  animation:
+    cpb-rise 300ms var(--ease-out) both,
+    cpb-float 4s var(--ease-soft) 320ms infinite;
+}
+
+@keyframes cpb-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+
 @keyframes cpb-card-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(14px) scale(0.985);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Data refresh: progress bar smoothly fills and pulses a highlight. */
+.progress-bar {
+  transition: width 600ms var(--ease-out);
+}
+
+.provider.is-refreshing .progress-bar {
+  animation: cpb-bar-pulse 700ms var(--ease-out);
+}
+
+.provider.is-refreshing .balance-meter {
+  animation: cpb-meter-glow 700ms var(--ease-out);
+}
+
+@keyframes cpb-bar-pulse {
+  0% {
+    filter: brightness(1);
+  }
+  35% {
+    filter: brightness(1.35) saturate(1.2);
+  }
+  100% {
+    filter: brightness(1);
+  }
+}
+
+@keyframes cpb-meter-glow {
+  0%,
+  100% {
+    box-shadow: none;
+  }
+  40% {
+    box-shadow: 0 0 10px rgba(37, 99, 235, 0.45);
+  }
+}
+
+/* Numeric values softly tick up on refresh (decorative shimmer). */
+.provider.is-refreshing .tier-line strong,
+.provider.is-refreshing .balance-box strong {
+  animation: cpb-tick 520ms var(--ease-out);
+}
+
+@keyframes cpb-tick {
+  0% {
+    opacity: 0.4;
+    transform: translateY(2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* View transition: cross-fade + micro-shift when switching loading/ready/empty. */
+.provider-list {
+  animation: cpb-view-in 200ms var(--ease-out) both;
+}
+
+.provider-list.is-leaving {
+  animation: cpb-view-out 140ms var(--ease-out) both;
+}
+
+@keyframes cpb-view-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
   }
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes cpb-view-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
   }
 }
 

@@ -19,6 +19,7 @@ let popupWindow = null;
 let settingsWindow = null;
 let refreshTimer = null;
 let hideTimer = null;
+let revealTimer = null;
 let configPath = null;
 let isPopupHovered = false;
 let measuredPopupHeight = 0;
@@ -123,15 +124,27 @@ function showPopup() {
   cancelHide();
   resizePopupForState();
   positionPopup();
+
+  const wasVisible = popupWindow.isVisible();
+  if (!wasVisible) {
+    popupWindow.setOpacity(0);
+  }
+
   popupWindow.show();
   popupWindow.moveTop();
   sendSnapshot();
+
+  if (!wasVisible) {
+    scheduleReveal();
+  }
 }
 
 function hidePopup() {
   if (popupWindow && popupWindow.isVisible()) {
     isPopupHovered = false;
     cancelHide();
+    cancelReveal();
+    popupWindow.setOpacity(1);
     popupWindow.hide();
   }
 }
@@ -150,6 +163,22 @@ function scheduleHide(delay = 500) {
 function cancelHide() {
   clearTimeout(hideTimer);
   hideTimer = null;
+}
+
+function scheduleReveal() {
+  cancelReveal();
+  revealTimer = setTimeout(() => {
+    if (!popupWindow || popupWindow.isDestroyed() || !popupWindow.isVisible()) return;
+    resizePopupForState();
+    positionPopup();
+    popupWindow.setOpacity(1);
+    revealTimer = null;
+  }, 80);
+}
+
+function cancelReveal() {
+  clearTimeout(revealTimer);
+  revealTimer = null;
 }
 
 function keepPopupOpen() {
@@ -418,4 +447,5 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   clearInterval(refreshTimer);
   clearTimeout(hideTimer);
+  clearTimeout(revealTimer);
 });

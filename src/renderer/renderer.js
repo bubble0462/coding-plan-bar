@@ -28,6 +28,8 @@ let lastReportedHeight = 0;
 let lastLayoutKey = "";
 let layoutReportQueued = false;
 let hasEntered = false;
+let prevSnapshotUpdatedAt = null;
+let viewSwapTimer = null;
 
 window.codingPlanBar.onSnapshot((next) => {
   const nextLayoutKey = next.layoutKey || providerLayoutKey(next.providers);
@@ -35,8 +37,10 @@ window.codingPlanBar.onSnapshot((next) => {
     lastReportedHeight = 0;
     lastLayoutKey = nextLayoutKey;
   }
+  const isDataRefresh = !next.loading && prevSnapshotUpdatedAt !== next.updatedAt && hasEntered;
+  prevSnapshotUpdatedAt = next.updatedAt;
   snapshot = next;
-  render();
+  render(isDataRefresh);
 });
 
 setInterval(render, 30000);
@@ -55,24 +59,22 @@ root.addEventListener("mouseleave", () => {
   window.codingPlanBar.leavePopup();
 });
 
-// Replay a subtle entrance each time the popup becomes visible.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
-  root.classList.add("is-entering");
-  window.setTimeout(() => root.classList.remove("is-entering"), 300);
   // Force a fresh height report so the popup snaps to its true content height,
   // overriding any estimate the main process applied while it was hidden.
   lastReportedHeight = 0;
   queueLayoutReport();
 });
 
-function render() {
+function render(isDataRefresh = false) {
   const providers = snapshot.providers || [];
   const fresh = providers.length > 0 && !hasEntered;
   if (fresh) hasEntered = true;
+  const refreshingClass = isDataRefresh ? "is-refreshing" : "";
 
   root.innerHTML = `
-    <section class="panel-shell">
+    <section class="panel-shell ${snapshot.loading ? "is-loading" : ""}">
       <header class="header">
         <div>
           <h1>Coding Plan Bar</h1>
@@ -85,7 +87,7 @@ function render() {
       </header>
 
       <section class="provider-list ${providers.length > 3 ? "is-scrollable" : "is-static"}">
-        ${providers.length ? providers.map((provider, index) => renderProvider(provider, index, fresh)).join("") : renderEmpty()}
+        ${providers.length ? providers.map((provider, index) => renderProvider(provider, index, fresh, refreshingClass)).join("") : renderEmpty()}
       </section>
 
       ${snapshot.fatalError ? `<div class="fatal">${escapeHtml(snapshot.fatalError)}</div>` : ""}
@@ -109,11 +111,24 @@ function render() {
     window.codingPlanBar.quit();
   });
 
+  // Clear the refresh highlight shortly after it plays so a subsequent
+  // snapshot can retrigger it cleanly.
+  if (isDataRefresh) {
+    window.clearTimeout(refreshHighlightTimer);
+    refreshHighlightTimer = window.setTimeout(() => {
+      root.querySelectorAll(".provider.is-refreshing").forEach((el) => el.classList.remove("is-refreshing"));
+    }, 750);
+  }
+
   queueLayoutReport();
 }
 
-function renderProvider(provider, index, fresh) {
-  const classes = ["provider", `status-${provider.status}`, fresh ? "is-fresh" : ""].filter(Boolean).join(" ");
+let refreshHighlightTimer = null;
+
+function renderProvider(provider, index, fresh, refreshing) {
+  const classes = ["provider", `status-${provider.status}`, fresh ? "is-fresh" : "", refreshing]
+    .filter(Boolean)
+    .join(" ");
   const enterStyle = fresh ? ` style="--enter-delay:${Math.min(index, 5) * 60}ms"` : "";
   const body = provider.balance
     ? renderBalance(provider)
