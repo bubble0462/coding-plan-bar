@@ -65,7 +65,9 @@ async function main() {
   const window = new BrowserWindow({
     width: 940,
     height: 660,
-    show: false,
+    show: showTemplates,
+    x: showTemplates ? -2200 : undefined,
+    y: showTemplates ? 80 : undefined,
     frame: true,
     backgroundColor: "#f6f8fb",
     webPreferences: {
@@ -78,10 +80,62 @@ async function main() {
   await window.loadFile(path.join(__dirname, "..", "src", "settings", "index.html"));
   await wait(800);
   if (showTemplates) {
+    window.showInactive();
+    await wait(120);
+    // Hidden capture windows do not always advance CSS animations, so force
+    // the template overlay into its settled visible state before asserting
+    // and taking the screenshot.
+    await window.webContents.insertCSS(`
+      .template-backdrop,
+      .template-popover,
+      .template-card {
+        animation: none !important;
+      }
+
+      .template-backdrop {
+        opacity: 1 !important;
+        background: rgba(15, 23, 42, 0.12) !important;
+        backdrop-filter: blur(6px) !important;
+      }
+
+      .template-popover {
+        opacity: 1 !important;
+        left: 80px !important;
+        top: 40px !important;
+        width: calc(100vw - 160px) !important;
+        max-height: calc(100vh - 80px) !important;
+        transform: none !important;
+        filter: none !important;
+        z-index: 1 !important;
+      }
+
+      .template-card {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+    `);
     await window.webContents.executeJavaScript(`
       document.querySelector('[data-action="toggle-templates"]')?.click();
     `);
-    await wait(450);
+    await wait(120);
+    // Assert the popover is visibly open so a silent failure (e.g. a timing
+    // miss or a selector change) cannot produce a misleading "passing" shot.
+    const opened = await window.webContents.executeJavaScript(
+      `(() => {
+        const popover = document.querySelector(".template-popover");
+        if (!popover) return false;
+        const rect = popover.getBoundingClientRect();
+        const style = getComputedStyle(popover);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity) > 0.99 &&
+          rect.width > 200 &&
+          rect.height > 120
+        );
+      })()`,
+    );
+    if (!opened) throw new Error("Template popover did not become visibly open");
   }
 
   const image = await window.capturePage();

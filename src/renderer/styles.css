@@ -71,24 +71,21 @@ button {
   opacity: 0.7;
 }
 
-/* Ambient aurora glow: two slow-drifting radial blobs behind the cards. */
+/* Ambient aurora glow: low-presence blobs that only drift on hover so the
+   quota numbers stay the visual focus. */
 .panel-shell::before {
   background-image:
-    radial-gradient(circle at 20% -8%, rgba(59, 130, 246, 0.12), transparent 40%),
-    radial-gradient(circle at 85% 110%, rgba(45, 212, 191, 0.1), transparent 38%),
+    radial-gradient(circle at 20% -8%, rgba(59, 130, 246, 0.07), transparent 40%),
+    radial-gradient(circle at 85% 110%, rgba(45, 212, 191, 0.06), transparent 38%),
     linear-gradient(rgba(15, 23, 42, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(15, 23, 42, 0.025) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px;
-  animation: cpb-aurora 14s var(--ease-soft) infinite alternate;
+  background-position: 0% 0%, 0% 0%, 0 0, 0 0;
+  transition: background-position 900ms var(--ease-soft);
 }
 
-@keyframes cpb-aurora {
-  from {
-    background-position: 0% 0%, 0% 0%, 0 0, 0 0;
-  }
-  to {
-    background-position: 8% 6%, -6% -8%, 0 0, 0 0;
-  }
+#app[data-hover="true"] .panel-shell::before {
+  background-position: 5% 4%, -4% -5%, 0 0, 0 0;
 }
 
 .panel-shell::after {
@@ -150,21 +147,24 @@ button {
   line-height: 1.2;
   font-weight: 700;
   letter-spacing: 0;
+  color: #0f172a;
+}
+
+/* On a successful refresh, a single subtle sheen sweeps the title once. */
+.header h1.is-just-refreshed {
   background: linear-gradient(90deg, #0f172a 0%, #1e3a8a 50%, #0f172a 100%);
   background-size: 200% 100%;
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: cpb-title-sheen 6s var(--ease-soft) infinite;
+  animation: cpb-title-sheen 700ms var(--ease-out) both;
 }
 
 @keyframes cpb-title-sheen {
-  0%,
-  70%,
-  100% {
+  from {
     background-position: 100% 0;
   }
-  85% {
+  to {
     background-position: 0% 0;
   }
 }
@@ -280,6 +280,7 @@ button {
 
 .provider {
   position: relative;
+  flex: 0 0 auto;
   overflow: hidden;
   padding: 10px;
   border: 1px solid var(--border);
@@ -768,36 +769,37 @@ button {
   mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
 }
 
-/* Staggered card reveal on first data load only. */
+/* Staggered card reveal on first data load only — kept restrained: short,
+   near-opaque, small offset, so it never reads as "slow to load". */
 .provider.is-fresh {
-  animation: cpb-card-in 420ms var(--ease-spring) both;
+  animation: cpb-card-in 200ms var(--ease-out) both;
   animation-delay: var(--enter-delay, 0ms);
 }
 
 .provider.is-fresh .progress-bar {
-  animation: cpb-bar-grow 720ms var(--ease-soft) both;
-  animation-delay: calc(var(--enter-delay, 0ms) + 160ms);
+  animation: cpb-bar-grow 420ms var(--ease-soft) both;
+  animation-delay: calc(var(--enter-delay, 0ms) + 90ms);
 }
 
 .provider.is-fresh .balance-mark {
-  animation: cpb-mark-in 460ms var(--ease-out) both;
-  animation-delay: calc(var(--enter-delay, 0ms) + 240ms);
+  animation: cpb-mark-in 280ms var(--ease-out) both;
+  animation-delay: calc(var(--enter-delay, 0ms) + 120ms);
 }
 
-/* Status pill pops in with the card on first load. */
+/* Status pill settles in with the card on first load. */
 .provider.is-fresh .status-pill {
-  animation: cpb-pill-pop 360ms var(--ease-spring) both;
-  animation-delay: calc(var(--enter-delay, 0ms) + 80ms);
+  animation: cpb-pill-pop 200ms var(--ease-out) both;
+  animation-delay: calc(var(--enter-delay, 0ms) + 40ms);
 }
 
 @keyframes cpb-pill-pop {
   from {
-    opacity: 0;
-    transform: scale(0.6) translateY(-2px);
+    opacity: 0.5;
+    transform: scale(0.85);
   }
   to {
     opacity: 1;
-    transform: scale(1) translateY(0);
+    transform: scale(1);
   }
 }
 
@@ -825,15 +827,12 @@ button {
 
 @keyframes cpb-card-in {
   from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.985);
-  }
-  60% {
-    opacity: 1;
+    opacity: 0.96;
+    transform: translateY(5px);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 
@@ -889,34 +888,19 @@ button {
   }
 }
 
-/* View transition: cross-fade + micro-shift when switching loading/ready/empty. */
-.provider-list {
-  animation: cpb-view-in 200ms var(--ease-out) both;
-}
-
-.provider-list.is-leaving {
-  animation: cpb-view-out 140ms var(--ease-out) both;
+/* View settle: a barely-there brighten only on a genuine data refresh,
+   not on every render. Base .provider-list carries no animation so frequent
+   repaints don't read as flicker. */
+.provider-list.is-refreshing-list {
+  animation: cpb-view-in 140ms var(--ease-out) both;
 }
 
 @keyframes cpb-view-in {
   from {
-    opacity: 0;
-    transform: translateY(6px);
+    opacity: 0.6;
   }
   to {
     opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes cpb-view-out {
-  from {
-    opacity: 1;
-    transform: translateY(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateY(-4px);
   }
 }
 

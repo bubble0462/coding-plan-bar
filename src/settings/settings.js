@@ -293,9 +293,12 @@ function renderTemplatePopover() {
   `;
 }
 
-function renderTemplateCard(template) {
+function renderTemplateCard(template, index) {
+  // Per-card stagger covers any number of templates (capped so long lists
+  // don't make the user wait for the last card to appear).
+  const enterDelay = Math.min(index, 9) * 18;
   return `
-    <button class="template-card" data-action="add-template" data-template="${escapeAttr(template.id)}">
+    <button class="template-card" data-action="add-template" data-template="${escapeAttr(template.id)}" style="--enter-delay:${enterDelay}ms">
       <span class="template-logo">${escapeHtml(template.short || template.label.slice(0, 2))}</span>
       <span class="template-copy">
         <strong>${escapeHtml(template.label)}</strong>

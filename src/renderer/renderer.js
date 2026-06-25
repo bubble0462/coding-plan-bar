@@ -29,7 +29,6 @@ let lastLayoutKey = "";
 let layoutReportQueued = false;
 let hasEntered = false;
 let prevSnapshotUpdatedAt = null;
-let viewSwapTimer = null;
 
 window.codingPlanBar.onSnapshot((next) => {
   const nextLayoutKey = next.layoutKey || providerLayoutKey(next.providers);
@@ -43,7 +42,16 @@ window.codingPlanBar.onSnapshot((next) => {
   render(isDataRefresh);
 });
 
-setInterval(render, 30000);
+// Light tick: only refreshes the "刚刚更新 / X 分钟前" text without rebuilding
+// the DOM, so scroll position and the entrance animation are not disturbed.
+setInterval(tickTimestamp, 30000);
+
+function tickTimestamp() {
+  const node = root.querySelector(".header p");
+  if (node && !snapshot.loading) {
+    node.textContent = formatUpdated(snapshot.updatedAt);
+  }
+}
 
 root.addEventListener("mouseenter", () => {
   root.dataset.hover = "true";
@@ -72,6 +80,11 @@ function render(isDataRefresh = false) {
   const fresh = providers.length > 0 && !hasEntered;
   if (fresh) hasEntered = true;
   const refreshingClass = isDataRefresh ? "is-refreshing" : "";
+
+  // Preserve scroll position across full re-renders so the list doesn't snap
+  // back to the top when data refreshes while the user is scrolled down.
+  const prevList = root.querySelector(".provider-list");
+  const savedScroll = prevList ? prevList.scrollTop : 0;
 
   root.innerHTML = `
     <section class="panel-shell ${snapshot.loading ? "is-loading" : ""}">
@@ -111,12 +124,22 @@ function render(isDataRefresh = false) {
     window.codingPlanBar.quit();
   });
 
+  // Restore scroll position now that the new list is in the DOM.
+  const newList = root.querySelector(".provider-list");
+  if (newList && savedScroll) newList.scrollTop = savedScroll;
+
   // Clear the refresh highlight shortly after it plays so a subsequent
   // snapshot can retrigger it cleanly.
   if (isDataRefresh) {
+    const title = root.querySelector(".header h1");
+    const list = root.querySelector(".provider-list");
+    title?.classList.add("is-just-refreshed");
+    list?.classList.add("is-refreshing-list");
     window.clearTimeout(refreshHighlightTimer);
     refreshHighlightTimer = window.setTimeout(() => {
       root.querySelectorAll(".provider.is-refreshing").forEach((el) => el.classList.remove("is-refreshing"));
+      title?.classList.remove("is-just-refreshed");
+      list?.classList.remove("is-refreshing-list");
     }, 750);
   }
 
@@ -129,7 +152,7 @@ function renderProvider(provider, index, fresh, refreshing) {
   const classes = ["provider", `status-${provider.status}`, fresh ? "is-fresh" : "", refreshing]
     .filter(Boolean)
     .join(" ");
-  const enterStyle = fresh ? ` style="--enter-delay:${Math.min(index, 5) * 60}ms"` : "";
+  const enterStyle = fresh ? ` style="--enter-delay:${Math.min(index, 4) * 45}ms"` : "";
   const body = provider.balance
     ? renderBalance(provider)
     : provider.tiers?.length

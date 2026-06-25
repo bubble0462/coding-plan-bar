@@ -651,6 +651,38 @@ button {
   animation: cpb-status-pop 220ms var(--ease-out) both;
 }
 
+/* Saving succeeds → a short, contained confirmation flash on the status row. */
+.status.is-success {
+  animation:
+    cpb-status-pop 220ms var(--ease-out) both,
+    cpb-status-saved 480ms var(--ease-out) both;
+}
+
+@keyframes cpb-status-saved {
+  0% {
+    color: #15803d;
+  }
+  100% {
+    color: var(--muted);
+  }
+}
+
+.status.is-success::before {
+  animation: cpb-status-glow 480ms var(--ease-out) both;
+}
+
+@keyframes cpb-status-glow {
+  0% {
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12), 0 0 0 0 rgba(22, 163, 74, 0.5);
+  }
+  60% {
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12), 0 0 0 6px rgba(22, 163, 74, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+  }
+}
+
 .btn {
   position: relative;
   height: 32px;
@@ -1066,23 +1098,8 @@ button {
 }
 
 .template-card {
-  animation: cpb-template-card-in 260ms var(--ease-out) both;
-}
-
-.template-card:nth-child(1) {
-  animation-delay: 25ms;
-}
-
-.template-card:nth-child(2) {
-  animation-delay: 45ms;
-}
-
-.template-card:nth-child(3) {
-  animation-delay: 65ms;
-}
-
-.template-card:nth-child(4) {
-  animation-delay: 85ms;
+  animation: cpb-template-card-in 200ms var(--ease-out) both;
+  animation-delay: var(--enter-delay, 0ms);
 }
 
 @keyframes cpb-backdrop-in {
