@@ -7,6 +7,12 @@ const {
 } = require("../src/providers");
 const { providerTemplates, validateConfig, normalizeConfig } = require("../src/config-store");
 const { computePopupHeight } = require("../src/layout");
+const {
+  parseVersion,
+  compareVersions,
+  findInstallerAsset,
+  buildUpdateResult,
+} = require("../src/updater");
 
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
 assert.strictEqual(windowSecondsToTierName(604800), "seven_day");
@@ -123,5 +129,52 @@ assert.throws(() =>
     providers: [],
   }),
 );
+
+// ===== Updater logic =====
+assert.deepStrictEqual(parseVersion("v0.3.6"), [0, 3, 6]);
+assert.deepStrictEqual(parseVersion("1.2"), [1, 2]);
+assert.strictEqual(parseVersion("not-a-version"), null);
+assert.strictEqual(compareVersions("0.3.6", "0.3.7"), -1);
+assert.strictEqual(compareVersions("0.3.7", "0.3.6"), 1);
+assert.strictEqual(compareVersions("1.0.0", "1"), 0);
+
+// autoUpdate normalizes to a stable shape with a default of enabled.
+assert.deepStrictEqual(normalizeConfig({ refreshIntervalSeconds: 300 }).autoUpdate, { enabled: true });
+assert.deepStrictEqual(normalizeConfig({ refreshIntervalSeconds: 300, autoUpdate: { enabled: false } }).autoUpdate, {
+  enabled: false,
+});
+
+// Installer asset matching accepts both tolerated naming variants.
+assert.strictEqual(
+  findInstallerAsset({ assets: [{ name: "Coding Plan Bar-Setup-0.3.7-x64.exe" }] }).name,
+  "Coding Plan Bar-Setup-0.3.7-x64.exe",
+);
+assert.strictEqual(
+  findInstallerAsset({ assets: [{ name: "Coding.Plan.Bar-Setup-0.3.7-x64.exe" }] }).name,
+  "Coding.Plan.Bar-Setup-0.3.7-x64.exe",
+);
+assert.strictEqual(findInstallerAsset({ assets: [{ name: "source.zip" }] }), null);
+
+// buildUpdateResult flags a newer release and surfaces the asset.
+const available = buildUpdateResult("0.3.6", {
+  tag_name: "0.3.7",
+  html_url: "https://example.com/release",
+  published_at: "2024-01-01T00:00:00Z",
+  body: "fixes",
+  assets: [{ name: "Coding Plan Bar-Setup-0.3.7-x64.exe", browser_download_url: "https://example.com/exe", size: 100 }],
+});
+assert.strictEqual(available.hasUpdate, true);
+assert.strictEqual(available.latestVersion, "0.3.7");
+assert.strictEqual(available.asset.url, "https://example.com/exe");
+
+// Same current version means no update.
+const latest = buildUpdateResult("0.3.6", {
+  tag_name: "0.3.6",
+  assets: [{ name: "Coding Plan Bar-Setup-0.3.6-x64.exe", browser_download_url: "https://example.com/exe", size: 100 }],
+});
+assert.strictEqual(latest.hasUpdate, false);
+
+// Malformed release degrades gracefully instead of throwing.
+assert.strictEqual(buildUpdateResult("0.3.6", null).hasUpdate, false);
 
 console.log("Smoke tests passed");

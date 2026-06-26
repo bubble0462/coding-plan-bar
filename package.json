@@ -1,6 +1,6 @@
 {
   "name": "coding-plan-bar",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "productName": "Coding Plan Bar",
   "description": "Windows tray quota monitor for Codex and optional coding-plan providers.",
   "main": "src/main.js",
@@ -13,7 +13,8 @@
     "screenshot": "electron scripts/capture-popup.js",
     "screenshot:settings": "electron scripts/capture-settings.js",
     "screenshot:settings:templates": "electron scripts/capture-settings.js --templates",
-    "check": "node --check src/main.js && node --check src/config-store.js && node --check src/layout.js && node --check src/preload.js && node --check src/providers.js && node --check src/renderer/renderer.js && node --check src/settings/settings.js && node --check scripts/capture-popup.js && node --check scripts/capture-settings.js",
+    "screenshot:settings:update": "electron scripts/capture-settings.js --update",
+    "check": "node --check src/main.js && node --check src/config-store.js && node --check src/layout.js && node --check src/preload.js && node --check src/providers.js && node --check src/updater.js && node --check src/renderer/renderer.js && node --check src/settings/settings.js && node --check scripts/capture-popup.js && node --check scripts/capture-settings.js",
     "smoke": "node scripts/smoke-test.js"
   },
   "keywords": [

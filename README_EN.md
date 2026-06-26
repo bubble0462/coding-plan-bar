@@ -23,7 +23,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.3.2-x64.exe
+Coding Plan Bar-Setup-0.3.7-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.
@@ -41,6 +41,15 @@ User configuration is stored at:
 ```text
 %APPDATA%\Coding Plan Bar\config.json
 ```
+
+### Checking and installing updates
+
+1. Open Settings and click "About & Update" at the bottom of the sidebar.
+2. Click "Check for updates" to query GitHub Releases for the latest version.
+3. When a newer version is found, click "Download update", then "Install update" once the download finishes to launch the downloaded installer.
+4. You can also click "Manual download" to open the GitHub Release page and download it yourself.
+
+"Check for updates on launch" is enabled by default: the app checks once in the background on startup and only flags a new version in the navigation — it **never downloads or installs automatically**. Toggle it off on the "About & Update" page; once off, restarting the app will not perform any update request.
 
 ## Supported Sources
 
@@ -83,6 +92,7 @@ The installer is written to `release/`.
 - Environment variables are recommended for API keys.
 - Some quota endpoints are not stable public APIs and may require adapter updates when providers change them.
 - Verify the trustworthiness and key scope of any relay service you configure.
+- Updates are fetched only from this repository's GitHub Release at `bubble0462/coding-plan-bar` and only the Windows x64 NSIS installer asset is accepted; the installer is written to a temporary path and only marked ready once the download completes with a non-empty size.
 
 ## Credits
 

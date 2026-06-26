@@ -4,11 +4,12 @@ const { app, BrowserWindow, ipcMain } = require("electron");
 const { providerTemplates } = require("../src/config-store");
 
 const showTemplates = process.argv.includes("--templates");
+const showUpdate = process.argv.includes("--update");
 const outputPath = path.join(
   __dirname,
   "..",
   "tmp",
-  showTemplates ? "settings-screenshot-templates.png" : "settings-screenshot.png",
+  showTemplates ? "settings-screenshot-templates.png" : showUpdate ? "settings-screenshot-update.png" : "settings-screenshot.png",
 );
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-settings-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
@@ -16,6 +17,7 @@ app.setPath("userData", captureUserDataPath);
 const sampleConfig = {
   refreshIntervalSeconds: 300,
   showOnHover: true,
+  autoUpdate: { enabled: true },
   providers: [
     {
       id: "codex",
@@ -35,6 +37,31 @@ const sampleConfig = {
       enabled: true,
     },
   ],
+};
+
+// Mock updater state injected into the settings page. For --update we report a
+// newer release is available so the screenshot exercises the download path.
+const mockUpdaterState = {
+  status: "available",
+  result: {
+    currentVersion: "0.3.6",
+    latestVersion: "0.3.7",
+    hasUpdate: true,
+    releaseUrl: "https://github.com/bubble0462/coding-plan-bar/releases/latest",
+    publishedAt: new Date().toISOString(),
+    releaseNotes: "示例更新日志",
+    asset: {
+      name: "Coding Plan Bar-Setup-0.3.7-x64.exe",
+      url: "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.7/Coding.Plan.Bar-Setup-0.3.7-x64.exe",
+      size: 98000000,
+    },
+    error: null,
+  },
+  downloadedPath: null,
+  progress: null,
+  error: null,
+  checkedAt: Date.now(),
+  lastPublishedAt: new Date().toISOString(),
 };
 
 function wait(ms) {
@@ -60,14 +87,22 @@ async function main() {
   ipcMain.handle("quota:resize", () => {});
   ipcMain.handle("quota:quit", () => {});
 
+  // Updater mocks — no real network. State is static; check/download/install
+  // are no-ops so the capture is deterministic.
+  ipcMain.handle("updater:get-state", () => mockUpdaterState);
+  ipcMain.handle("updater:check", () => mockUpdaterState);
+  ipcMain.handle("updater:download", () => mockUpdaterState);
+  ipcMain.handle("updater:install", () => {});
+  ipcMain.handle("updater:open-release", () => {});
+
   await app.whenReady();
 
   const window = new BrowserWindow({
     width: 940,
     height: 660,
-    show: showTemplates,
-    x: showTemplates ? -2200 : undefined,
-    y: showTemplates ? 80 : undefined,
+    show: showTemplates || showUpdate,
+    x: showTemplates || showUpdate ? -2200 : undefined,
+    y: showTemplates || showUpdate ? 80 : undefined,
     frame: true,
     backgroundColor: "#f6f8fb",
     webPreferences: {
@@ -136,6 +171,26 @@ async function main() {
       })()`,
     );
     if (!opened) throw new Error("Template popover did not become visibly open");
+  }
+
+  if (showUpdate) {
+    window.showInactive();
+    await wait(120);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="show-update"]')?.click();
+    `);
+    await wait(200);
+    // Assert the update page rendered with the expected content so a selector
+    // or state bug can't slip through as a blank "passing" screenshot.
+    const rendered = await window.webContents.executeJavaScript(
+      `(() => {
+        const page = document.querySelector(".update-page");
+        if (!page) return false;
+        const text = page.textContent || "";
+        return text.includes("0.3.6") && text.includes("0.3.7") && text.includes("下载更新");
+      })()`,
+    );
+    if (!rendered) throw new Error("Update page did not render with version info");
   }
 
   const image = await window.capturePage();

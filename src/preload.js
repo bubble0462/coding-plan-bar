@@ -36,4 +36,24 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   openConfigJson() {
     return ipcRenderer.invoke("config:open-json");
   },
+  onUpdaterState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("updater:state", listener);
+    return () => ipcRenderer.removeListener("updater:state", listener);
+  },
+  checkForUpdates() {
+    return ipcRenderer.invoke("updater:check");
+  },
+  downloadUpdate() {
+    return ipcRenderer.invoke("updater:download");
+  },
+  installUpdate() {
+    return ipcRenderer.invoke("updater:install");
+  },
+  openRelease(url) {
+    return ipcRenderer.invoke("updater:open-release", url);
+  },
+  getUpdaterState() {
+    return ipcRenderer.invoke("updater:get-state");
+  },
 });

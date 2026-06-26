@@ -12,10 +12,20 @@ let state = {
   config: {
     refreshIntervalSeconds: 300,
     showOnHover: true,
+    autoUpdate: { enabled: true },
     providers: [],
   },
   templates: [],
   selectedId: null,
+  // "providers" shows the provider editor; "update" shows the auto-update page.
+  view: "providers",
+  updater: {
+    status: "idle",
+    result: null,
+    progress: null,
+    error: null,
+    checkedAt: null,
+  },
   status: "正在读取设置...",
   statusIsError: false,
   statusTone: "loading",
@@ -46,6 +56,34 @@ window.addEventListener("click", (event) => {
 });
 
 load();
+
+// Subscribe to update state pushed from the main process, and pull the current
+// state once on load so the update page reflects any background auto-check.
+let lastUpdaterStatus = "idle";
+window.codingPlanBar.onUpdaterState((next) => {
+  const statusChanged = next.status !== lastUpdaterStatus;
+  lastUpdaterStatus = next.status;
+  state.updater = next;
+  // On the update view we always re-render (progress ticks, status changes).
+  // On the provider view we only re-render when the availability badge flips,
+  // to avoid disturbing an in-progress form edit.
+  if (state.view === "update") {
+    render();
+  } else if (statusChanged) {
+    render();
+  }
+});
+// Best-effort initial state pull; guarded so environments without the updater
+// IPC (e.g. capture scripts) don't crash.
+if (typeof window.codingPlanBar.getUpdaterState === "function") {
+  window.codingPlanBar
+    .getUpdaterState()
+    .then((initial) => {
+      state.updater = initial;
+      if (root.childElementCount) render();
+    })
+    .catch(() => {});
+}
 
 async function load() {
   state.status = "正在读取设置...";
@@ -91,17 +129,26 @@ function render() {
             <strong>供应商</strong>
             <button class="btn small primary" data-action="toggle-templates">添加</button>
           </div>
-          <div class="provider-list has-bar">
+          <div class="provider-list has-bar ${state.view === "providers" ? "" : "is-dimmed"}">
             <div class="selection-bar" aria-hidden="true"></div>
             ${state.config.providers.length ? state.config.providers.map(renderProviderItem).join("") : renderEmptyList()}
           </div>
+          <nav class="sidebar-nav">
+            <button class="nav-item ${state.view === "update" ? "is-active" : ""}" data-action="show-update">
+              <span class="nav-dot ${state.updater.status === "available" ? "has-update" : ""}"></span>
+              关于与更新
+              ${state.updater.status === "available" ? '<span class="nav-badge">新版本</span>' : ""}
+            </button>
+          </nav>
         </aside>
 
         <section class="editor">
           ${
-            selected
-              ? renderEditor(selected)
-              : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧“添加”创建一个供应商。</p></div></div>`
+            state.view === "update"
+              ? renderUpdatePage()
+              : selected
+                ? renderEditor(selected)
+                : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧“添加”创建一个供应商。</p></div></div>`
           }
         </section>
       </section>
@@ -180,6 +227,106 @@ function renderProviderItem(provider) {
 
 function renderEmptyList() {
   return `<div class="empty"><p class="hint">还没有供应商。</p></div>`;
+}
+
+function renderUpdatePage() {
+  const u = state.updater;
+  const result = u.result || {};
+  const currentVersion = result.currentVersion || "—";
+  const latestVersion = result.latestVersion || "—";
+  const checkedText = u.checkedAt ? new Date(u.checkedAt).toLocaleString("zh-CN") : "尚未检查";
+  const publishedText = result.publishedAt ? new Date(result.publishedAt).toLocaleString("zh-CN") : "";
+  const autoEnabled = state.config.autoUpdate ? state.config.autoUpdate.enabled !== false : true;
+
+  // Derive the primary action button + status line from the updater state machine.
+  let primary = "";
+  let statusLine = "";
+  if (u.status === "checking") {
+    statusLine = "正在检查更新…";
+  } else if (u.status === "downloading") {
+    statusLine = "正在下载安装包…";
+  } else if (u.status === "ready") {
+    statusLine = "下载完成，可以安装。";
+    primary = `<button class="btn primary" data-action="install-update">安装更新</button>`;
+  } else if (u.status === "available") {
+    statusLine = `发现新版本 ${escapeHtml(latestVersion)}。`;
+    primary = `<button class="btn primary" data-action="download-update">下载更新</button>`;
+  } else if (u.status === "latest") {
+    statusLine = "当前已是最新版本。";
+  } else if (u.status === "error") {
+    statusLine = escapeHtml(u.error || "检查更新失败");
+  } else {
+    statusLine = "点击下方按钮检查是否有新版本。";
+  }
+
+  const checking = u.status === "checking" || u.status === "downloading";
+  const progress = u.progress && u.progress.totalBytes > 0
+    ? `${u.progress.percent}% · ${formatBytes(u.progress.downloadedBytes)} / ${formatBytes(u.progress.totalBytes)}`
+    : u.status === "downloading"
+      ? `${(u.progress && u.progress.percent) || 0}%`
+      : "";
+  const progressWidth = `${(u.progress && u.progress.percent) || 0}%`;
+
+  return `
+    <div class="editor-head">
+      <div class="section-title">
+        <strong>关于与更新</strong>
+        <span>检查并安装新版本</span>
+      </div>
+    </div>
+    <div class="form update-page">
+      <div class="update-version-row">
+        <div class="update-version">
+          <span class="update-version-label">当前版本</span>
+          <strong>v${escapeHtml(currentVersion)}</strong>
+        </div>
+        <div class="update-version">
+          <span class="update-version-label">最新版本</span>
+          <strong class="${u.status === "available" ? "is-newer" : ""}">${latestVersion !== "—" ? "v" : ""}${escapeHtml(latestVersion)}</strong>
+          ${publishedText ? `<span class="update-version-date">${escapeHtml(publishedText)}</span>` : ""}
+        </div>
+      </div>
+
+      <div class="update-progress-wrap ${u.status === "downloading" || u.status === "ready" ? "is-visible" : ""}">
+        <div class="update-progress-track"><div class="update-progress-bar" style="width:${progressWidth}"></div></div>
+        <span class="update-progress-text">${escapeHtml(progress)}</span>
+      </div>
+
+      <p class="update-status ${u.status === "error" ? "is-error" : ""}">${statusLine}</p>
+
+      ${u.status === "available" && result.releaseUrl ? `<a class="update-release-link" href="#" data-action="open-release">查看 GitHub 发布详情</a>` : ""}
+
+      <div class="update-actions">
+        ${primary}
+        <button class="btn" data-action="check-update" ${checking ? "disabled" : ""}>${checking ? "检查中…" : "检查更新"}</button>
+        ${u.status === "available" && result.releaseUrl ? `<a class="btn" href="#" data-action="open-release">手动下载</a>` : ""}
+      </div>
+
+      <div class="section update-auto-section">
+        <label class="update-auto">
+          <input type="checkbox" data-action="toggle-auto-check" ${autoEnabled ? "checked" : ""} />
+          <span>
+            <strong>启动时自动检查更新</strong>
+            <small>仅在后台检查并提示，不会自动下载或安装。</small>
+          </span>
+        </label>
+        <p class="hint">上次检查：${escapeHtml(checkedText)}</p>
+      </div>
+    </div>
+  `;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let index = 0;
+  let scaled = value;
+  while (scaled >= 1024 && index < units.length - 1) {
+    scaled /= 1024;
+    index += 1;
+  }
+  return `${scaled.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 function renderEditor(provider) {
@@ -339,6 +486,7 @@ function bindEvents() {
     row.addEventListener("click", (event) => {
       if (event.target.closest(".switch")) return;
       state.selectedId = row.dataset.id;
+      state.view = "providers";
       dismissTemplates();
       render();
     });
@@ -346,6 +494,7 @@ function bindEvents() {
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       state.selectedId = row.dataset.id;
+      state.view = "providers";
       dismissTemplates();
       render();
     });
@@ -402,6 +551,44 @@ function bindEvents() {
     }
     field.addEventListener("input", () => updateSelectedFromField(field, false));
     field.addEventListener("change", () => updateSelectedFromField(field, true));
+  });
+
+  bindUpdateEvents();
+}
+
+/* Wire up the auto-update page. Kept separate so the provider editor's
+   event binding stays focused and the update view is easy to reason about. */
+function bindUpdateEvents() {
+  root.querySelector("[data-action='show-update']")?.addEventListener("click", () => {
+    state.view = "update";
+    render();
+  });
+
+  root.querySelector("[data-action='check-update']")?.addEventListener("click", () => {
+    window.codingPlanBar.checkForUpdates();
+  });
+  root.querySelector("[data-action='download-update']")?.addEventListener("click", () => {
+    window.codingPlanBar.downloadUpdate();
+  });
+  root.querySelector("[data-action='install-update']")?.addEventListener("click", () => {
+    window.codingPlanBar.installUpdate();
+  });
+
+  root.querySelector("[data-action='toggle-auto-check']")?.addEventListener("change", (event) => {
+    state.config.autoUpdate = { enabled: event.target.checked };
+    markDirty();
+    render();
+  });
+
+  // Release / manual-download links open the GitHub page in the browser.
+  root.querySelectorAll("[data-action='open-release']").forEach((link) => {
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      const url = state.updater.result && state.updater.result.releaseUrl;
+      if (url && typeof window.codingPlanBar.openRelease === "function") {
+        window.codingPlanBar.openRelease(url);
+      }
+    });
   });
 }
 
@@ -705,6 +892,9 @@ function cloneConfig(config) {
   return {
     refreshIntervalSeconds: Number(config.refreshIntervalSeconds || 300),
     showOnHover: config.showOnHover !== false,
+    autoUpdate: {
+      enabled: (config.autoUpdate || {}).enabled !== false,
+    },
     providers: Array.isArray(config.providers) ? config.providers.map(clone) : [],
   };
 }

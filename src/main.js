@@ -13,6 +13,7 @@ const path = require("path");
 const { readConfigFile, writeConfigFile, providerTemplates } = require("./config-store");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { loadConfig, refreshProviders } = require("./providers");
+const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 
 let tray = null;
 let popupWindow = null;
@@ -83,6 +84,9 @@ function createSettingsWindow() {
     show: false,
     title: "设置 - Coding Plan Bar",
     backgroundColor: "#f6f8fb",
+    // Hide the default File/Edit/View/Window menu bar for a normal app feel.
+    // setMenu(null) below prevents Alt from bringing the menu back.
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -90,6 +94,8 @@ function createSettingsWindow() {
     },
   });
 
+  settingsWindow.setMenu(null);
+  settingsWindow.setMenuBarVisibility(false);
   settingsWindow.loadFile(path.join(__dirname, "settings", "index.html"));
   settingsWindow.on("closed", () => {
     settingsWindow = null;
@@ -326,6 +332,145 @@ function openConfigJson() {
   if (configPath) shell.openPath(configPath);
 }
 
+// ===== Updater =====
+// In-flight update state shared between IPC handlers. Only one check or
+// download may run at a time to keep the UI state machine coherent.
+let updaterState = {
+  status: "idle", // idle | checking | available | latest | downloading | ready | error
+  result: null, // structured buildUpdateResult payload
+  downloadedPath: null,
+  progress: null, // { percent, downloadedBytes, totalBytes }
+  error: null,
+  checkedAt: null,
+  lastPublishedAt: null,
+};
+let updateCheckInFlight = false;
+let downloadInFlight = false;
+
+function sendUpdaterState() {
+  const target = settingsWindow && !settingsWindow.isDestroyed() ? settingsWindow : null;
+  if (!target || target.webContents.isDestroyed()) return;
+  target.webContents.send("updater:state", { ...updaterState });
+}
+
+function setUpdaterStatus(status, patch = {}) {
+  updaterState = { ...updaterState, status, ...patch };
+  sendUpdaterState();
+}
+
+async function checkForUpdates({ silent = false } = {}) {
+  if (updateCheckInFlight) return updaterState;
+  updateCheckInFlight = true;
+  if (!silent) setUpdaterStatus("checking", { error: null });
+  try {
+    const release = await fetchLatestRelease();
+    const result = buildUpdateResult(app.getVersion(), release);
+    let status = result.error ? "error" : result.hasUpdate ? "available" : "latest";
+    if (
+      status === "available" &&
+      updaterState.downloadedPath &&
+      updaterState.result &&
+      updaterState.result.latestVersion === result.latestVersion
+    ) {
+      status = "ready";
+    }
+    updaterState = {
+      ...updaterState,
+      status,
+      result,
+      error: result.error,
+      checkedAt: Date.now(),
+      lastPublishedAt: result.publishedAt,
+      // A previous downloaded installer is only valid for the release we just
+      // found; clear it if the version changed.
+      downloadedPath:
+        result.latestVersion && updaterState.result && result.latestVersion !== updaterState.result.latestVersion
+          ? null
+          : updaterState.downloadedPath,
+    };
+    sendUpdaterState();
+    return updaterState;
+  } catch (error) {
+    updaterState = {
+      ...updaterState,
+      status: silent ? updaterState.status : "error",
+      error: error.message || String(error),
+      checkedAt: Date.now(),
+    };
+    sendUpdaterState();
+    return updaterState;
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+async function downloadUpdate() {
+  if (downloadInFlight) return;
+  const asset = updaterState.result && updaterState.result.asset;
+  if (!asset || !asset.url) {
+    setUpdaterStatus("error", { error: "没有可下载的安装包" });
+    return;
+  }
+  downloadInFlight = true;
+  setUpdaterStatus("downloading", { error: null, progress: { percent: 0, downloadedBytes: 0, totalBytes: asset.size || 0 } });
+  try {
+    const downloadedPath = await downloadAsset(asset.url, (progress) => {
+      updaterState = { ...updaterState, progress };
+      sendUpdaterState();
+    });
+    setUpdaterStatus("ready", { downloadedPath, progress: { percent: 100, downloadedBytes: asset.size || 0, totalBytes: asset.size || 0 } });
+  } catch (error) {
+    setUpdaterStatus("error", { error: error.message || String(error) });
+  } finally {
+    downloadInFlight = false;
+  }
+}
+
+async function installUpdate() {
+  const installerPath = updaterState.downloadedPath;
+  if (!installerPath) {
+    setUpdaterStatus("error", { error: "安装包尚未下载完成" });
+    return;
+  }
+  try {
+    // Open the NSIS installer. It runs as a separate process; the current app
+    // should quit so the installer can replace files.
+    const error = await shell.openPath(installerPath);
+    if (error) {
+      setUpdaterStatus("error", { error: `无法启动安装程序：${error}` });
+      return;
+    }
+    app.quit();
+  } catch (error) {
+    setUpdaterStatus("error", { error: error.message || String(error) });
+  }
+}
+
+async function openReleaseUrl(_event, url) {
+  try {
+    const parsed = new URL(String(url || ""));
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("不支持的链接地址");
+    }
+    return shell.openExternal(parsed.toString());
+  } catch (error) {
+    setUpdaterStatus("error", { error: error.message || String(error) });
+    return null;
+  }
+}
+
+async function maybeAutoCheckOnStartup() {
+  try {
+    const config = loadConfig(configPath);
+    if (config.autoUpdate && config.autoUpdate.enabled !== false) {
+      // Silent: only populates state for the settings page. Never downloads.
+      await checkForUpdates({ silent: true });
+    }
+  } catch {
+    /* Auto-check is best-effort; swallow errors on startup. */
+  }
+}
+
 function getConfigForSettings() {
   return {
     config: readConfigFile(configPath),
@@ -389,6 +534,7 @@ function createTray() {
 
 async function startApp() {
   ensureConfigFile();
+  Menu.setApplicationMenu(null);
 
   if (process.argv.includes("--smoke-startup")) {
     const icon = createTrayIcon();
@@ -423,8 +569,15 @@ async function startApp() {
   });
   ipcMain.handle("quota:quit", () => app.quit());
 
+  ipcMain.handle("updater:check", () => checkForUpdates({ silent: false }));
+  ipcMain.handle("updater:download", () => downloadUpdate());
+  ipcMain.handle("updater:install", () => installUpdate());
+  ipcMain.handle("updater:open-release", openReleaseUrl);
+  ipcMain.handle("updater:get-state", () => ({ ...updaterState }));
+
   await refreshAll("startup");
   scheduleRefresh();
+  maybeAutoCheckOnStartup();
 }
 
 if (process.platform === "win32") {

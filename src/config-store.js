@@ -10,7 +10,17 @@ function normalizeConfig(config) {
   return {
     refreshIntervalSeconds: Number(config.refreshIntervalSeconds || 300),
     showOnHover: config.showOnHover !== false,
+    autoUpdate: normalizeAutoUpdate(config.autoUpdate),
     providers: Array.isArray(config.providers) ? config.providers.map(normalizeProvider) : [],
+  };
+}
+
+function normalizeAutoUpdate(autoUpdate) {
+  const value = autoUpdate || {};
+  return {
+    // Check for a new version on app launch. Only notifies — never downloads
+    // or installs without explicit user action.
+    enabled: value.enabled !== false,
   };
 }
 

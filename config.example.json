@@ -1,6 +1,9 @@
 {
   "refreshIntervalSeconds": 300,
   "showOnHover": true,
+  "autoUpdate": {
+    "enabled": true
+  },
   "providers": [
     {
       "id": "codex",

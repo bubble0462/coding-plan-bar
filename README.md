@@ -23,7 +23,7 @@
 前往 [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest) 下载最新的 Windows 安装包：
 
 ```text
-Coding Plan Bar-Setup-0.3.2-x64.exe
+Coding Plan Bar-Setup-0.3.7-x64.exe
 ```
 
 安装前请先退出正在运行的旧版本。安装向导支持选择安装目录，包括 D 盘。升级安装不会删除用户配置。
@@ -41,6 +41,15 @@ Coding Plan Bar-Setup-0.3.2-x64.exe
 ```text
 %APPDATA%\Coding Plan Bar\config.json
 ```
+
+### 检查与安装更新
+
+1. 打开设置，点击左侧栏底部的「关于与更新」。
+2. 点击「检查更新」，应用会请求 GitHub Releases 获取最新版本。
+3. 发现新版本后，点击「下载更新」并在下载完成后点击「安装更新」，会启动下载好的安装程序。
+4. 也可以点击「手动下载」打开 GitHub Release 页面自行下载。
+
+默认开启「启动时自动检查更新」：应用启动时只在后台检查一次，发现新版本会在导航项提示，**不会自动下载或安装**，需要你手动确认。可在「关于与更新」页关闭该开关，关闭后重启应用不会再主动请求更新。
 
 ## 支持的额度来源
 
@@ -83,6 +92,7 @@ npm run dist
 - 建议优先使用环境变量配置 API Key。
 - 部分额度接口并非公开稳定 API，供应商变更接口后可能需要更新适配。
 - 使用中转站时，请自行确认其可信度以及 API Key 的使用范围。
+- 更新功能只从本仓库 `bubble0462/coding-plan-bar` 的 GitHub Release 读取，只接受 Windows x64 的 NSIS 安装包；安装包先写入临时路径，下载完成且大小正常后才会被标记为可安装。
 
 ## 致谢
 
