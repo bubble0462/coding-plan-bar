@@ -11,6 +11,7 @@ const os = require("os");
 
 const REPO = "bubble0462/coding-plan-bar";
 const API_HOST = "api.github.com";
+const GITHUB_HOST = "github.com";
 
 // Accepted Windows x64 NSIS installer asset name patterns.
 const ASSET_PATTERNS = [
@@ -108,6 +109,11 @@ function buildUpdateResult(currentVersion, release) {
  * Throws a readable Error on non-2xx status or network failure.
  */
 function fetchLatestRelease({ token, fetcher } = {}) {
+  if (typeof fetcher === "function") return fetcher();
+  return fetchLatestReleaseFromApi({ token }).catch(() => fetchLatestReleaseFromRedirect());
+}
+
+function fetchLatestReleaseFromApi({ token } = {}) {
   const request = (resolve, reject) => {
     const headers = {
       "User-Agent": "coding-plan-bar-updater",
@@ -142,9 +148,60 @@ function fetchLatestRelease({ token, fetcher } = {}) {
     req.setTimeout(15000, () => req.destroy(new Error("检查更新超时")));
   };
 
-  // Allow tests to inject a fake transport.
-  if (typeof fetcher === "function") return fetcher();
   return new Promise(request);
+}
+
+function fetchLatestReleaseFromRedirect() {
+  return new Promise((resolve, reject) => {
+    const req = https.get(
+      {
+        host: GITHUB_HOST,
+        path: `/${REPO}/releases/latest`,
+        headers: {
+          "User-Agent": "coding-plan-bar-updater",
+          Accept: "text/html",
+        },
+      },
+      (res) => {
+        const location = res.headers.location;
+        res.resume();
+        if (res.statusCode >= 300 && res.statusCode < 400 && location) {
+          const tag = extractTagFromReleaseUrl(location);
+          if (tag) {
+            resolve(buildRedirectRelease(tag));
+            return;
+          }
+        }
+        reject(new Error(`GitHub 返回状态 ${res.statusCode}`));
+      },
+    );
+    req.on("error", reject);
+    req.setTimeout(15000, () => req.destroy(new Error("检查更新超时")));
+  });
+}
+
+function extractTagFromReleaseUrl(url) {
+  const match = String(url || "").match(/\/releases\/tag\/([^/?#]+)/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function buildRedirectRelease(tag) {
+  const version = String(tag).replace(/^v/i, "");
+  const assetName = `Coding.Plan.Bar-Setup-${version}-x64.exe`;
+  return {
+    tag_name: tag,
+    html_url: `https://${GITHUB_HOST}/${REPO}/releases/tag/${encodeURIComponent(tag)}`,
+    published_at: null,
+    created_at: null,
+    body: null,
+    assets: [
+      {
+        name: assetName,
+        browser_download_url: `https://${GITHUB_HOST}/${REPO}/releases/download/${encodeURIComponent(tag)}/${assetName}`,
+        size: null,
+      },
+    ],
+  };
 }
 
 function collect(res, resolve, reject) {
@@ -250,5 +307,7 @@ module.exports = {
   findInstallerAsset,
   buildUpdateResult,
   fetchLatestRelease,
+  extractTagFromReleaseUrl,
+  buildRedirectRelease,
   downloadAsset,
 };

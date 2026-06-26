@@ -12,6 +12,8 @@ const {
   compareVersions,
   findInstallerAsset,
   buildUpdateResult,
+  extractTagFromReleaseUrl,
+  buildRedirectRelease,
 } = require("../src/updater");
 
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
@@ -154,6 +156,8 @@ assert.strictEqual(
   "Coding.Plan.Bar-Setup-0.3.7-x64.exe",
 );
 assert.strictEqual(findInstallerAsset({ assets: [{ name: "source.zip" }] }), null);
+assert.strictEqual(extractTagFromReleaseUrl("https://github.com/bubble0462/coding-plan-bar/releases/tag/v0.3.7"), "v0.3.7");
+assert.strictEqual(buildRedirectRelease("v0.3.7").assets[0].name, "Coding.Plan.Bar-Setup-0.3.7-x64.exe");
 
 // buildUpdateResult flags a newer release and surfaces the asset.
 const available = buildUpdateResult("0.3.6", {
