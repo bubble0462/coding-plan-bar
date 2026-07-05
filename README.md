@@ -14,6 +14,7 @@
 - 余额卡可显示接口返回的今日请求数、Token 与消费；DeepSeek 使用本地日志显示近 7 天统计。
 - 供应商不超过 3 个时自动适配窗口高度，超过 3 个时固定高度并滚动。
 - 图形化添加、编辑、启用或停用供应商，无需手动修改 JSON。
+- 从供应商左侧拖拽手柄调整顺序，保存后额度面板同步采用新顺序。
 - 默认仅启用 Codex，其他供应商由用户按需添加。
 - 支持通用 `/v1/usage` 余额查询模板。
 - DeepSeek 人民币余额使用 `￥` 显示。
@@ -25,7 +26,7 @@
 前往 [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest) 下载最新的 Windows 安装包：
 
 ```text
-Coding Plan Bar-Setup-0.3.9-x64.exe
+Coding Plan Bar-Setup-0.3.10-x64.exe
 ```
 
 安装前请先退出正在运行的旧版本。安装向导支持选择安装目录，包括 D 盘。升级安装不会删除用户配置。

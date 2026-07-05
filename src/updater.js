@@ -33,6 +33,12 @@ function parseVersion(raw) {
   return parts;
 }
 
+function normalizeVersionLabel(raw) {
+  if (raw == null) return null;
+  const value = String(raw).trim();
+  return value.replace(/^v(?=\d)/i, "");
+}
+
 /**
  * Compare two version tuples. Returns:
  *   -1 if a < b, 0 if equal, 1 if a > b.
@@ -82,7 +88,7 @@ function buildUpdateResult(currentVersion, release) {
     };
   }
 
-  const latestVersion = release.tag_name;
+  const latestVersion = normalizeVersionLabel(release.tag_name);
   const asset = findInstallerAsset(release);
   const hasUpdate = compareVersions(currentVersion, latestVersion) < 0;
 
@@ -303,6 +309,7 @@ function downloadAsset(assetUrl, onProgress = () => {}) {
 module.exports = {
   REPO,
   parseVersion,
+  normalizeVersionLabel,
   compareVersions,
   findInstallerAsset,
   buildUpdateResult,

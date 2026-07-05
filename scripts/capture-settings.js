@@ -5,11 +5,18 @@ const { providerTemplates } = require("../src/config-store");
 
 const showTemplates = process.argv.includes("--templates");
 const showUpdate = process.argv.includes("--update");
+const showReorder = process.argv.includes("--reorder");
 const outputPath = path.join(
   __dirname,
   "..",
   "tmp",
-  showTemplates ? "settings-screenshot-templates.png" : showUpdate ? "settings-screenshot-update.png" : "settings-screenshot.png",
+  showTemplates
+    ? "settings-screenshot-templates.png"
+    : showUpdate
+      ? "settings-screenshot-update.png"
+      : showReorder
+        ? "settings-screenshot-reorder.png"
+        : "settings-screenshot.png",
 );
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-settings-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
@@ -44,15 +51,15 @@ const sampleConfig = {
 const mockUpdaterState = {
   status: "available",
   result: {
-    currentVersion: "0.3.6",
-    latestVersion: "0.3.7",
+    currentVersion: "0.3.9",
+    latestVersion: "v0.3.10",
     hasUpdate: true,
     releaseUrl: "https://github.com/bubble0462/coding-plan-bar/releases/latest",
     publishedAt: new Date().toISOString(),
     releaseNotes: "示例更新日志",
     asset: {
-      name: "Coding Plan Bar-Setup-0.3.7-x64.exe",
-      url: "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.7/Coding.Plan.Bar-Setup-0.3.7-x64.exe",
+      name: "Coding Plan Bar-Setup-0.3.10-x64.exe",
+      url: "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.10/Coding.Plan.Bar-Setup-0.3.10-x64.exe",
       size: 98000000,
     },
     error: null,
@@ -100,9 +107,9 @@ async function main() {
   const window = new BrowserWindow({
     width: 940,
     height: 660,
-    show: showTemplates || showUpdate,
-    x: showTemplates || showUpdate ? -2200 : undefined,
-    y: showTemplates || showUpdate ? 80 : undefined,
+    show: showTemplates || showUpdate || showReorder,
+    x: showTemplates || showUpdate || showReorder ? -2200 : undefined,
+    y: showTemplates || showUpdate || showReorder ? 80 : undefined,
     frame: true,
     backgroundColor: "#f6f8fb",
     webPreferences: {
@@ -187,10 +194,41 @@ async function main() {
         const page = document.querySelector(".update-page");
         if (!page) return false;
         const text = page.textContent || "";
-        return text.includes("0.3.6") && text.includes("0.3.7") && text.includes("下载更新");
+        return text.includes("v0.3.9") && text.includes("v0.3.10") && !text.includes("vv0.3.10") && text.includes("下载更新");
       })()`,
     );
     if (!rendered) throw new Error("Update page did not render with version info");
+  }
+
+  if (showReorder) {
+    window.showInactive();
+    await window.webContents.insertCSS(`.drag-handle { opacity: 1 !important; }`);
+    const reordered = await window.webContents.executeJavaScript(`
+      (() => {
+        const handle = document.querySelector('.drag-handle[data-id="codex"]');
+        const target = document.querySelector('.provider-item[data-id="deepseek"]');
+        if (!handle || !target) return false;
+        const dataTransfer = new DataTransfer();
+        handle.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
+        const rect = target.getBoundingClientRect();
+        target.dispatchEvent(new DragEvent('dragover', {
+          bubbles: true,
+          cancelable: true,
+          clientY: rect.bottom - 2,
+          dataTransfer,
+        }));
+        target.dispatchEvent(new DragEvent('drop', {
+          bubbles: true,
+          cancelable: true,
+          clientY: rect.bottom - 2,
+          dataTransfer,
+        }));
+        const ids = [...document.querySelectorAll('.provider-item')].map((row) => row.dataset.id);
+        return ids.join(',') === 'deepseek,codex' && document.querySelector('.status')?.textContent.includes('保存后同步');
+      })()
+    `);
+    if (!reordered) throw new Error("Provider drag reorder did not update the provider array and status");
+    await wait(380);
   }
 
   const image = await window.capturePage();

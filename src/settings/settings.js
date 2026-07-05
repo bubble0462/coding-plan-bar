@@ -40,6 +40,7 @@ let state = {
 let templatesCloseTimer = null;
 let dropdownCloseTimer = null;
 let hasRenderedSettingsShell = false;
+let providerDrag = { sourceId: null, targetId: null, position: null };
 
 window.addEventListener("click", (event) => {
   // Only re-render when we actually need to close an open provider picker.
@@ -212,6 +213,9 @@ function renderProviderItem(provider) {
       : `${KIND_LABELS[provider.kind] || provider.kind}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`;
   return `
     <div class="provider-item ${selected}" data-action="select-provider" data-id="${escapeAttr(provider.id)}" role="button" tabindex="0">
+      <button class="drag-handle" type="button" draggable="true" data-action="drag-provider" data-id="${escapeAttr(provider.id)}" title="拖动调整顺序" aria-label="拖动 ${escapeAttr(provider.name || provider.id)} 调整顺序">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+      </button>
       <span class="dot ${provider.enabled === false ? "is-off" : ""}"></span>
       <span class="provider-name">
         <strong>${escapeHtml(provider.name || provider.id)}</strong>
@@ -232,8 +236,8 @@ function renderEmptyList() {
 function renderUpdatePage() {
   const u = state.updater;
   const result = u.result || {};
-  const currentVersion = result.currentVersion || "—";
-  const latestVersion = result.latestVersion || "—";
+  const currentVersion = displayVersion(result.currentVersion);
+  const latestVersion = displayVersion(result.latestVersion);
   const checkedText = u.checkedAt ? new Date(u.checkedAt).toLocaleString("zh-CN") : "尚未检查";
   const publishedText = result.publishedAt ? new Date(result.publishedAt).toLocaleString("zh-CN") : "";
   const autoEnabled = state.config.autoUpdate ? state.config.autoUpdate.enabled !== false : true;
@@ -278,7 +282,7 @@ function renderUpdatePage() {
       <div class="update-version-row">
         <div class="update-version">
           <span class="update-version-label">当前版本</span>
-          <strong>v${escapeHtml(currentVersion)}</strong>
+          <strong>${currentVersion !== "—" ? "v" : ""}${escapeHtml(currentVersion)}</strong>
         </div>
         <div class="update-version">
           <span class="update-version-label">最新版本</span>
@@ -314,6 +318,11 @@ function renderUpdatePage() {
       </div>
     </div>
   `;
+}
+
+function displayVersion(value) {
+  if (!value) return "—";
+  return String(value).trim().replace(/^v(?=\d)/i, "");
 }
 
 function formatBytes(bytes) {
@@ -484,13 +493,14 @@ function renderCustomSelect(field, value, options) {
 function bindEvents() {
   root.querySelectorAll("[data-action='select-provider']").forEach((row) => {
     row.addEventListener("click", (event) => {
-      if (event.target.closest(".switch")) return;
+      if (event.target.closest(".switch, .drag-handle")) return;
       state.selectedId = row.dataset.id;
       state.view = "providers";
       dismissTemplates();
       render();
     });
     row.addEventListener("keydown", (event) => {
+      if (event.target.closest(".drag-handle")) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       state.selectedId = row.dataset.id;
@@ -499,6 +509,8 @@ function bindEvents() {
       render();
     });
   });
+
+  bindProviderReorder();
 
   root.querySelectorAll("[data-action='toggle-enabled']").forEach((input) => {
     input.addEventListener("change", () => {
@@ -554,6 +566,127 @@ function bindEvents() {
   });
 
   bindUpdateEvents();
+}
+
+function bindProviderReorder() {
+  const list = root.querySelector(".provider-list");
+  if (!list) return;
+
+  root.querySelectorAll("[data-action='drag-provider']").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => event.stopPropagation());
+    handle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    handle.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      event.preventDefault();
+      event.stopPropagation();
+      moveProviderByOffset(handle.dataset.id, event.key === "ArrowUp" ? -1 : 1);
+    });
+    handle.addEventListener("dragstart", (event) => {
+      const sourceId = handle.dataset.id;
+      const row = handle.closest(".provider-item");
+      providerDrag = { sourceId, targetId: null, position: null };
+      row?.classList.add("is-dragging");
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", sourceId);
+        if (row) event.dataTransfer.setDragImage(row, 18, Math.round(row.offsetHeight / 2));
+      }
+    });
+    handle.addEventListener("dragend", clearProviderDrag);
+  });
+
+  list.querySelectorAll(".provider-item").forEach((row) => {
+    row.addEventListener("dragover", (event) => {
+      if (!providerDrag.sourceId || providerDrag.sourceId === row.dataset.id) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      const rect = row.getBoundingClientRect();
+      const position = event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+      showProviderDropTarget(row.dataset.id, position);
+      autoScrollProviderList(list, event.clientY);
+    });
+    row.addEventListener("drop", (event) => {
+      if (!providerDrag.sourceId || providerDrag.sourceId === row.dataset.id) return;
+      event.preventDefault();
+      const sourceId = providerDrag.sourceId;
+      const position = providerDrag.position || "before";
+      const targetId = row.dataset.id;
+      clearProviderDrag();
+      reorderProviders(sourceId, targetId, position);
+    });
+  });
+
+  list.addEventListener("dragover", (event) => {
+    if (providerDrag.sourceId) event.preventDefault();
+  });
+}
+
+function showProviderDropTarget(targetId, position) {
+  if (providerDrag.targetId === targetId && providerDrag.position === position) return;
+  root.querySelectorAll(".provider-item.is-drop-before, .provider-item.is-drop-after").forEach((row) => {
+    row.classList.remove("is-drop-before", "is-drop-after");
+  });
+  providerDrag.targetId = targetId;
+  providerDrag.position = position;
+  const target = root.querySelector(`.provider-item[data-id="${cssEscape(targetId)}"]`);
+  target?.classList.add(position === "before" ? "is-drop-before" : "is-drop-after");
+}
+
+function clearProviderDrag() {
+  root.querySelectorAll(".provider-item.is-dragging, .provider-item.is-drop-before, .provider-item.is-drop-after").forEach((row) => {
+    row.classList.remove("is-dragging", "is-drop-before", "is-drop-after");
+  });
+  providerDrag = { sourceId: null, targetId: null, position: null };
+}
+
+function autoScrollProviderList(list, pointerY) {
+  const rect = list.getBoundingClientRect();
+  const edge = 36;
+  if (pointerY < rect.top + edge) list.scrollTop -= 10;
+  else if (pointerY > rect.bottom - edge) list.scrollTop += 10;
+}
+
+function moveProviderByOffset(sourceId, offset) {
+  const index = state.config.providers.findIndex((provider) => provider.id === sourceId);
+  const targetIndex = index + offset;
+  if (index < 0 || targetIndex < 0 || targetIndex >= state.config.providers.length) return;
+  const target = state.config.providers[targetIndex];
+  reorderProviders(sourceId, target.id, offset < 0 ? "before" : "after", true);
+}
+
+function reorderProviders(sourceId, targetId, position, restoreFocus = false) {
+  if (!sourceId || !targetId || sourceId === targetId) return false;
+  const sourceIndex = state.config.providers.findIndex((provider) => provider.id === sourceId);
+  if (sourceIndex < 0) return false;
+
+  const list = root.querySelector(".provider-list");
+  const scrollTop = list?.scrollTop || 0;
+  const firstPositions = captureListPositions();
+  const providers = [...state.config.providers];
+  const [source] = providers.splice(sourceIndex, 1);
+  let targetIndex = providers.findIndex((provider) => provider.id === targetId);
+  if (targetIndex < 0) return false;
+  if (position === "after") targetIndex += 1;
+  providers.splice(targetIndex, 0, source);
+  if (providers.every((provider, index) => provider === state.config.providers[index])) return false;
+  state.config.providers = providers;
+  markDirty();
+  state.status = "顺序已调整，保存后同步到额度页面";
+  render();
+
+  const nextList = root.querySelector(".provider-list");
+  if (nextList) nextList.scrollTop = scrollTop;
+  positionSelectionBar();
+  flipList(firstPositions);
+  if (restoreFocus) {
+    requestAnimationFrame(() => {
+      root.querySelector(`.drag-handle[data-id="${cssEscape(sourceId)}"]`)?.focus();
+    });
+  }
+  return true;
 }
 
 /* Wire up the auto-update page. Kept separate so the provider editor's

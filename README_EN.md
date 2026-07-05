@@ -14,6 +14,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Balance cards can show today's requests, tokens, and spend returned by the endpoint; DeepSeek uses seven-day local-log statistics.
 - Automatically fits up to three providers and switches to a scrollable fixed height for four or more.
 - Graphical provider management without manually editing JSON.
+- Reorder providers from the left drag handle; the quota panel follows the saved order.
 - Only Codex is enabled by default; all other providers are opt-in.
 - Generic `/v1/usage` balance template for compatible relay services.
 - DeepSeek CNY balances are displayed with `￥`.
@@ -25,7 +26,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.3.9-x64.exe
+Coding Plan Bar-Setup-0.3.10-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.

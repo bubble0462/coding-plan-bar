@@ -17,6 +17,7 @@ const {
 } = require("../src/session-usage");
 const {
   parseVersion,
+  normalizeVersionLabel,
   compareVersions,
   findInstallerAsset,
   buildUpdateResult,
@@ -210,6 +211,15 @@ assert.deepStrictEqual(
     enabled: true,
   },
 );
+assert.deepStrictEqual(
+  normalizeConfig({
+    providers: [
+      { id: "second", name: "Second", kind: "balance" },
+      { id: "first", name: "First", kind: "balance" },
+    ],
+  }).providers.map((provider) => provider.id),
+  ["second", "first"],
+);
 assert.doesNotThrow(() =>
   validateConfig({
     refreshIntervalSeconds: 300,
@@ -235,6 +245,8 @@ assert.throws(() =>
 
 // ===== Updater logic =====
 assert.deepStrictEqual(parseVersion("v0.3.6"), [0, 3, 6]);
+assert.strictEqual(normalizeVersionLabel("v0.3.9"), "0.3.9");
+assert.strictEqual(normalizeVersionLabel("0.3.9"), "0.3.9");
 assert.deepStrictEqual(parseVersion("1.2"), [1, 2]);
 assert.strictEqual(parseVersion("not-a-version"), null);
 assert.strictEqual(compareVersions("0.3.6", "0.3.7"), -1);
@@ -262,7 +274,7 @@ assert.strictEqual(buildRedirectRelease("v0.3.7").assets[0].name, "Coding.Plan.B
 
 // buildUpdateResult flags a newer release and surfaces the asset.
 const available = buildUpdateResult("0.3.6", {
-  tag_name: "0.3.7",
+  tag_name: "v0.3.7",
   html_url: "https://example.com/release",
   published_at: "2024-01-01T00:00:00Z",
   body: "fixes",
