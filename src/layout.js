@@ -27,7 +27,7 @@ function estimateProviderHeight(provider) {
   if (!provider) return EMPTY_PROVIDER_HEIGHT;
 
   const messageHeight = provider.message ? 22 : 0;
-  if (provider.balance) return 112 + messageHeight;
+  if (provider.balance) return 127 + (provider.usage ? 20 : 0) + messageHeight;
 
   const tierCount = Math.max(1, Array.isArray(provider.tiers) ? provider.tiers.length : 0);
   const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;

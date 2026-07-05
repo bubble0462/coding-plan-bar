@@ -427,6 +427,18 @@ button {
   color: #526176;
 }
 
+.balance-usage {
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.balance-usage .usage-scope {
+  margin-right: auto;
+  color: #64748b;
+  font-weight: 700;
+}
+
 .tier-line,
 .tier-meta {
   display: flex;
@@ -504,7 +516,7 @@ button {
   gap: 8px;
 }
 
-.balance-box > div:first-child {
+.balance-value-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -521,6 +533,16 @@ button {
   color: #0f172a;
   font-size: 18px;
   font-weight: 750;
+}
+
+.balance-box .balance-usage strong {
+  color: #475569;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.balance-box .balance-usage .tier-cost strong {
+  color: #0f766e;
 }
 
 .balance-meter {

@@ -1,6 +1,7 @@
 const assert = require("assert");
 const {
   parseGenericBalanceResponse,
+  parseBalanceUsage,
   parseMiniMaxTiers,
   parseZhipuTokenTiers,
   windowSecondsToTierName,
@@ -36,6 +37,10 @@ assert.deepStrictEqual(
 assert.strictEqual(findModelPricing("glm-4.7-flash").output, 0);
 assert.strictEqual(findModelPricing("claude-mythos-5").output, 50);
 assert.strictEqual(findModelPricing("claude-sonnet-5").input, 2);
+assert.deepStrictEqual(
+  (({ input, output, cacheRead }) => ({ input, output, cacheRead }))(findModelPricing("deepseek-v4-pro")),
+  { input: 0.435, output: 0.87, cacheRead: 0.003625 },
+);
 assert.strictEqual(findModelPricing("unknown-model"), null);
 assert(Math.abs(calculateCostUsd({
   model: "gpt-5.4",
@@ -83,6 +88,37 @@ const claudeEvents = parseClaudeJsonl(JSON.stringify({
 assert.strictEqual(claudeEvents[0].totalTokens, 160);
 assert(matchesProvider({ kind: "official-subscription", tool: "claude" }, claudeEvents[0]));
 assert(matchesProvider({ kind: "coding-plan", baseUrl: "https://api.kimi.com/coding" }, { model: "kimi-k2.5" }));
+assert(matchesProvider(
+  { kind: "balance", baseUrl: "https://api.deepseek.com" },
+  { model: "deepseek-v4-flash" },
+));
+
+assert.deepStrictEqual(
+  parseBalanceUsage({
+    usage: {
+      today: {
+        requests: 17,
+        input_tokens: 1_000,
+        output_tokens: 200,
+        cache_read_tokens: 4_000,
+        cache_creation_tokens: 300,
+        total_tokens: 5_500,
+        cost: 1.18,
+        actual_cost: 0.94,
+      },
+    },
+  }),
+  {
+    scope: "今日",
+    requests: 17,
+    totalTokens: 5_500,
+    costUsd: 0.94,
+    partialCost: false,
+    estimated: false,
+    source: "provider",
+    currency: "USD",
+  },
+);
 
 const zhipuTiers = parseZhipuTokenTiers({
   limits: [

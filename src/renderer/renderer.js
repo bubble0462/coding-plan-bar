@@ -217,7 +217,7 @@ function renderTierUsage(usage) {
   if (!usage) return "";
   const cost = usage.costUsd == null
     ? "$--"
-    : `${usage.partialCost ? "≥ " : ""}$${formatEstimatedCost(usage.costUsd)}`;
+    : `${usage.partialCost ? "≥ " : ""}${formatUsageCost(usage.costUsd, usage.currency || "USD")}`;
   return `
     <div class="tier-usage" title="根据本机会话 Token 和模型公开 API 价格估算，不代表订阅实际账单">
       <span><strong>${Math.max(0, Number(usage.requests) || 0)}</strong> 次请求</span>
@@ -225,6 +225,14 @@ function renderTierUsage(usage) {
       <span class="tier-cost">估算 <strong>${cost}</strong></span>
     </div>
   `;
+}
+
+function formatUsageCost(value, unit) {
+  const amount = Math.max(0, Number(value) || 0);
+  const number = formatEstimatedCost(amount);
+  if (unit === "CNY") return `￥${number}`;
+  if (unit === "USD") return `$${number}`;
+  return `${number} ${unit}`;
 }
 
 function formatCompactTokens(value) {
@@ -258,7 +266,8 @@ function renderBalance(provider) {
 
   return `
     <div class="balance-box">
-      <div>
+      ${renderBalanceUsage(provider.usage)}
+      <div class="balance-value-row">
         <span class="balance-label">${escapeHtml(balance.planName || "余额")}</span>
         <strong>${amount}</strong>
       </div>
@@ -266,6 +275,25 @@ function renderBalance(provider) {
         <div class="balance-mark"></div>
       </div>
       ${extra ? `<p>${escapeHtml(extra)}</p>` : ""}
+    </div>
+  `;
+}
+
+function renderBalanceUsage(usage) {
+  if (!usage) return "";
+  const cost = usage.costUsd == null
+    ? "$--"
+    : `${usage.partialCost ? "≥ " : ""}${formatUsageCost(usage.costUsd, usage.currency || "USD")}`;
+  const costLabel = usage.estimated ? "估算" : "消费";
+  const title = usage.estimated
+    ? "根据本机会话 Token 和模型公开 API 价格估算"
+    : "由余额接口直接返回的今日用量";
+  return `
+    <div class="tier-usage balance-usage" title="${title}">
+      <span class="usage-scope">${escapeHtml(usage.scope || "用量")}</span>
+      <span><strong>${Math.max(0, Number(usage.requests) || 0)}</strong> 次请求</span>
+      <span><strong>${formatCompactTokens(usage.totalTokens)}</strong> Token</span>
+      <span class="tier-cost">${costLabel} <strong>${cost}</strong></span>
     </div>
   `;
 }
@@ -407,7 +435,7 @@ function providerLayoutKey(providers = []) {
     .map((provider) => {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
-      const shape = provider.balance ? "balance" : `tiers:${tierCount}`;
+      const shape = provider.balance ? `balance:${provider.usage ? 1 : 0}` : `tiers:${tierCount}`;
       return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:${provider.message ? 1 : 0}`;
     })
     .join("|");

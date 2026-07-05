@@ -6,6 +6,7 @@ const { POPUP_WIDTH, computePopupHeight } = require("../src/layout");
 const countArg = process.argv.find((arg) => arg.startsWith("--count="));
 const sequenceArg = process.argv.find((arg) => arg.startsWith("--sequence="));
 const debugLayout = process.argv.includes("--debug-layout");
+const balanceOnly = process.argv.includes("--balance-only");
 const providerCount = countArg ? Number(countArg.split("=")[1]) : null;
 const providerSequence = sequenceArg
   ? sequenceArg
@@ -14,7 +15,9 @@ const providerSequence = sequenceArg
       .map((value) => Number(value.trim()))
       .filter(Number.isFinite)
   : null;
-const outputSuffix = providerSequence?.length
+const outputSuffix = balanceOnly
+  ? "-balance"
+  : providerSequence?.length
   ? `-${providerSequence.join("-to-")}`
   : Number.isFinite(providerCount)
     ? `-${providerCount}`
@@ -139,11 +142,25 @@ const sampleProviders = [
         grantedBalance: 3.42,
       },
     },
+    usage: {
+      scope: "近 7 天",
+      requests: 186,
+      totalTokens: 13_075_724,
+      costUsd: 0.17,
+      partialCost: false,
+      estimated: true,
+      source: "local",
+      currency: "USD",
+    },
   },
 ];
 
 function sampleSnapshotFor(count) {
-  const providers = Number.isFinite(count) ? sampleProviders.slice(0, count) : sampleProviders;
+  const providers = balanceOnly
+    ? sampleProviders.slice(-1)
+    : Number.isFinite(count)
+      ? sampleProviders.slice(0, count)
+      : sampleProviders;
   return {
     loading: false,
     updatedAt: now - 42_000,

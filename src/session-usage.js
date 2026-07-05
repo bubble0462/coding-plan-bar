@@ -179,6 +179,20 @@ function usageEvent(event) {
 }
 
 function attachUsageToProvider(provider, normalizedProvider, events, now = Date.now()) {
+  if (provider?.kind === "balance") {
+    if (normalizedProvider?.usage || !supportsUsage(provider)) return normalizedProvider;
+    const matching = (events || []).filter((event) => matchesProvider(provider, event));
+    return {
+      ...normalizedProvider,
+      usage: aggregateWindowUsage(matching, now - 7 * 24 * 60 * 60 * 1000, now, {
+        scope: "近 7 天",
+        estimated: true,
+        source: "local",
+        currency: "USD",
+      }),
+    };
+  }
+
   if (!supportsUsage(provider) || !normalizedProvider?.tiers?.length) return normalizedProvider;
   const matching = (events || []).filter((event) => matchesProvider(provider, event));
 
@@ -198,11 +212,18 @@ function aggregateTierUsage(tier, events, now = Date.now()) {
   const start = Number.isFinite(resetAt) && resetAt > now - duration && resetAt < now + duration * 2
     ? resetAt - duration
     : now - duration;
-  const selected = events.filter((event) => event.timestampMs >= start && event.timestampMs <= now + 60_000);
-  if (!selected.length) return { requests: 0, totalTokens: 0, costUsd: 0, partialCost: false };
+  return aggregateWindowUsage(events, start, now, { estimated: true, source: "local" });
+}
+
+function aggregateWindowUsage(events, start, end, metadata = {}) {
+  const selected = events.filter((event) => event.timestampMs >= start && event.timestampMs <= end + 60_000);
+  if (!selected.length) {
+    return { ...metadata, requests: 0, totalTokens: 0, costUsd: 0, partialCost: false };
+  }
 
   const priced = selected.filter((event) => event.costUsd != null);
   return {
+    ...metadata,
     requests: selected.length,
     totalTokens: selected.reduce((sum, event) => sum + event.totalTokens, 0),
     costUsd: priced.length ? priced.reduce((sum, event) => sum + event.costUsd, 0) : null,
@@ -211,7 +232,10 @@ function aggregateTierUsage(tier, events, now = Date.now()) {
 }
 
 function supportsUsage(provider) {
-  return provider?.kind === "official-subscription" || provider?.kind === "coding-plan";
+  if (provider?.kind === "official-subscription" || provider?.kind === "coding-plan") return true;
+  if (provider?.kind !== "balance") return false;
+  const url = String(provider.baseUrl || "").toLowerCase();
+  return url.includes("api.deepseek.com") || url.includes("api.moonshot") || url.includes("api.kimi");
 }
 
 function matchesProvider(provider, event) {
@@ -223,6 +247,11 @@ function matchesProvider(provider, event) {
   }
 
   const url = String(provider.baseUrl || "").toLowerCase();
+  if (provider.kind === "balance") {
+    if (url.includes("api.deepseek.com")) return /^deepseek-/.test(model);
+    if (url.includes("api.moonshot") || url.includes("api.kimi")) return /^(?:kimi-|moonshot-)/.test(model);
+    return false;
+  }
   if (url.includes("kimi") || url.includes("moonshot")) return /^(?:kimi-|moonshot-)/.test(model);
   if (url.includes("bigmodel") || url.includes("z.ai")) return /^(?:glm-|zhipu-)/.test(model);
   if (url.includes("minimax")) return /^minimax-/.test(model);
@@ -306,6 +335,7 @@ module.exports = {
   parseClaudeJsonl,
   attachUsageToProvider,
   aggregateTierUsage,
+  aggregateWindowUsage,
   matchesProvider,
   tierDurationMs,
 };

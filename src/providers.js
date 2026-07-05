@@ -104,6 +104,7 @@ function normalizeBalanceProvider(provider, result) {
     : byUnit("USD") || byUnit("CNY") || balances[0] || null;
   const remaining = preferred?.remaining ?? null;
   const isValid = preferred?.isValid !== false && (remaining == null || remaining > 0);
+  const usage = parseBalanceUsage(preferred?.extra, preferred?.unit);
 
   return {
     id: provider.id,
@@ -116,6 +117,7 @@ function normalizeBalanceProvider(provider, result) {
     tiers: [],
     balance: preferred,
     balances,
+    usage,
   };
 }
 
@@ -715,6 +717,37 @@ function parseGenericBalanceResponse(body) {
   };
 }
 
+function parseBalanceUsage(body, unit = "USD") {
+  const source = body?.data && typeof body.data === "object" ? body.data : body;
+  const today = source?.usage?.today || body?.usage?.today;
+  if (!today || typeof today !== "object") return null;
+
+  const requests = firstNumber([today.requests, today.request_count, today.requestCount]);
+  const inputTokens = firstNumber([today.input_tokens, today.inputTokens]) || 0;
+  const outputTokens = firstNumber([today.output_tokens, today.outputTokens]) || 0;
+  const cacheReadTokens = firstNumber([today.cache_read_tokens, today.cacheReadTokens]) || 0;
+  const cacheCreationTokens = firstNumber([
+    today.cache_creation_tokens,
+    today.cache_write_tokens,
+    today.cacheCreationTokens,
+  ]) || 0;
+  const totalTokens = firstNumber([today.total_tokens, today.totalTokens]) ??
+    inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
+  const costUsd = firstNumber([today.actual_cost, today.account_cost, today.actualCost, today.cost]);
+
+  if (requests == null && totalTokens === 0 && costUsd == null) return null;
+  return {
+    scope: "今日",
+    requests: Math.max(0, requests || 0),
+    totalTokens: Math.max(0, totalTokens),
+    costUsd: costUsd == null ? null : Math.max(0, costUsd),
+    partialCost: false,
+    estimated: false,
+    source: "provider",
+    currency: String(unit || "USD").toUpperCase(),
+  };
+}
+
 function firstNumber(values) {
   for (const value of values) {
     const parsed = parseNumber(value, null);
@@ -924,5 +957,6 @@ module.exports = {
   parseZhipuTokenTiers,
   parseMiniMaxTiers,
   parseGenericBalanceResponse,
+  parseBalanceUsage,
   windowSecondsToTierName,
 };

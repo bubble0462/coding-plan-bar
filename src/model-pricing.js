@@ -43,6 +43,10 @@ const MODEL_PRICING = [
   [/^glm-4\.5-flash(?:-|$)/, price(0, 0, 0)],
   [/^glm-4\.5(?:-|$)/, price(0.6, 2.2, 0.11)],
 
+  [/^(?:deepseek-chat|deepseek-reasoner)$/, price(0.14, 0.28, 0.0028)],
+  [/^deepseek-v4-flash(?:-|$)/, price(0.14, 0.28, 0.0028)],
+  [/^deepseek-v4-pro(?:-|$)/, price(0.435, 0.87, 0.003625)],
+
   [/^minimax-m3(?:-|$)/, price(0.6, 2.4, 0.12)],
   [/^minimax-m2\.7(?:-|$)/, price(0.3, 1.2, 0.06)],
   [/^minimax-m2\.5(?:-|$)/, price(0.15, 0.95, 0.03)],

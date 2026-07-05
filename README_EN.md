@@ -11,6 +11,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Lives in the Windows system tray; hover or click to open the quota panel.
 - Shows five-hour limits, weekly limits, reset countdowns, and account balances.
 - Shows request counts and token totals per quota window, with model-aware estimated cost in USD.
+- Balance cards can show today's requests, tokens, and spend returned by the endpoint; DeepSeek uses seven-day local-log statistics.
 - Automatically fits up to three providers and switches to a scrollable fixed height for four or more.
 - Graphical provider management without manually editing JSON.
 - Only Codex is enabled by default; all other providers are opt-in.
@@ -24,7 +25,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.3.8-x64.exe
+Coding Plan Bar-Setup-0.3.9-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.
@@ -50,6 +51,7 @@ User configuration is stored at:
 - Kimi, GLM, and MiniMax coding-plan usage is assigned by the model ID recorded in the session. GLM pricing covers the common GLM 4.5/4.6/4.7 and GLM 5/5-Turbo/5.1/5.2 families.
 - Requests, tokens, and cost are aggregated into the current five-hour and weekly quota windows. Cached tokens use each model's cache price.
 - `Est. $` is an API-equivalent estimate based on published standard prices. It is **not an actual subscription charge or invoice**. Unknown or unpriced models still show tokens, while cost is shown as `$--`.
+- When a compatible balance endpoint returns `usage.today`, the balance card displays its requests, tokens, and actual spend directly instead of estimating them again.
 
 ### Checking and installing updates
 

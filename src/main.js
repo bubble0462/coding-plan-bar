@@ -241,7 +241,7 @@ function providerLayoutKey(providers = []) {
     .map((provider) => {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
-      const shape = provider.balance ? "balance" : `tiers:${tierCount}`;
+      const shape = provider.balance ? `balance:${provider.usage ? 1 : 0}` : `tiers:${tierCount}`;
       return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:${provider.message ? 1 : 0}`;
     })
     .join("|");
