@@ -197,6 +197,7 @@ function renderTier(tier) {
 
   return `
     <div class="tier">
+      ${renderTierUsage(tier.usage)}
       <div class="tier-line">
         <span>${escapeHtml(tier.label || tier.name)}</span>
         <strong>已用 ${Math.round(utilization)}%</strong>
@@ -210,6 +211,37 @@ function renderTier(tier) {
       </div>
     </div>
   `;
+}
+
+function renderTierUsage(usage) {
+  if (!usage) return "";
+  const cost = usage.costUsd == null
+    ? "$--"
+    : `${usage.partialCost ? "≥ " : ""}$${formatEstimatedCost(usage.costUsd)}`;
+  return `
+    <div class="tier-usage" title="根据本机会话 Token 和模型公开 API 价格估算，不代表订阅实际账单">
+      <span><strong>${Math.max(0, Number(usage.requests) || 0)}</strong> 次请求</span>
+      <span><strong>${formatCompactTokens(usage.totalTokens)}</strong> Token</span>
+      <span class="tier-cost">估算 <strong>${cost}</strong></span>
+    </div>
+  `;
+}
+
+function formatCompactTokens(value) {
+  const tokens = Math.max(0, Number(value) || 0);
+  if (tokens >= 1_000_000) return `${stripTrailingZero((tokens / 1_000_000).toFixed(1))}M`;
+  if (tokens >= 1_000) return `${stripTrailingZero((tokens / 1_000).toFixed(1))}K`;
+  return String(Math.round(tokens));
+}
+
+function formatEstimatedCost(value) {
+  const amount = Math.max(0, Number(value) || 0);
+  if (amount > 0 && amount < 0.01) return amount.toFixed(3);
+  return amount.toFixed(2);
+}
+
+function stripTrailingZero(value) {
+  return value.replace(/\.0$/, "");
 }
 
 function renderBalance(provider) {
@@ -374,8 +406,9 @@ function providerLayoutKey(providers = []) {
   return providers
     .map((provider) => {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
+      const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
       const shape = provider.balance ? "balance" : `tiers:${tierCount}`;
-      return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:${provider.message ? 1 : 0}`;
+      return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:${provider.message ? 1 : 0}`;
     })
     .join("|");
 }

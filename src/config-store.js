@@ -39,12 +39,16 @@ function normalizeProvider(provider) {
 
   if (normalized.kind === "official-subscription") {
     if (!normalized.tool) normalized.tool = "codex";
+    if (provider.authPath) normalized.authPath = provider.authPath;
+    if (provider.credentialsPath) normalized.credentialsPath = provider.credentialsPath;
     delete normalized.baseUrl;
     delete normalized.apiKey;
     delete normalized.apiKeyEnv;
     delete normalized.tiers;
   } else {
     delete normalized.tool;
+    delete normalized.authPath;
+    delete normalized.credentialsPath;
   }
 
   return normalized;

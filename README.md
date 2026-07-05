@@ -10,6 +10,7 @@
 
 - 常驻 Windows 系统托盘，鼠标悬停或点击即可查看额度。
 - 展示 5 小时限额、周限额、重置倒计时和账户余额。
+- 按额度周期统计本机请求数、Token 数量，并根据实际模型公开价格估算美元成本。
 - 供应商不超过 3 个时自动适配窗口高度，超过 3 个时固定高度并滚动。
 - 图形化添加、编辑、启用或停用供应商，无需手动修改 JSON。
 - 默认仅启用 Codex，其他供应商由用户按需添加。
@@ -23,7 +24,7 @@
 前往 [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest) 下载最新的 Windows 安装包：
 
 ```text
-Coding Plan Bar-Setup-0.3.7-x64.exe
+Coding Plan Bar-Setup-0.3.8-x64.exe
 ```
 
 安装前请先退出正在运行的旧版本。安装向导支持选择安装目录，包括 D 盘。升级安装不会删除用户配置。
@@ -41,6 +42,14 @@ Coding Plan Bar-Setup-0.3.7-x64.exe
 ```text
 %APPDATA%\Coding Plan Bar\config.json
 ```
+
+### Token 与成本估算
+
+- Codex 使用量读取 `%USERPROFILE%\.codex\sessions` 与 `archived_sessions` 中的本机会话 JSONL。
+- Claude 使用量读取 `%USERPROFILE%\.claude\projects` 中的本机会话 JSONL。
+- Kimi、GLM、MiniMax Coding Plan 会按日志里的模型 ID 自动归属；GLM 已覆盖 GLM-4.5/4.6/4.7、GLM-5/5-Turbo/5.1/5.2 等常用模型价格。
+- 请求数、Token 与成本分别按 5 小时和周额度的当前周期统计。缓存 Token 使用对应模型的缓存价格计算。
+- `估算 $` 是按公开标准 API 单价计算的等价成本，**不是订阅账户的实际扣款或账单**。模型无法识别或没有可靠公开价格时，仍显示 Token，金额显示 `$--`。
 
 ### 检查与安装更新
 
@@ -89,6 +98,7 @@ npm run dist
 ## 安全说明
 
 - API Key 保存在当前 Windows 用户的配置目录中，不会上传到项目仓库。
+- Token 统计只读取本机会话文件中的时间、模型和 usage 字段，不读取或上传对话正文。
 - 建议优先使用环境变量配置 API Key。
 - 部分额度接口并非公开稳定 API，供应商变更接口后可能需要更新适配。
 - 使用中转站时，请自行确认其可信度以及 API Key 的使用范围。

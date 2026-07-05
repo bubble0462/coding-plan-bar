@@ -2,6 +2,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { readConfigFile } = require("./config-store");
+const { collectLocalUsage, attachUsageToProvider } = require("./session-usage");
 
 const TIER_LABELS = {
   five_hour: "5h",
@@ -20,7 +21,11 @@ function loadConfig(configPath) {
 
 async function refreshProviders(config) {
   const enabled = config.providers.filter((provider) => provider.enabled !== false);
-  return Promise.all(enabled.map((provider) => refreshProvider(provider)));
+  const [snapshots, localUsage] = await Promise.all([
+    Promise.all(enabled.map((provider) => refreshProvider(provider))),
+    collectLocalUsage(enabled).catch(() => []),
+  ]);
+  return snapshots.map((snapshot, index) => attachUsageToProvider(enabled[index], snapshot, localUsage));
 }
 
 async function refreshProvider(provider) {
