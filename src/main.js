@@ -4,6 +4,7 @@ const {
   Menu,
   Tray,
   ipcMain,
+  dialog,
   nativeImage,
   screen,
   shell,
@@ -11,6 +12,7 @@ const {
 const fs = require("fs");
 const path = require("path");
 const { readConfigFile, writeConfigFile, providerTemplates } = require("./config-store");
+const { importAccountsIntoConfig } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { loadConfig, refreshProviders } = require("./providers");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
@@ -333,6 +335,76 @@ function openConfigJson() {
   if (configPath) shell.openPath(configPath);
 }
 
+async function importAccountsFromFile() {
+  const result = await dialog.showOpenDialog(settingsWindow || undefined, {
+    title: "导入账号 JSON",
+    properties: ["openFile"],
+    filters: [
+      { name: "JSON 文件", extensions: ["json"] },
+      { name: "所有文件", extensions: ["*"] },
+    ],
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+
+  const filePath = result.filePaths[0];
+  const text = fs.readFileSync(filePath, "utf8");
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`JSON 解析失败：${error.message}`);
+  }
+
+  const current = readConfigFile(configPath);
+  const imported = importAccountsIntoConfig(current, parsed, filePath);
+  if (imported.importedCount > 0 || imported.updatedCount > 0) {
+    const saved = writeConfigFile(configPath, imported.config);
+    syncPopupProvidersToConfig(saved);
+    await refreshAll("import");
+    scheduleRefresh();
+    return {
+      ...imported,
+      config: saved,
+      selectedId: imported.selectedId,
+      configPath,
+      filePath,
+    };
+  }
+
+  return {
+    ...imported,
+    config: current,
+    configPath,
+    filePath,
+  };
+}
+
+async function previewImportedAccounts(_event, raw) {
+  let parsed;
+  try {
+    parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (error) {
+    throw new Error(`JSON 解析失败：${error.message}`);
+  }
+  const current = readConfigFile(configPath);
+  const imported = importAccountsIntoConfig(current, parsed, "pasted-json");
+  return {
+    importedCount: imported.importedCount,
+    updatedCount: imported.updatedCount,
+    skippedCount: imported.skippedCount,
+    affectedIds: imported.affectedIds,
+    format: imported.format,
+    message: imported.message,
+    providers: imported.config.providers.map((provider) => ({
+      id: provider.id,
+      name: provider.name,
+      accountEmail: provider.accountEmail,
+      planType: provider.planType,
+      importedFrom: provider.importedFrom,
+    })),
+  };
+}
+
 // ===== Updater =====
 // In-flight update state shared between IPC handlers. Only one check or
 // download may run at a time to keep the UI state machine coherent.
@@ -555,6 +627,8 @@ async function startApp() {
   ipcMain.handle("config:get", getConfigForSettings);
   ipcMain.handle("config:save", saveConfigFromSettings);
   ipcMain.handle("config:open-json", openConfigJson);
+  ipcMain.handle("config:import-accounts", importAccountsFromFile);
+  ipcMain.handle("config:preview-import", previewImportedAccounts);
   ipcMain.handle("quota:hide", hidePopup);
   ipcMain.handle("quota:keep-open", keepPopupOpen);
   ipcMain.handle("quota:leave-popup", leavePopup);

@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   openConfigJson() {
     return ipcRenderer.invoke("config:open-json");
   },
+  importAccounts() {
+    return ipcRenderer.invoke("config:import-accounts");
+  },
+  previewImport(raw) {
+    return ipcRenderer.invoke("config:preview-import", raw);
+  },
   onUpdaterState(callback) {
     const listener = (_event, state) => callback(state);
     ipcRenderer.on("updater:state", listener);

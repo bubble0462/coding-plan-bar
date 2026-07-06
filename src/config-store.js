@@ -41,6 +41,16 @@ function normalizeProvider(provider) {
     if (!normalized.tool) normalized.tool = "codex";
     if (provider.authPath) normalized.authPath = provider.authPath;
     if (provider.credentialsPath) normalized.credentialsPath = provider.credentialsPath;
+    if (provider.accessToken) normalized.accessToken = provider.accessToken;
+    if (provider.accountId) normalized.accountId = provider.accountId;
+    if (provider.accountEmail) normalized.accountEmail = provider.accountEmail;
+    if (provider.accountUserId) normalized.accountUserId = provider.accountUserId;
+    if (provider.expiresAt) normalized.expiresAt = provider.expiresAt;
+    if (provider.planType) normalized.planType = provider.planType;
+    if (provider.importedFrom) normalized.importedFrom = provider.importedFrom;
+    if (provider.importedAt) normalized.importedAt = provider.importedAt;
+    if (provider.importPath) normalized.importPath = provider.importPath;
+    if (provider.importKey) normalized.importKey = provider.importKey;
     delete normalized.baseUrl;
     delete normalized.apiKey;
     delete normalized.apiKeyEnv;

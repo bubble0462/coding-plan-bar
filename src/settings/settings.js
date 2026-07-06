@@ -128,7 +128,10 @@ function render() {
         <aside class="sidebar">
           <div class="sidebar-head">
             <strong>供应商</strong>
-            <button class="btn small primary" data-action="toggle-templates">添加</button>
+            <div class="sidebar-head-actions">
+              <button class="btn small" data-action="import-accounts">导入账号</button>
+              <button class="btn small primary" data-action="toggle-templates">添加</button>
+            </div>
           </div>
           <div class="provider-list has-bar ${state.view === "providers" ? "" : "is-dimmed"}">
             <div class="selection-bar" aria-hidden="true"></div>
@@ -320,6 +323,20 @@ function renderUpdatePage() {
   `;
 }
 
+function safeProviderPreview(provider) {
+  const clone = { ...provider };
+  if (clone.accessToken) clone.accessToken = maskSecret(clone.accessToken);
+  if (clone.apiKey) clone.apiKey = maskSecret(clone.apiKey);
+  if (clone.importPath) clone.importPath = "<local file>";
+  return clone;
+}
+
+function maskSecret(value) {
+  const text = String(value || "");
+  if (text.length <= 12) return "********";
+  return `${text.slice(0, 4)}…${text.slice(-4)}`;
+}
+
 function displayVersion(value) {
   if (!value) return "—";
   return String(value).trim().replace(/^v(?=\d)/i, "");
@@ -407,10 +424,7 @@ function renderEditor(provider) {
             `
             : `
               <div class="field full">
-                <div class="notice-box">
-                  <strong>官方订阅不使用请求地址或 API Key</strong>
-                  <span>Codex 读取本机 Codex 登录状态，Claude 读取本机 Claude OAuth 登录状态。</span>
-                </div>
+                ${renderOfficialNotice(provider)}
               </div>
             `
         }
@@ -421,9 +435,30 @@ function renderEditor(provider) {
           <strong>当前 JSON 预览</strong>
           <span>保存时会写入同一个 config.json。</span>
         </div>
-        <pre class="json-preview">${escapeHtml(JSON.stringify(provider, null, 2))}</pre>
+        <pre class="json-preview">${escapeHtml(JSON.stringify(safeProviderPreview(provider), null, 2))}</pre>
       </div>
     </form>
+  `;
+}
+
+function renderOfficialNotice(provider) {
+  const imported = provider.importedFrom || provider.accessToken;
+  const email = provider.accountEmail || provider.name || "";
+  const expires = provider.expiresAt ? new Date(provider.expiresAt).toLocaleString("zh-CN") : "未知";
+  if (imported) {
+    return `
+      <div class="notice-box import-notice">
+        <strong>已导入 OpenAI OAuth 账号</strong>
+        <span>${escapeHtml(email)}${provider.planType ? ` · ${escapeHtml(provider.planType)}` : ""}</span>
+        <span>过期时间：${escapeHtml(expires)}。导入的 token 会保存在本机 config.json，请不要分享配置文件。</span>
+      </div>
+    `;
+  }
+  return `
+    <div class="notice-box">
+      <strong>官方订阅不使用请求地址或 API Key</strong>
+      <span>Codex 读取本机 Codex 登录状态，Claude 读取本机 Claude OAuth 登录状态。</span>
+    </div>
   `;
 }
 
@@ -527,6 +562,8 @@ function bindEvents() {
     }
     openTemplates(event.currentTarget);
   });
+
+  root.querySelector("[data-action='import-accounts']")?.addEventListener("click", importAccounts);
 
   root.querySelector("[data-action='delete-provider']")?.addEventListener("click", () => deleteSelectedProvider());
   root.querySelector("[data-action='save']")?.addEventListener("click", save);
@@ -799,6 +836,39 @@ function deleteSelectedProvider() {
   }
 }
 
+async function importAccounts() {
+  try {
+    state.status = "请选择 sessions.json 或 sub2api 导出的 JSON 文件...";
+    state.statusIsError = false;
+    state.statusTone = "loading";
+    updateStatusText();
+    const firstPositions = captureListPositions();
+    const result = await window.codingPlanBar.importAccounts();
+    if (!result || result.canceled) {
+      state.status = "已取消导入";
+      state.statusIsError = false;
+      state.statusTone = "success";
+      updateStatusText();
+      return;
+    }
+    state.config = sanitizeConfig(cloneConfig(result.config));
+    state.configPath = result.configPath || state.configPath;
+    state.selectedId = result.selectedId || result.affectedIds?.[0] || state.selectedId || state.config.providers[0]?.id || null;
+    state.view = "providers";
+    state.dirty = false;
+    state.status = result.message || "账号导入完成";
+    state.statusIsError = false;
+    state.statusTone = (result.importedCount || result.updatedCount) ? "success" : "dirty";
+    render();
+    flipList(firstPositions);
+  } catch (error) {
+    state.status = error.message || String(error);
+    state.statusIsError = true;
+    state.statusTone = "error";
+    updateStatusText();
+  }
+}
+
 /* Record each list row's position keyed by provider id. */
 function captureListPositions() {
   const list = root.querySelector(".provider-list");
@@ -1004,6 +1074,18 @@ function sanitizeProvider(provider) {
     delete provider.tiers;
   } else {
     delete provider.tool;
+    delete provider.authPath;
+    delete provider.credentialsPath;
+    delete provider.accessToken;
+    delete provider.accountId;
+    delete provider.accountEmail;
+    delete provider.accountUserId;
+    delete provider.expiresAt;
+    delete provider.planType;
+    delete provider.importedFrom;
+    delete provider.importedAt;
+    delete provider.importPath;
+    delete provider.importKey;
   }
   return provider;
 }
