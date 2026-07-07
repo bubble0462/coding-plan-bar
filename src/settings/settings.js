@@ -48,6 +48,8 @@ let state = {
   importRaw: "",
   pasteOpen: false,
   backupPreview: null,
+  accountFilter: "all",
+  accountQuery: "",
 };
 
 let templatesCloseTimer = null;
@@ -134,6 +136,7 @@ async function load() {
 }
 
 function render() {
+  syncSelectedProviderWithFilters();
   const selected = selectedProvider();
   const enterClass = hasRenderedSettingsShell ? "" : "is-entering";
   root.innerHTML = `
@@ -152,7 +155,7 @@ function render() {
       <section class="settings-body">
         <aside class="sidebar">
           <div class="sidebar-head">
-            <strong>供应商</strong>
+            <strong>账号与供应商</strong>
             <div class="sidebar-head-actions">
               <button class="btn small" data-action="latest-import">最新</button>
               <button class="btn small" data-action="paste-import">粘贴</button>
@@ -160,6 +163,7 @@ function render() {
               <button class="btn small primary" data-action="toggle-templates">添加</button>
             </div>
           </div>
+          ${renderAccountTools()}
           <div class="provider-list has-bar ${state.view === "providers" ? "" : "is-dimmed"}">
             <div class="selection-bar" aria-hidden="true"></div>
             ${renderProviderList()}
@@ -167,8 +171,7 @@ function render() {
           <nav class="sidebar-nav">
             <button class="nav-item ${state.view === "health" ? "is-active" : ""}" data-action="show-health">
               <span class="nav-dot ${healthSummary().attention ? "has-alert" : ""}"></span>
-              账号健康
-              ${healthSummary().attention ? `<span class="nav-badge is-warn">${healthSummary().attention}</span>` : ""}
+              诊断中心
             </button>
             <button class="nav-item ${state.view === "backup" ? "is-active" : ""}" data-action="show-backup">
               <span class="nav-dot"></span>
@@ -249,9 +252,35 @@ function flashFormSwap() {
   window.setTimeout(() => editor.classList.remove("is-swapping"), 220);
 }
 
+function renderAccountTools() {
+  return `
+    <div class="account-tools">
+      <label class="account-search" aria-label="搜索账号">
+        <span>搜索</span>
+        <input data-action="account-search" value="${escapeAttr(state.accountQuery || "")}" placeholder="邮箱 / accountId / 名称" />
+      </label>
+      <div class="account-filters" role="tablist" aria-label="账号筛选">
+        ${renderAccountFilter("all", "全部")}
+        ${renderAccountFilter("accounts", "官方")}
+        ${renderAccountFilter("sub2api", "sub2api")}
+        ${renderAccountFilter("balance", "余额")}
+        ${renderAccountFilter("attention", "需处理")}
+        ${renderAccountFilter("disabled", "停用")}
+      </div>
+    </div>
+  `;
+}
+
+function renderAccountFilter(value, label) {
+  return `<button class="account-filter ${state.accountFilter === value ? "is-active" : ""}" data-action="account-filter" data-filter="${escapeAttr(value)}" role="tab" aria-selected="${state.accountFilter === value ? "true" : "false"}">${escapeHtml(label)}</button>`;
+}
+
 function renderProviderList() {
   if (!state.config.providers.length) return renderEmptyList();
-  return providerGroups()
+  const groups = providerGroups();
+  const count = groups.reduce((total, group) => total + group.providers.length, 0);
+  if (!count) return `<div class="empty"><p class="hint">没有匹配的账号或供应商。</p></div>`;
+  return groups
     .map(
       (group) => `
         <div class="provider-group">
@@ -269,30 +298,97 @@ function renderProviderList() {
 function providerGroups() {
   const groups = [
     { key: "accounts", label: "官方账号", providers: [] },
+    { key: "sub2api", label: "sub2api 独立额度", providers: [] },
     { key: "balance", label: "余额接口", providers: [] },
     { key: "other", label: "其他供应商", providers: [] },
   ];
-  for (const provider of state.config.providers) {
-    if (provider.kind === "official-subscription") groups[0].providers.push(provider);
-    else if (provider.kind === "balance" || provider.kind === "coding-plan") groups[1].providers.push(provider);
-    else groups[2].providers.push(provider);
+  for (const provider of filteredProviders()) {
+    if (provider.kind === "official-subscription" && provider.importedFrom === "sub2api") groups[1].providers.push(provider);
+    else if (provider.kind === "official-subscription") groups[0].providers.push(provider);
+    else if (provider.kind === "balance" || provider.kind === "coding-plan") groups[2].providers.push(provider);
+    else groups[3].providers.push(provider);
   }
   return groups.filter((group) => group.providers.length);
+}
+
+function filteredProviders() {
+  return state.config.providers.filter((provider) => matchesAccountFilter(provider) && matchesAccountQuery(provider));
+}
+
+function syncSelectedProviderWithFilters() {
+  if (state.view !== "providers") return;
+  if (!state.config.providers.length) return;
+  const selected = selectedProvider();
+  if (selected && matchesAccountFilter(selected) && matchesAccountQuery(selected)) return;
+  state.selectedId = filteredProviders()[0]?.id || null;
+}
+
+function matchesAccountFilter(provider) {
+  const filter = state.accountFilter || "all";
+  if (filter === "all") return true;
+  if (filter === "accounts") return provider.kind === "official-subscription" && provider.importedFrom !== "sub2api";
+  if (filter === "sub2api") return provider.kind === "official-subscription" && provider.importedFrom === "sub2api";
+  if (filter === "balance") return provider.kind === "balance" || provider.kind === "coding-plan";
+  if (filter === "disabled") return provider.enabled === false;
+  if (filter === "attention") return providerNeedsAttention(provider);
+  return true;
+}
+
+function matchesAccountQuery(provider) {
+  const query = normalizeText(state.accountQuery);
+  if (!query) return true;
+  return providerSearchText(provider).includes(query);
+}
+
+function providerSearchText(provider) {
+  return normalizeText([
+    provider.id,
+    provider.name,
+    provider.kind,
+    provider.tool,
+    provider.importedFrom,
+    provider.accountEmail,
+    provider.accountId,
+    provider.accountUserId,
+    provider.planType,
+    provider.baseUrl,
+    provider.importKey,
+  ].filter(Boolean).join(" "));
+}
+
+function providerNeedsAttention(provider) {
+  const runtime = runtimeProvider(provider.id);
+  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
+  return (
+    provider.enabled === false ||
+    ["error", "expired", "missing", "danger"].includes(runtime?.status) ||
+    Boolean(runtime?.failure) ||
+    Boolean(expiry?.expired || expiry?.soon) ||
+    maxUsage >= 75
+  );
+}
+
+function runtimeProvider(id) {
+  return (state.snapshot.providers || []).find((provider) => provider.id === id) || null;
 }
 
 function renderProviderItem(provider) {
   const selected = provider.id === state.selectedId ? "is-selected" : "";
   const detail = providerDetail(provider);
+  const badge = providerBadge(provider);
+  const attention = providerNeedsAttention(provider) ? "is-attention" : "";
   return `
-    <div class="provider-item ${selected}" data-action="select-provider" data-id="${escapeAttr(provider.id)}" role="button" tabindex="0">
+    <div class="provider-item ${selected} ${attention}" data-action="select-provider" data-id="${escapeAttr(provider.id)}" role="button" tabindex="0">
       <button class="drag-handle" type="button" draggable="true" data-action="drag-provider" data-id="${escapeAttr(provider.id)}" title="拖动调整顺序" aria-label="拖动 ${escapeAttr(provider.name || provider.id)} 调整顺序">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
       </button>
-      <span class="dot ${provider.enabled === false ? "is-off" : ""}"></span>
+      <span class="dot ${provider.enabled === false ? "is-off" : badge.tone === "danger" ? "is-danger" : badge.tone === "warn" ? "is-warn" : ""}"></span>
       <span class="provider-name">
         <strong>${escapeHtml(provider.name || provider.id)}</strong>
         <span>${escapeHtml(detail)}</span>
       </span>
+      <span class="provider-badge is-${escapeAttr(badge.tone)}">${escapeHtml(badge.label)}</span>
       <label class="switch" title="启用">
         <input type="checkbox" data-action="toggle-enabled" data-id="${escapeAttr(provider.id)}" ${provider.enabled !== false ? "checked" : ""} />
         <span></span>
@@ -303,12 +399,29 @@ function renderProviderItem(provider) {
 
 function providerDetail(provider) {
   if (provider.kind === "official-subscription") {
-    const parts = [KIND_LABELS[provider.kind]];
-    if (provider.importedFrom) parts.push(provider.importedFrom);
+    const parts = [];
+    if (provider.importedFrom === "sub2api") parts.push("sub2api 独立额度");
+    else parts.push(KIND_LABELS[provider.kind]);
+    if (provider.accountEmail) parts.push(provider.accountEmail);
+    if (provider.accountId) parts.push(`ID ${shortId(provider.accountId)}`);
     if (provider.planType) parts.push(provider.planType);
     return parts.join(" · ");
   }
   return `${KIND_LABELS[provider.kind] || provider.kind}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`;
+}
+
+function providerBadge(provider) {
+  if (provider.enabled === false) return { label: "停用", tone: "muted" };
+  const runtime = runtimeProvider(provider.id);
+  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
+  if (["error", "missing"].includes(runtime?.status) || runtime?.failure) return { label: "失败", tone: "danger" };
+  if (runtime?.status === "expired" || expiry?.expired) return { label: "过期", tone: "danger" };
+  if (maxUsage >= 90 || runtime?.status === "danger") return { label: "紧张", tone: "danger" };
+  if (expiry?.soon) return { label: "将过期", tone: "warn" };
+  if (maxUsage >= 75 || runtime?.status === "warn") return { label: "关注", tone: "warn" };
+  if (provider.importedFrom === "sub2api") return { label: "独立", tone: "info" };
+  return { label: "正常", tone: "ok" };
 }
 
 function renderEmptyList() {
@@ -421,24 +534,21 @@ function renderUpdatePage() {
 
 function renderHealthPage() {
   const rows = healthRows();
-  const summary = healthSummary(rows);
   return `
     <div class="editor-head">
       <div class="section-title">
-        <strong>账号健康</strong>
-        <span>集中查看可用性、token 过期、查询失败和额度风险。</span>
+        <strong>诊断中心</strong>
+        <span>只显示需要关注的账号、token 过期、查询失败和额度风险。</span>
       </div>
       <button class="btn" data-action="refresh-quota">立即刷新</button>
     </div>
     <div class="form health-page">
-      <div class="health-summary">
-        <div><strong>${summary.ok}</strong><span>可用</span></div>
-        <div class="is-warn"><strong>${summary.warn}</strong><span>即将过期/偏高</span></div>
-        <div class="is-danger"><strong>${summary.danger}</strong><span>失败/已过期</span></div>
-        <div><strong>${rows.length}</strong><span>已启用监控</span></div>
+      <div class="diagnostic-hero">
+        <strong>${rows.length ? `${rows.length} 个项目需要处理` : "暂无需要处理的项目"}</strong>
+        <span>${rows.length ? "点击左侧账号可以查看身份信息和本地配置摘要。" : "当前没有失败、即将过期或额度偏高的账号。"}</span>
       </div>
       <div class="health-list">
-        ${rows.map(renderHealthRow).join("") || `<div class="empty"><p class="hint">还没有可检查的账号。</p></div>`}
+        ${rows.map(renderHealthRow).join("") || `<div class="empty"><p class="hint">没有诊断项。</p></div>`}
       </div>
     </div>
   `;
@@ -461,8 +571,8 @@ function renderHealthRow(row) {
 function healthRows() {
   const snapshots = new Map((state.snapshot.providers || []).map((provider) => [provider.id, provider]));
   return state.config.providers
-    .filter((provider) => provider.enabled !== false)
-    .map((provider) => healthRow(provider, snapshots.get(provider.id)));
+    .map((provider) => healthRow(provider, snapshots.get(provider.id)))
+    .filter((row) => row.tone !== "ok");
 }
 
 function healthRow(provider, runtime) {
@@ -473,7 +583,11 @@ function healthRow(provider, runtime) {
   let tone = "ok";
   let label = "可用";
   let action = "无需处理";
-  if (["error", "missing"].includes(status)) {
+  if (provider.enabled === false) {
+    tone = "warn";
+    label = "已停用";
+    action = "需要时可在左侧重新启用";
+  } else if (["error", "missing"].includes(status)) {
     tone = "danger";
     label = failure?.label || runtime?.statusText || "查询失败";
     action = failure?.action || "检查配置后重新刷新";
@@ -639,6 +753,7 @@ function formatBytes(bytes) {
 
 function renderEditor(provider) {
   const showEndpointFields = provider.kind !== "official-subscription";
+  const badge = providerBadge(provider);
   return `
     <div class="editor-head">
       <div class="section-title">
@@ -646,6 +761,7 @@ function renderEditor(provider) {
         <span>${escapeHtml(KIND_LABELS[provider.kind] || provider.kind)}</span>
       </div>
       <div class="row-actions">
+        <span class="provider-badge is-${escapeAttr(badge.tone)}">${escapeHtml(badge.label)}</span>
         <label class="switch" title="启用">
           <input type="checkbox" data-field="enabled" ${provider.enabled !== false ? "checked" : ""} />
           <span></span>
@@ -654,6 +770,7 @@ function renderEditor(provider) {
       </div>
     </div>
     <form class="form">
+      ${renderAccountDetailCard(provider)}
       <div class="form-grid">
         <div class="field">
           <label>供应商 ID</label>
@@ -721,6 +838,48 @@ function renderEditor(provider) {
       </div>
     </form>
   `;
+}
+
+function renderAccountDetailCard(provider) {
+  const runtime = runtimeProvider(provider.id);
+  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const rows = [
+    ["来源", accountSourceLabel(provider)],
+    ["邮箱", provider.accountEmail],
+    ["accountId", provider.accountId ? shortId(provider.accountId) : ""],
+    ["userId", provider.accountUserId ? shortId(provider.accountUserId) : ""],
+    ["计划", provider.planType],
+    ["token", provider.accessToken ? maskSecret(provider.accessToken) : ""],
+    ["过期时间", expiry ? expiry.absolute : "未知"],
+    ["最近状态", runtime ? providerBadge(provider).label : "等待刷新"],
+  ].filter(([, value]) => value);
+
+  if (!rows.length && provider.kind !== "official-subscription") return "";
+  return `
+    <div class="account-detail-card">
+      <div>
+        <strong>${escapeHtml(provider.importedFrom === "sub2api" ? "sub2api 独立额度身份" : "账号身份")}</strong>
+        <span>${escapeHtml(identityHelpText(provider))}</span>
+      </div>
+      <dl>
+        ${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
+      </dl>
+      ${runtime?.failure ? `<p class="diagnostic-tip"><strong>${escapeHtml(runtime.failure.label)}：</strong>${escapeHtml(runtime.failure.action)}</p>` : ""}
+    </div>
+  `;
+}
+
+function accountSourceLabel(provider) {
+  if (provider.importedFrom === "sub2api") return "sub2api JSON 导入";
+  if (provider.importedFrom === "sessions") return "sessions.json 导入";
+  if (provider.importedFrom) return `${provider.importedFrom} 导入`;
+  return KIND_LABELS[provider.kind] || provider.kind;
+}
+
+function identityHelpText(provider) {
+  if (provider.importedFrom === "sub2api") return "按 sub2api 导出的独立额度记录保留，不会因为 Gmail 主邮箱或 accountId 相同而合并。";
+  if (provider.kind === "official-subscription") return "官方账号 token 只保存在本机 config.json，预览与历史记录不会显示 token 原文。";
+  return "普通供应商使用 Base URL 与 API Key/环境变量查询余额。";
 }
 
 function renderOfficialNotice(provider) {
@@ -843,12 +1002,14 @@ function renderImportPreview() {
           </div>
           <button class="icon-close" data-action="cancel-import-preview" aria-label="关闭">×</button>
         </div>
+        ${renderImportSteps(preview)}
         <div class="import-summary">
           <div><strong>${Number(preview.accountCount || 0)}</strong><span>检测账号</span></div>
           <div class="is-add"><strong>${Number(preview.importedCount || 0)}</strong><span>新增</span></div>
           <div class="is-update"><strong>${Number(preview.updatedCount || 0)}</strong><span>更新</span></div>
           <div class="is-skip"><strong>${Number(preview.skippedCount || 0)}</strong><span>跳过</span></div>
         </div>
+        ${renderImportGuidance(preview)}
         ${renderImportDuplicateNotes(preview)}
         <div class="import-list">
           ${(preview.items || []).map(renderImportPreviewItem).join("") || `<div class="empty"><p class="hint">没有可导入账号。</p></div>`}
@@ -862,6 +1023,52 @@ function renderImportPreview() {
   `;
 }
 
+function renderImportSteps(preview) {
+  const hasChanges = Boolean((preview.importedCount || 0) + (preview.updatedCount || 0));
+  return `
+    <div class="import-steps" aria-label="导入步骤">
+      <span class="is-done"><em>1</em>选择来源</span>
+      <span class="is-active"><em>2</em>预览确认</span>
+      <span class="${hasChanges ? "" : "is-muted"}"><em>3</em>写入本机</span>
+    </div>
+  `;
+}
+
+function renderImportGuidance(preview) {
+  const identityMethods = new Set((preview.items || []).map((item) => item.identityMethod).filter(Boolean));
+  const isSub2api = preview.format === "sub2api" || identityMethods.has("sub2api");
+  const pieces = [];
+  pieces.push({
+    title: "安全预览",
+    detail: "这里只显示账号数量、邮箱、短 ID 和操作原因，不会显示 OAuth token 或 API Key 原文。",
+    tone: "info",
+  });
+  if (isSub2api) {
+    pieces.push({
+      title: "sub2api 独立额度",
+      detail: "同邮箱或同 accountId 也可能是不同额度条目，本次会按 sub2api 独立额度身份分开保留。",
+      tone: "success",
+    });
+  }
+  if (preview.updatedCount && !preview.importedCount) {
+    pieces.push({
+      title: "重复导入说明",
+      detail: "这些账号已存在，本次会更新 token、过期时间和计划信息，不会重复新增。",
+      tone: "info",
+    });
+  }
+  return `
+    <div class="import-guidance">
+      ${pieces.map((item) => `
+        <div class="import-guide is-${item.tone}">
+          <strong>${escapeHtml(item.title)}</strong>
+          <span>${escapeHtml(item.detail)}</span>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderImportDuplicateNotes(preview) {
   const groups = preview.duplicateGroups || [];
   if (!groups.length) return "";
@@ -871,7 +1078,7 @@ function renderImportDuplicateNotes(preview) {
         .map(
           (group) => `
             <div class="import-note">
-              <strong>同主邮箱多账号</strong>
+              <strong>${group.message && group.message.includes("sub2api") ? "sub2api 独立额度" : "同主邮箱多账号"}</strong>
               <span>${escapeHtml(group.message || "已按 accountId 分开保留。")}（${Number(group.count || 0)} 个）</span>
             </div>
           `,
@@ -931,6 +1138,20 @@ function bindEvents() {
   root.querySelector("[data-action='import-accounts']")?.addEventListener("click", chooseImportAccounts);
   root.querySelector("[data-action='latest-import']")?.addEventListener("click", chooseLatestImportAccounts);
   root.querySelector("[data-action='paste-import']")?.addEventListener("click", openPasteImport);
+  root.querySelector("[data-action='account-search']")?.addEventListener("input", (event) => {
+    state.accountQuery = event.target.value;
+    state.view = "providers";
+    syncSelectedProviderWithFilters();
+    refreshProviderListOnly();
+    replaceEditorForSelectedProvider();
+  });
+  root.querySelectorAll("[data-action='account-filter']").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.accountFilter = button.dataset.filter || "all";
+      state.view = "providers";
+      render();
+    });
+  });
   root.querySelectorAll("[data-action='cancel-import-preview']").forEach((element) => {
     element.addEventListener("click", (event) => {
       if (event.target.closest(".import-popover") && !event.target.closest(".icon-close")) return;
@@ -1243,6 +1464,38 @@ function selectProviderFromList(id) {
   if (!selectedChanged) return;
   updateProviderSelection(id);
   replaceEditorForSelectedProvider();
+}
+
+function refreshProviderListOnly() {
+  const list = root.querySelector(".provider-list");
+  if (!list) return;
+  const scrollTop = list.scrollTop;
+  list.innerHTML = `<div class="selection-bar" aria-hidden="true"></div>${renderProviderList()}`;
+  list.scrollTop = scrollTop;
+  bindProviderListEvents();
+  positionSelectionBar();
+}
+
+function bindProviderListEvents() {
+  root.querySelectorAll("[data-action='select-provider']").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest(".switch, .drag-handle")) return;
+      selectProviderFromList(row.dataset.id);
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.target.closest(".drag-handle")) return;
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      selectProviderFromList(row.dataset.id);
+    });
+  });
+  root.querySelectorAll("[data-action='toggle-enabled']").forEach((input) => {
+    input.addEventListener("change", () => {
+      pulseToggle(input);
+      updateProvider(input.dataset.id, { enabled: input.checked });
+    });
+  });
+  bindProviderReorder();
 }
 
 function refreshProviderListItem(id) {
@@ -1815,6 +2068,15 @@ function formatDuration(ms) {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} 小时 ${minutes % 60} 分钟`;
   return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+}
+
+function shortId(value) {
+  const text = String(value || "");
+  return text.length <= 8 ? text : `${text.slice(0, 4)}…${text.slice(-4)}`;
+}
+
+function normalizeText(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function escapeHtml(value) {

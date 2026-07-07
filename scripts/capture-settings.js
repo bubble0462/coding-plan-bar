@@ -264,7 +264,7 @@ async function main() {
         const page = document.querySelector(".health-page");
         if (!page) return false;
         const text = page.textContent || "";
-        return text.includes("可用") && text.includes("已启用监控");
+        return text.includes("需要处理") && text.includes("诊断项");
       })()`,
     );
     if (!rendered) throw new Error("Health page did not render expected summary");
@@ -300,7 +300,7 @@ async function main() {
         const popover = document.querySelector(".import-popover");
         if (!popover) return false;
         const text = popover.textContent || "";
-        return text.includes("导入账号预览") && text.includes("检测账号") && text.includes("新增") && text.includes("同主邮箱多账号");
+        return text.includes("导入账号预览") && text.includes("检测账号") && text.includes("新增") && text.includes("sub2api 独立额度");
       })()`,
     );
     if (!rendered) throw new Error("Import preview did not render expected summary");

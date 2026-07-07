@@ -283,9 +283,7 @@ function resizePopupToHeight(requestedHeight) {
 
 function updateTrayTooltip() {
   if (!tray) return;
-  const enabled = currentState.providers.length;
-  const errors = currentState.errorCount;
-  tray.setToolTip(`Coding Plan Bar\n${enabled} 个供应商，${errors} 个提醒`);
+  tray.setToolTip("Coding Plan Bar\n悬停查看额度，右键打开菜单");
 }
 
 async function refreshAll(reason = "timer") {

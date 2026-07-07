@@ -99,8 +99,6 @@ function render(isDataRefresh = false) {
         </div>
       </header>
 
-      ${renderDashboardAlerts(providers)}
-
       <section class="provider-list ${providers.length > 3 ? "is-scrollable" : "is-static"}">
         ${providers.length ? providers.map((provider, index) => renderProvider(provider, index, fresh, refreshingClass)).join("") : renderEmpty()}
       </section>
@@ -149,44 +147,6 @@ function render(isDataRefresh = false) {
 }
 
 let refreshHighlightTimer = null;
-
-function renderDashboardAlerts(providers) {
-  const alerts = dashboardAlerts(providers);
-  if (!alerts.length) return "";
-  return `
-    <div class="dashboard-alerts">
-      ${alerts.map((alert) => `<div class="dashboard-alert is-${alert.tone}"><strong>${escapeHtml(alert.title)}</strong><span>${escapeHtml(alert.detail)}</span></div>`).join("")}
-    </div>
-  `;
-}
-
-function dashboardAlerts(providers) {
-  const enabled = providers || [];
-  const errors = enabled.filter((provider) => ["error", "expired", "missing"].includes(provider.status));
-  const dangerTiers = [];
-  const warnTiers = [];
-  for (const provider of enabled) {
-    for (const tier of provider.tiers || []) {
-      const utilization = Number(tier.utilization || 0);
-      if (utilization >= 90) dangerTiers.push(provider.name);
-      else if (utilization >= 75) warnTiers.push(provider.name);
-    }
-  }
-  const alerts = [];
-  if (errors.length) {
-    alerts.push({ tone: "danger", title: `${errors.length} 个账号需要处理`, detail: errors.slice(0, 2).map((p) => p.name).join("、") });
-  }
-  if (dangerTiers.length) {
-    alerts.push({ tone: "danger", title: "额度接近上限", detail: uniqueNames(dangerTiers).slice(0, 2).join("、") });
-  } else if (warnTiers.length) {
-    alerts.push({ tone: "warn", title: "额度使用偏高", detail: uniqueNames(warnTiers).slice(0, 2).join("、") });
-  }
-  return alerts.slice(0, 2);
-}
-
-function uniqueNames(values) {
-  return [...new Set(values.filter(Boolean))];
-}
 
 function renderProvider(provider, index, fresh, refreshing) {
   const classes = ["provider", `status-${provider.status}`, providerAlertClass(provider), fresh ? "is-fresh" : "", refreshing]
