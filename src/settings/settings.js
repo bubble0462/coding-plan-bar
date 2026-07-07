@@ -1210,9 +1210,11 @@ function updateSelectedField(field, rawValue, shouldRender) {
 function updateProvider(id, patch) {
   const provider = state.config.providers.find((item) => item.id === id);
   if (!provider) return;
+  const scrollTop = captureProviderListScroll();
   Object.assign(provider, patch);
   markDirty();
   render();
+  restoreProviderListScroll(scrollTop);
 }
 
 function addTemplate(templateId) {
@@ -1447,6 +1449,18 @@ function closeImportPreview() {
     state.importPreviewClosing = false;
     render();
   }, 180);
+}
+
+function captureProviderListScroll() {
+  return root.querySelector(".provider-list")?.scrollTop || 0;
+}
+
+function restoreProviderListScroll(scrollTop) {
+  requestAnimationFrame(() => {
+    const list = root.querySelector(".provider-list");
+    if (list) list.scrollTop = scrollTop;
+    positionSelectionBar();
+  });
 }
 
 /* Record each list row's position keyed by provider id. */
