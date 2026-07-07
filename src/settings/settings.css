@@ -155,6 +155,12 @@ button {
   font-size: 13px;
 }
 
+.sidebar-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .provider-list {
   min-height: 0;
   overflow: auto;
@@ -837,6 +843,12 @@ button {
   background: #eff6ff;
   color: #1e3a8a;
   padding: 10px 12px;
+}
+
+.notice-box.import-notice {
+  border-color: #bbf7d0;
+  background: linear-gradient(135deg, #f0fdf4, #eff6ff);
+  color: #14532d;
 }
 
 .notice-box::before {

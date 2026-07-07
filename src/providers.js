@@ -1,7 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { readConfigFile } = require("./config-store");
+const { readConfigFile, normalizeConfig } = require("./config-store");
 const { collectLocalUsage, attachUsageToProvider } = require("./session-usage");
 
 const TIER_LABELS = {
@@ -17,6 +17,10 @@ const TIER_LABELS = {
 
 function loadConfig(configPath) {
   return readConfigFile(configPath);
+}
+
+function normalizeProviderConfig(config) {
+  return normalizeConfig(config);
 }
 
 async function refreshProviders(config) {
@@ -160,7 +164,9 @@ async function queryOfficialSubscription(provider) {
     if (credentials.status !== "valid" && !credentials.accessToken) {
       return subscriptionError("codex", credentials.status, credentials.message);
     }
-    return queryCodexQuota(credentials.accessToken, credentials.accountId, "codex");
+    const result = await queryCodexQuota(credentials.accessToken, credentials.accountId, "codex");
+    if (result.success && credentials.message) result.credentialMessage = credentials.message;
+    return result;
   }
 
   if (provider.tool === "claude") {
@@ -176,11 +182,13 @@ async function queryOfficialSubscription(provider) {
 
 function readCodexCredentials(provider) {
   if (provider.accessToken) {
+    const expired = provider.expiresAt ? isExpired(provider.expiresAt) : false;
+    const label = provider.accountEmail || provider.planType || null;
     return {
       accessToken: provider.accessToken,
       accountId: provider.accountId || null,
-      status: "valid",
-      message: null,
+      status: expired ? "expired" : "valid",
+      message: expired ? "导入的 OpenAI OAuth token 已过期" : label,
     };
   }
 
@@ -953,6 +961,7 @@ function statusText(status) {
 
 module.exports = {
   loadConfig,
+  normalizeProviderConfig,
   refreshProviders,
   parseZhipuTokenTiers,
   parseMiniMaxTiers,
