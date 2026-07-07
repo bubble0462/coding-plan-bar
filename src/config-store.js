@@ -10,9 +10,41 @@ function normalizeConfig(config) {
   return {
     refreshIntervalSeconds: Number(config.refreshIntervalSeconds || 300),
     showOnHover: config.showOnHover !== false,
+    panelDensity: normalizePanelDensity(config.panelDensity),
+    privacy: normalizePrivacy(config.privacy),
     autoUpdate: normalizeAutoUpdate(config.autoUpdate),
+    importHistory: normalizeImportHistory(config.importHistory),
     providers: Array.isArray(config.providers) ? config.providers.map(normalizeProvider) : [],
   };
+}
+
+function normalizePanelDensity(value) {
+  return value === "compact" ? "compact" : "comfortable";
+}
+
+function normalizePrivacy(privacy) {
+  const value = privacy || {};
+  return {
+    suppressAdvancedJsonWarning: Boolean(value.suppressAdvancedJsonWarning),
+    suppressBackupWarning: Boolean(value.suppressBackupWarning),
+    suppressImportWarning: Boolean(value.suppressImportWarning),
+  };
+}
+
+function normalizeImportHistory(history) {
+  if (!Array.isArray(history)) return [];
+  return history.slice(0, 20).map((entry) => ({
+    id: String(entry.id || entry.importedAt || Date.now()),
+    importedAt: entry.importedAt || new Date().toISOString(),
+    sourceType: entry.sourceType || "file",
+    sourceLabel: String(entry.sourceLabel || entry.fileName || "账号 JSON").slice(0, 180),
+    format: entry.format || "accounts",
+    accountCount: Number(entry.accountCount || 0),
+    importedCount: Number(entry.importedCount || 0),
+    updatedCount: Number(entry.updatedCount || 0),
+    skippedCount: Number(entry.skippedCount || 0),
+    identityMethods: Array.isArray(entry.identityMethods) ? entry.identityMethods.slice(0, 6).map(String) : [],
+  }));
 }
 
 function normalizeAutoUpdate(autoUpdate) {

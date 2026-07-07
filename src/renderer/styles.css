@@ -577,6 +577,21 @@ button {
   font-size: 10px;
 }
 
+.reset-time.is-soon {
+  color: #15803d;
+  font-weight: 750;
+}
+
+.reset-time.is-watch {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.reset-time.is-danger {
+  color: var(--red);
+  font-weight: 750;
+}
+
 .usd {
   margin-right: 5px;
 }
@@ -641,6 +656,17 @@ button {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.35;
+}
+
+.failure-help {
+  border-radius: 6px;
+  background: #fff1f2;
+  color: #991b1b;
+  padding: 7px 8px;
+}
+
+.failure-help strong {
+  color: #7f1d1d;
 }
 
 .empty-row {
@@ -792,6 +818,35 @@ button {
     0 10px 24px rgba(15, 23, 42, 0.09),
     0 2px 6px rgba(15, 23, 42, 0.05);
   background: #ffffff;
+}
+
+.density-compact .provider-list {
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.density-compact .provider {
+  padding: 8px;
+}
+
+.density-compact .provider-top {
+  margin-bottom: 6px;
+}
+
+.density-compact .provider-title p,
+.density-compact .tier-usage,
+.density-compact .message,
+.density-compact .empty-row {
+  display: none;
+}
+
+.density-compact .tiers {
+  gap: 5px;
+}
+
+.density-compact .tier-line,
+.density-compact .tier-meta {
+  font-size: 9px;
 }
 
 /* Animated light streak along the top edge on hover (star-border inspired). */

@@ -87,7 +87,7 @@ function render(isDataRefresh = false) {
   const savedScroll = prevList ? prevList.scrollTop : 0;
 
   root.innerHTML = `
-    <section class="panel-shell ${snapshot.loading ? "is-loading" : ""}">
+    <section class="panel-shell ${snapshot.loading ? "is-loading" : ""} density-${snapshot.panelDensity === "compact" ? "compact" : "comfortable"}">
       <header class="header">
         <div>
           <h1>Coding Plan Bar</h1>
@@ -212,7 +212,7 @@ function renderProvider(provider, index, fresh, refreshing) {
         <span class="status-pill">${escapeHtml(STATUS_TEXT[provider.status] || provider.statusText || provider.status)}</span>
       </div>
       ${body}
-      ${provider.message ? `<p class="message">${escapeHtml(provider.message)}</p>` : ""}
+      ${provider.failure ? `<p class="message failure-help"><strong>${escapeHtml(provider.failure.label)}：</strong>${escapeHtml(provider.failure.action)}</p>` : provider.message ? `<p class="message">${escapeHtml(provider.message)}</p>` : ""}
     </article>
   `;
 }
@@ -255,7 +255,7 @@ function renderTier(tier) {
       </div>
       <div class="tier-meta">
         <span>剩余 ${Math.round(remaining)}%</span>
-        <span>${usd}${reset ? ` ${reset} 后重置` : ""}</span>
+        <span class="reset-time ${reset ? reset.tone : ""}">${usd}${reset ? ` ${escapeHtml(reset.relative)} · ${escapeHtml(reset.absolute)} 重置` : "重置时间未知"}</span>
       </div>
     </div>
   `;
@@ -371,13 +371,30 @@ function formatUpdated(timestamp) {
 
 function countdown(value) {
   if (!value) return null;
-  const diff = new Date(value).getTime() - Date.now();
-  if (!Number.isFinite(diff) || diff <= 0) return null;
+  const time = new Date(value).getTime();
+  const diff = time - Date.now();
+  if (!Number.isFinite(diff)) return null;
+  if (diff <= 0) return { relative: "已到重置时间", absolute: formatResetAbsolute(time), tone: "is-danger" };
   const minutes = Math.floor(diff / 60000);
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分钟`;
-  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+  const relative = minutes < 60
+    ? `${minutes} 分钟后`
+    : minutes < 1440
+      ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分后`
+      : `${Math.floor(minutes / 1440)} 天 ${Math.floor((minutes % 1440) / 60)} 小时后`;
+  const tone = minutes <= 60 ? "is-soon" : minutes <= 360 ? "is-watch" : "";
+  return { relative, absolute: formatResetAbsolute(time), tone };
+}
+
+function formatResetAbsolute(time) {
+  const date = new Date(time);
+  const today = new Date();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const offset = Math.floor((new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() - start) / dayMs);
+  const timeText = date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  if (offset === 0) return `今天 ${timeText}`;
+  if (offset === 1) return `明天 ${timeText}`;
+  return `${date.toLocaleDateString("zh-CN", { weekday: "short" })} ${timeText}`;
 }
 
 function formatMoney(value, unit) {

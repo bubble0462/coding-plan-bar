@@ -10,14 +10,21 @@ function importAccountsIntoConfig(config, parsedJson, sourcePath) {
   }
 
   const applied = applyAccountsToProviders(normalized.providers, parsed.accounts, sourcePath);
+  const historyEntry = importHistoryEntry(parsed, applied, sourcePath);
   return {
-    config: { ...normalized, providers: applied.providers },
+    config: {
+      ...normalized,
+      providers: applied.providers,
+      importHistory: [historyEntry, ...(normalized.importHistory || [])].slice(0, 20),
+    },
     importedCount: applied.importedCount,
     updatedCount: applied.updatedCount,
     skippedCount: parsed.skippedCount,
+    accountCount: parsed.accounts.length,
     affectedIds: applied.affectedIds,
     selectedId: applied.affectedIds[0] || null,
     format: parsed.format,
+    historyEntry,
     message: importMessage(parsed.format, applied.importedCount, applied.updatedCount, parsed.skippedCount),
   };
 }
@@ -317,6 +324,21 @@ function duplicateImportedGroups(providers) {
       accountIds: providersInGroup.map((provider) => shortId(provider.accountId)),
       message: "同一个 Gmail 主邮箱下存在多个不同 accountId，已按 accountId 分开保留。",
     }));
+}
+
+function importHistoryEntry(parsed, applied, sourcePath) {
+  return {
+    id: `import-${Date.now()}`,
+    importedAt: new Date().toISOString(),
+    sourceType: sourcePath === "pasted-json" ? "paste" : "file",
+    sourceLabel: sourcePath === "pasted-json" ? "粘贴 JSON" : path.basename(sourcePath || "账号 JSON"),
+    format: parsed.format,
+    accountCount: parsed.accounts.length,
+    importedCount: applied.importedCount,
+    updatedCount: applied.updatedCount,
+    skippedCount: parsed.skippedCount,
+    identityMethods: [...new Set((applied.items || []).map((item) => item.identityMethod).filter(Boolean))],
+  };
 }
 
 function importedAccountKey(account) {

@@ -8,6 +8,8 @@ const showTemplates = process.argv.includes("--templates");
 const showUpdate = process.argv.includes("--update");
 const showReorder = process.argv.includes("--reorder");
 const showImport = process.argv.includes("--import");
+const showHealth = process.argv.includes("--health");
+const showBackup = process.argv.includes("--backup");
 const outputPath = path.join(
   __dirname,
   "..",
@@ -20,7 +22,11 @@ const outputPath = path.join(
         ? "settings-screenshot-reorder.png"
         : showImport
           ? "settings-screenshot-import.png"
-          : "settings-screenshot.png",
+          : showHealth
+            ? "settings-screenshot-health.png"
+            : showBackup
+              ? "settings-screenshot-backup.png"
+              : "settings-screenshot.png",
 );
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-settings-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
@@ -153,9 +159,9 @@ async function main() {
   const window = new BrowserWindow({
     width: 940,
     height: 660,
-    show: showTemplates || showUpdate || showReorder || showImport,
-    x: showTemplates || showUpdate || showReorder || showImport ? -2200 : undefined,
-    y: showTemplates || showUpdate || showReorder || showImport ? 80 : undefined,
+    show: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup,
+    x: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup ? -2200 : undefined,
+    y: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup ? 80 : undefined,
     frame: true,
     backgroundColor: "#f6f8fb",
     webPreferences: {
@@ -244,6 +250,42 @@ async function main() {
       })()`,
     );
     if (!rendered) throw new Error("Update page did not render with version info");
+  }
+
+  if (showHealth) {
+    window.showInactive();
+    await wait(120);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="show-health"]')?.click();
+    `);
+    await wait(200);
+    const rendered = await window.webContents.executeJavaScript(
+      `(() => {
+        const page = document.querySelector(".health-page");
+        if (!page) return false;
+        const text = page.textContent || "";
+        return text.includes("可用") && text.includes("已启用监控");
+      })()`,
+    );
+    if (!rendered) throw new Error("Health page did not render expected summary");
+  }
+
+  if (showBackup) {
+    window.showInactive();
+    await wait(120);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="show-backup"]')?.click();
+    `);
+    await wait(200);
+    const rendered = await window.webContents.executeJavaScript(
+      `(() => {
+        const page = document.querySelector(".backup-page");
+        if (!page) return false;
+        const text = page.textContent || "";
+        return text.includes("备份 config.json") && text.includes("最近导入") && text.includes("隐私提醒");
+      })()`,
+    );
+    if (!rendered) throw new Error("Backup page did not render expected controls");
   }
 
   if (showImport) {

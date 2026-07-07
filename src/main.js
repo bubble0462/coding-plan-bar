@@ -32,6 +32,7 @@ let currentState = {
   configPath: null,
   updatedAt: null,
   refreshIntervalSeconds: 300,
+  panelDensity: "comfortable",
   errorCount: 0,
   providers: [],
 };
@@ -212,13 +213,21 @@ function isCursorInsidePopup(margin = 8) {
 }
 
 function sendSnapshot() {
-  if (!popupWindow || popupWindow.webContents.isDestroyed()) return;
   resizePopupForState();
-  if (popupWindow.isVisible()) positionPopup();
-  popupWindow.webContents.send("quota:snapshot", {
+  if (popupWindow && !popupWindow.webContents.isDestroyed()) {
+    if (popupWindow.isVisible()) positionPopup();
+    popupWindow.webContents.send("quota:snapshot", snapshotPayload());
+  }
+  if (settingsWindow && !settingsWindow.webContents.isDestroyed()) {
+    settingsWindow.webContents.send("quota:snapshot", snapshotPayload());
+  }
+}
+
+function snapshotPayload() {
+  return {
     ...currentState,
     layoutKey: providerLayoutKey(currentState.providers),
-  });
+  };
 }
 
 function resizePopupForState() {
@@ -239,14 +248,15 @@ function invalidateMeasuredPopupHeight() {
 }
 
 function providerLayoutKey(providers = []) {
-  return providers
+  const density = currentState.panelDensity || "comfortable";
+  return `${density}|${providers
     .map((provider) => {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
       const shape = provider.balance ? `balance:${provider.usage ? 1 : 0}` : `tiers:${tierCount}`;
       return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:${provider.message ? 1 : 0}`;
     })
-    .join("|");
+    .join("|")}`;
 }
 
 function resizePopupToHeight(requestedHeight) {
@@ -302,6 +312,7 @@ async function refreshAll(reason = "timer") {
       updatedAt: Date.now(),
       elapsedMs: Date.now() - startedAt,
       refreshIntervalSeconds: config.refreshIntervalSeconds,
+      panelDensity: config.panelDensity,
       errorCount,
       providers,
     };
@@ -345,14 +356,47 @@ async function chooseImportAccountsFile() {
     ],
   });
   if (result.canceled || !result.filePaths.length) return { canceled: true };
-  const filePath = result.filePaths[0];
+  return previewImportFile(result.filePaths[0]);
+}
+
+function previewImportFile(filePath) {
   const parsed = readImportJson(filePath);
   const current = readConfigFile(configPath);
   return {
     ...previewAccountsImport(current, parsed, filePath),
     filePath,
+    sourceType: "file",
     configPath,
   };
+}
+
+async function previewLatestImportFile() {
+  const filePath = latestDownloadsImportFile();
+  if (!filePath) {
+    return {
+      canceled: true,
+      message: "Downloads 中没有找到 sub2api*.json 或 sub2api-account*.json",
+    };
+  }
+  return {
+    ...previewImportFile(filePath),
+    pickedLatest: true,
+  };
+}
+
+function latestDownloadsImportFile() {
+  const downloads = app.getPath("downloads");
+  if (!downloads || !fs.existsSync(downloads)) return null;
+  const candidates = fs
+    .readdirSync(downloads, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && /^sub2api(?:-account)?[\w.-]*\.json$/i.test(entry.name))
+    .map((entry) => {
+      const filePath = path.join(downloads, entry.name);
+      const stat = fs.statSync(filePath);
+      return { filePath, mtimeMs: stat.mtimeMs };
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0]?.filePath || null;
 }
 
 async function importAccountsFromFile(_event, filePath) {
@@ -399,7 +443,40 @@ async function previewImportedAccounts(_event, raw) {
     throw new Error(`JSON 解析失败：${error.message}`);
   }
   const current = readConfigFile(configPath);
-  return previewAccountsImport(current, parsed, "pasted-json");
+  return {
+    ...previewAccountsImport(current, parsed, "pasted-json"),
+    sourceType: "paste",
+  };
+}
+
+async function importAccountsFromRaw(_event, raw) {
+  let parsed;
+  try {
+    parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  } catch (error) {
+    throw new Error(`JSON 解析失败：${error.message}`);
+  }
+  const current = readConfigFile(configPath);
+  const imported = importAccountsIntoConfig(current, parsed, "pasted-json");
+  if (imported.importedCount > 0 || imported.updatedCount > 0) {
+    const saved = writeConfigFile(configPath, imported.config);
+    syncPopupProvidersToConfig(saved);
+    await refreshAll("import");
+    scheduleRefresh();
+    return {
+      ...imported,
+      config: saved,
+      selectedId: imported.selectedId,
+      configPath,
+      sourceType: "paste",
+    };
+  }
+  return {
+    ...imported,
+    config: current,
+    configPath,
+    sourceType: "paste",
+  };
 }
 
 // ===== Updater =====
@@ -416,6 +493,7 @@ let updaterState = {
 };
 let updateCheckInFlight = false;
 let downloadInFlight = false;
+let pendingRestore = null;
 
 function sendUpdaterState() {
   const target = settingsWindow && !settingsWindow.isDestroyed() ? settingsWindow : null;
@@ -516,6 +594,53 @@ async function installUpdate() {
   }
 }
 
+async function backupConfigFile() {
+  const current = readConfigFile(configPath);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const result = await dialog.showSaveDialog(settingsWindow || undefined, {
+    title: "备份配置文件（包含敏感 token）",
+    defaultPath: path.join(app.getPath("documents"), `coding-plan-bar-config-${stamp}.json`),
+    filters: [{ name: "JSON 文件", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePath) return { canceled: true };
+  fs.writeFileSync(result.filePath, `${JSON.stringify(current, null, 2)}\n`, "utf8");
+  return { filePath: result.filePath, message: "配置已备份，请妥善保存这个包含密钥的文件" };
+}
+
+async function chooseRestoreConfigFile() {
+  const result = await dialog.showOpenDialog(settingsWindow || undefined, {
+    title: "选择配置备份文件",
+    properties: ["openFile"],
+    filters: [{ name: "JSON 文件", extensions: ["json"] }],
+  });
+  if (result.canceled || !result.filePaths.length) return { canceled: true };
+  const filePath = result.filePaths[0];
+  const parsed = readImportJson(filePath);
+  const normalized = readConfigObject(parsed);
+  pendingRestore = { token: `restore-${Date.now()}`, config: normalized, filePath };
+  return {
+    restoreToken: pendingRestore.token,
+    providerCount: normalized.providers.length,
+    importHistoryCount: normalized.importHistory.length,
+    fileName: path.basename(filePath),
+  };
+}
+
+async function confirmRestoreConfig(_event, token) {
+  if (!pendingRestore || pendingRestore.token !== token) throw new Error("恢复会话已失效，请重新选择备份文件");
+  const saved = writeConfigFile(configPath, pendingRestore.config);
+  pendingRestore = null;
+  syncPopupProvidersToConfig(saved);
+  await refreshAll("restore");
+  scheduleRefresh();
+  return { config: saved, configPath, message: "配置已恢复并刷新额度" };
+}
+
+function readConfigObject(parsed) {
+  const { normalizeConfig } = require("./config-store");
+  return normalizeConfig(parsed);
+}
+
 async function openReleaseUrl(_event, url) {
   try {
     const parsed = new URL(String(url || ""));
@@ -546,6 +671,7 @@ function getConfigForSettings() {
     config: readConfigFile(configPath),
     configPath,
     templates: providerTemplates(),
+    snapshot: snapshotPayload(),
   };
 }
 
@@ -624,8 +750,13 @@ async function startApp() {
   ipcMain.handle("config:get", getConfigForSettings);
   ipcMain.handle("config:save", saveConfigFromSettings);
   ipcMain.handle("config:open-json", openConfigJson);
+  ipcMain.handle("config:backup", backupConfigFile);
+  ipcMain.handle("config:restore", chooseRestoreConfigFile);
+  ipcMain.handle("config:confirm-restore", confirmRestoreConfig);
   ipcMain.handle("config:choose-import-accounts", chooseImportAccountsFile);
+  ipcMain.handle("config:latest-import-accounts", previewLatestImportFile);
   ipcMain.handle("config:import-accounts", importAccountsFromFile);
+  ipcMain.handle("config:import-accounts-raw", importAccountsFromRaw);
   ipcMain.handle("config:preview-import", previewImportedAccounts);
   ipcMain.handle("quota:hide", hidePopup);
   ipcMain.handle("quota:keep-open", keepPopupOpen);

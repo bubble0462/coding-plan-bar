@@ -2,6 +2,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { readConfigFile, normalizeConfig } = require("./config-store");
+const { classifyFailure } = require("./failure-classifier");
 const { collectLocalUsage, attachUsageToProvider } = require("./session-usage");
 
 const TIER_LABELS = {
@@ -64,6 +65,7 @@ function normalizeSubscriptionProvider(provider, quota) {
   }));
 
   const worst = tiers.reduce((max, tier) => Math.max(max, tier.utilization), 0);
+  const failure = !quota.success ? classifyFailure(quota.error || quota.credentialMessage, quota.httpStatus) : null;
   let status = "ok";
   if (!quota.success) status = quota.credentialStatus === "not_found" ? "missing" : "error";
   if (quota.credentialStatus === "expired") status = "expired";
@@ -76,8 +78,9 @@ function normalizeSubscriptionProvider(provider, quota) {
     kind: provider.kind,
     tool: quota.tool || provider.tool || provider.id,
     status,
-    statusText: statusText(status),
+    statusText: failure ? failure.label : statusText(status),
     message: quota.error || quota.credentialMessage || null,
+    failure,
     planLabel: quota.credentialMessage || null,
     queriedAt: quota.queriedAt || Date.now(),
     tiers,
@@ -87,13 +90,15 @@ function normalizeSubscriptionProvider(provider, quota) {
 
 function normalizeBalanceProvider(provider, result) {
   if (!result.success) {
+    const failure = classifyFailure(result.error || "余额查询失败");
     return {
       id: provider.id,
       name: provider.name,
       kind: provider.kind,
       status: "error",
-      statusText: "错误",
+      statusText: failure.label,
       message: result.error || "余额查询失败",
+      failure,
       queriedAt: Date.now(),
       tiers: [],
       balance: null,
@@ -146,13 +151,15 @@ function normalizeManualProvider(provider) {
 }
 
 function errorProvider(provider, message) {
+  const failure = classifyFailure(message);
   return {
     id: provider.id,
     name: provider.name,
     kind: provider.kind,
     status: "error",
-    statusText: "错误",
+    statusText: failure.label,
     message,
+    failure,
     queriedAt: Date.now(),
     tiers: [],
   };

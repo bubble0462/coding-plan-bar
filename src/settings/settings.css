@@ -1521,6 +1521,12 @@ button {
   animation: cpb-nav-pulse 2s ease-in-out infinite;
 }
 
+.nav-dot.has-alert {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.16);
+  animation: cpb-nav-pulse 2s ease-in-out infinite;
+}
+
 @keyframes cpb-nav-pulse {
   0%,
   100% {
@@ -1539,6 +1545,10 @@ button {
   font-size: 10px;
   font-weight: 700;
   padding: 2px 7px;
+}
+
+.nav-badge.is-warn {
+  background: var(--amber);
 }
 
 .provider-list.is-dimmed {
@@ -1762,6 +1772,187 @@ button {
   text-align: center;
   font-style: normal;
   font-size: 10px;
+}
+
+.health-page,
+.backup-page {
+  display: grid;
+  gap: 14px;
+}
+
+.health-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.health-summary div,
+.security-card,
+.history-item {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: #ffffff;
+  padding: 11px 12px;
+}
+
+.health-summary strong {
+  display: block;
+  color: #0f172a;
+  font-size: 22px;
+}
+
+.health-summary span,
+.history-item span,
+.history-item small,
+.security-card p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.health-summary .is-warn strong {
+  color: var(--amber);
+}
+
+.health-summary .is-danger strong,
+.security-card.is-danger strong {
+  color: var(--red);
+}
+
+.health-list,
+.history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.health-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto minmax(160px, 0.65fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  background: rgba(248, 250, 252, 0.88);
+  padding: 10px;
+}
+
+.health-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.12);
+}
+
+.health-row.is-warn .health-dot {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.13);
+}
+
+.health-row.is-danger .health-dot {
+  background: var(--red);
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+}
+
+.health-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.health-main strong,
+.history-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.health-main small,
+.health-action {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.health-status {
+  border-radius: 999px;
+  background: #eef5ff;
+  color: var(--blue);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.health-row.is-warn .health-status {
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.health-row.is-danger .health-status {
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.backup-actions,
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.security-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.security-toggle input {
+  accent-color: var(--blue);
+}
+
+.segment {
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.segment.is-active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: var(--blue);
+}
+
+.paste-popover {
+  width: min(720px, calc(100vw - 52px));
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 26px 76px rgba(15, 23, 42, 0.28);
+  animation: cpb-import-in 240ms var(--ease-spring) both;
+}
+
+.paste-json {
+  min-height: 260px;
+  margin: 14px 16px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 12px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  outline: none;
 }
 
 .import-backdrop {

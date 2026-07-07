@@ -12,12 +12,20 @@ let state = {
   config: {
     refreshIntervalSeconds: 300,
     showOnHover: true,
+    panelDensity: "comfortable",
+    privacy: {
+      suppressAdvancedJsonWarning: false,
+      suppressBackupWarning: false,
+      suppressImportWarning: false,
+    },
     autoUpdate: { enabled: true },
+    importHistory: [],
     providers: [],
   },
   templates: [],
+  snapshot: { providers: [], loading: false, updatedAt: null },
   selectedId: null,
-  // "providers" shows the provider editor; "update" shows the auto-update page.
+  // "providers" shows the provider editor; auxiliary views show health, backup/security, and updates.
   view: "providers",
   updater: {
     status: "idle",
@@ -37,6 +45,9 @@ let state = {
   closingDropdown: null,
   importPreview: null,
   importPreviewClosing: false,
+  importRaw: "",
+  pasteOpen: false,
+  backupPreview: null,
 };
 
 let templatesCloseTimer = null;
@@ -69,6 +80,11 @@ load();
 // Subscribe to update state pushed from the main process, and pull the current
 // state once on load so the update page reflects any background auto-check.
 let lastUpdaterStatus = "idle";
+window.codingPlanBar.onSnapshot((next) => {
+  state.snapshot = next || state.snapshot;
+  if (state.view === "health") render();
+});
+
 window.codingPlanBar.onUpdaterState((next) => {
   const statusChanged = next.status !== lastUpdaterStatus;
   lastUpdaterStatus = next.status;
@@ -103,6 +119,7 @@ async function load() {
     const payload = await window.codingPlanBar.getConfig();
     state.configPath = payload.configPath;
     state.config = sanitizeConfig(cloneConfig(payload.config));
+    state.snapshot = payload.snapshot || state.snapshot;
     state.templates = payload.templates || [];
     state.selectedId = state.config.providers[0]?.id || null;
     state.status = "设置已载入";
@@ -137,7 +154,9 @@ function render() {
           <div class="sidebar-head">
             <strong>供应商</strong>
             <div class="sidebar-head-actions">
-              <button class="btn small" data-action="import-accounts">导入账号</button>
+              <button class="btn small" data-action="latest-import">最新</button>
+              <button class="btn small" data-action="paste-import">粘贴</button>
+              <button class="btn small" data-action="import-accounts">导入</button>
               <button class="btn small primary" data-action="toggle-templates">添加</button>
             </div>
           </div>
@@ -146,6 +165,15 @@ function render() {
             ${renderProviderList()}
           </div>
           <nav class="sidebar-nav">
+            <button class="nav-item ${state.view === "health" ? "is-active" : ""}" data-action="show-health">
+              <span class="nav-dot ${healthSummary().attention ? "has-alert" : ""}"></span>
+              账号健康
+              ${healthSummary().attention ? `<span class="nav-badge is-warn">${healthSummary().attention}</span>` : ""}
+            </button>
+            <button class="nav-item ${state.view === "backup" ? "is-active" : ""}" data-action="show-backup">
+              <span class="nav-dot"></span>
+              备份与安全
+            </button>
             <button class="nav-item ${state.view === "update" ? "is-active" : ""}" data-action="show-update">
               <span class="nav-dot ${state.updater.status === "available" ? "has-update" : ""}"></span>
               关于与更新
@@ -158,9 +186,13 @@ function render() {
           ${
             state.view === "update"
               ? renderUpdatePage()
-              : selected
-                ? renderEditor(selected)
-                : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧“添加”创建一个供应商。</p></div></div>`
+              : state.view === "health"
+                ? renderHealthPage()
+                : state.view === "backup"
+                  ? renderBackupPage()
+                  : selected
+                    ? renderEditor(selected)
+                    : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧“添加”创建一个供应商。</p></div></div>`
           }
         </section>
       </section>
@@ -174,6 +206,7 @@ function render() {
       </footer>
 
       ${renderImportPreview()}
+      ${renderPasteDialog()}
     </section>
   `;
 
@@ -382,6 +415,181 @@ function renderUpdatePage() {
           </span>
         </label>
         <p class="hint">上次检查：${escapeHtml(checkedText)}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderHealthPage() {
+  const rows = healthRows();
+  const summary = healthSummary(rows);
+  return `
+    <div class="editor-head">
+      <div class="section-title">
+        <strong>账号健康</strong>
+        <span>集中查看可用性、token 过期、查询失败和额度风险。</span>
+      </div>
+      <button class="btn" data-action="refresh-quota">立即刷新</button>
+    </div>
+    <div class="form health-page">
+      <div class="health-summary">
+        <div><strong>${summary.ok}</strong><span>可用</span></div>
+        <div class="is-warn"><strong>${summary.warn}</strong><span>即将过期/偏高</span></div>
+        <div class="is-danger"><strong>${summary.danger}</strong><span>失败/已过期</span></div>
+        <div><strong>${rows.length}</strong><span>已启用监控</span></div>
+      </div>
+      <div class="health-list">
+        ${rows.map(renderHealthRow).join("") || `<div class="empty"><p class="hint">还没有可检查的账号。</p></div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderHealthRow(row) {
+  return `
+    <div class="health-row is-${row.tone}">
+      <span class="health-dot"></span>
+      <span class="health-main">
+        <strong>${escapeHtml(row.name)}</strong>
+        <small>${escapeHtml(row.detail)}</small>
+      </span>
+      <span class="health-status">${escapeHtml(row.label)}</span>
+      <span class="health-action">${escapeHtml(row.action)}</span>
+    </div>
+  `;
+}
+
+function healthRows() {
+  const snapshots = new Map((state.snapshot.providers || []).map((provider) => [provider.id, provider]));
+  return state.config.providers
+    .filter((provider) => provider.enabled !== false)
+    .map((provider) => healthRow(provider, snapshots.get(provider.id)));
+}
+
+function healthRow(provider, runtime) {
+  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const status = runtime?.status || (expiry?.expired ? "expired" : "ok");
+  const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
+  const failure = runtime?.failure;
+  let tone = "ok";
+  let label = "可用";
+  let action = "无需处理";
+  if (["error", "missing"].includes(status)) {
+    tone = "danger";
+    label = failure?.label || runtime?.statusText || "查询失败";
+    action = failure?.action || "检查配置后重新刷新";
+  } else if (status === "expired" || expiry?.expired) {
+    tone = "danger";
+    label = "token 已过期";
+    action = "重新登录或重新导入账号";
+  } else if (maxUsage >= 90 || status === "danger") {
+    tone = "danger";
+    label = "额度接近上限";
+    action = "等待重置或切换账号";
+  } else if (expiry?.soon) {
+    tone = "warn";
+    label = "token 即将过期";
+    action = `约 ${expiry.relative} 后过期`;
+  } else if (maxUsage >= 75 || status === "warn") {
+    tone = "warn";
+    label = "额度使用偏高";
+    action = "建议关注剩余额度";
+  }
+  const source = provider.importedFrom ? `${provider.importedFrom} 导入` : KIND_LABELS[provider.kind] || provider.kind;
+  const detail = [source, provider.accountEmail, expiry ? `过期：${expiry.absolute}` : null, runtime?.message].filter(Boolean).join(" · ");
+  return {
+    id: provider.id,
+    name: provider.name || provider.id,
+    tone,
+    label,
+    detail,
+    action,
+  };
+}
+
+function healthSummary(rows = healthRows()) {
+  const summary = rows.reduce(
+    (acc, row) => {
+      if (row.tone === "danger") acc.danger += 1;
+      else if (row.tone === "warn") acc.warn += 1;
+      else acc.ok += 1;
+      return acc;
+    },
+    { ok: 0, warn: 0, danger: 0, attention: 0 },
+  );
+  summary.attention = summary.warn + summary.danger;
+  return summary;
+}
+
+function expiryState(value) {
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return null;
+  const diff = time - Date.now();
+  return {
+    expired: diff <= 0,
+    soon: diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000,
+    relative: formatDuration(diff),
+    absolute: new Date(time).toLocaleString("zh-CN"),
+  };
+}
+
+function renderBackupPage() {
+  return `
+    <div class="editor-head">
+      <div class="section-title">
+        <strong>备份与安全</strong>
+        <span>配置文件包含 token/API Key，请只保存到可信位置。</span>
+      </div>
+    </div>
+    <div class="form backup-page">
+      <div class="security-card is-danger">
+        <strong>隐私提醒</strong>
+        <p>导入文件、config.json 和备份文件都可能包含明文 token/API Key。不要分享到聊天、Issue 或公共仓库。</p>
+      </div>
+      <label class="security-toggle">
+        <input type="checkbox" data-field="suppressBackupWarning" ${state.config.privacy?.suppressBackupWarning ? "checked" : ""} />
+        <span>备份/高级 JSON 操作不再提醒我（危险操作仍需确认）</span>
+      </label>
+      <div class="backup-actions">
+        <button class="btn primary" data-action="backup-config">备份 config.json</button>
+        <button class="btn" data-action="restore-config">从备份恢复</button>
+        <button class="btn" data-action="open-json">打开高级 JSON</button>
+      </div>
+      ${renderDensitySection()}
+      <div class="section">
+        <div class="section-title">
+          <strong>最近导入</strong>
+          <span>只显示安全摘要，不显示 token。</span>
+        </div>
+        <div class="history-list">
+          ${(state.config.importHistory || []).slice(0, 8).map(renderHistoryItem).join("") || `<p class="hint">暂无导入记录。</p>`}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderHistoryItem(item) {
+  const time = item.importedAt ? new Date(item.importedAt).toLocaleString("zh-CN") : "未知时间";
+  return `
+    <div class="history-item">
+      <strong>${escapeHtml(item.sourceLabel || "账号 JSON")}</strong>
+      <span>${escapeHtml(time)} · ${escapeHtml(item.format || "accounts")} · 检测 ${Number(item.accountCount || 0)} / 新增 ${Number(item.importedCount || 0)} / 更新 ${Number(item.updatedCount || 0)} / 跳过 ${Number(item.skippedCount || 0)}</span>
+      <small>${escapeHtml((item.identityMethods || []).join("、") || "身份方式未知")}</small>
+    </div>
+  `;
+}
+
+function renderDensitySection() {
+  return `
+    <div class="section density-section">
+      <div class="section-title">
+        <strong>额度面板密度</strong>
+        <span>账号较多时可切换紧凑模式。</span>
+      </div>
+      <div class="segmented">
+        <button class="segment ${state.config.panelDensity !== "compact" ? "is-active" : ""}" data-action="set-density" data-density="comfortable">舒适</button>
+        <button class="segment ${state.config.panelDensity === "compact" ? "is-active" : ""}" data-action="set-density" data-density="compact">紧凑</button>
       </div>
     </div>
   `;
@@ -600,6 +808,28 @@ function renderCustomSelect(field, value, options) {
   `;
 }
 
+function renderPasteDialog() {
+  if (!state.pasteOpen) return "";
+  return `
+    <div class="import-backdrop" data-action="cancel-paste-import">
+      <div class="paste-popover" role="dialog" aria-modal="true" aria-label="粘贴 JSON 导入">
+        <div class="import-head">
+          <div>
+            <strong>粘贴 JSON 导入</strong>
+            <span>支持 sessions.json / sub2api。不会显示或保存预览中的 token 原文。</span>
+          </div>
+          <button class="icon-close" data-action="cancel-paste-import" aria-label="关闭">×</button>
+        </div>
+        <textarea class="paste-json" data-field="importRaw" placeholder="把 JSON 粘贴到这里，然后点击生成预览"></textarea>
+        <div class="import-actions">
+          <button class="btn" data-action="cancel-paste-import">取消</button>
+          <button class="btn primary" data-action="preview-paste-import">生成预览</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderImportPreview() {
   if (!state.importPreview) return "";
   const preview = state.importPreview;
@@ -706,6 +936,8 @@ function bindEvents() {
   });
 
   root.querySelector("[data-action='import-accounts']")?.addEventListener("click", chooseImportAccounts);
+  root.querySelector("[data-action='latest-import']")?.addEventListener("click", chooseLatestImportAccounts);
+  root.querySelector("[data-action='paste-import']")?.addEventListener("click", openPasteImport);
   root.querySelectorAll("[data-action='cancel-import-preview']").forEach((element) => {
     element.addEventListener("click", (event) => {
       if (event.target.closest(".import-popover") && !event.target.closest(".icon-close")) return;
@@ -713,12 +945,37 @@ function bindEvents() {
     });
   });
   root.querySelector("[data-action='confirm-import-preview']")?.addEventListener("click", confirmImportAccounts);
+  root.querySelectorAll("[data-action='cancel-paste-import']").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      if (event.target.closest(".paste-popover") && !event.target.closest(".icon-close")) return;
+      closePasteImport();
+    });
+  });
+  root.querySelector("[data-action='preview-paste-import']")?.addEventListener("click", previewPasteImport);
+  const pasteInput = root.querySelector("[data-field='importRaw']");
+  if (pasteInput) pasteInput.value = state.importRaw;
+  pasteInput?.addEventListener("input", (event) => {
+    state.importRaw = event.target.value;
+  });
 
   root.querySelector("[data-action='delete-provider']")?.addEventListener("click", () => deleteSelectedProvider());
   root.querySelector("[data-action='save']")?.addEventListener("click", save);
   root.querySelector("[data-action='reset']")?.addEventListener("click", load);
   root.querySelector("[data-action='refresh']")?.addEventListener("click", load);
-  root.querySelector("[data-action='open-json']")?.addEventListener("click", () => window.codingPlanBar.openConfigJson());
+  root.querySelectorAll("[data-action='open-json']").forEach((button) => {
+    button.addEventListener("click", openAdvancedJson);
+  });
+  root.querySelector("[data-action='refresh-quota']")?.addEventListener("click", () => window.codingPlanBar.refresh());
+  root.querySelectorAll("[data-action='set-density']").forEach((button) => {
+    button.addEventListener("click", () => setPanelDensity(button.dataset.density));
+  });
+  root.querySelector("[data-action='backup-config']")?.addEventListener("click", backupConfig);
+  root.querySelector("[data-action='restore-config']")?.addEventListener("click", restoreConfig);
+  root.querySelector("[data-field='suppressBackupWarning']")?.addEventListener("change", (event) => {
+    state.config.privacy = { ...(state.config.privacy || {}), suppressBackupWarning: event.target.checked, suppressAdvancedJsonWarning: event.target.checked };
+    markDirty();
+    render();
+  });
 
   root.querySelectorAll("[data-action='toggle-dropdown']").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -740,6 +997,7 @@ function bindEvents() {
   });
 
   root.querySelectorAll("input[data-field]").forEach((field) => {
+    if (["suppressBackupWarning"].includes(field.dataset.field)) return;
     if (field.type === "checkbox") {
       field.addEventListener("change", () => {
         pulseToggle(field);
@@ -878,6 +1136,14 @@ function reorderProviders(sourceId, targetId, position, restoreFocus = false) {
 /* Wire up the auto-update page. Kept separate so the provider editor's
    event binding stays focused and the update view is easy to reason about. */
 function bindUpdateEvents() {
+  root.querySelector("[data-action='show-health']")?.addEventListener("click", () => {
+    state.view = "health";
+    render();
+  });
+  root.querySelector("[data-action='show-backup']")?.addEventListener("click", () => {
+    state.view = "backup";
+    render();
+  });
   root.querySelector("[data-action='show-update']")?.addEventListener("click", () => {
     state.view = "update";
     render();
@@ -1013,16 +1279,79 @@ async function chooseImportAccounts() {
   }
 }
 
+async function chooseLatestImportAccounts() {
+  try {
+    state.status = "正在查找 Downloads 中最新的 sub2api JSON...";
+    state.statusIsError = false;
+    state.statusTone = "loading";
+    updateStatusText();
+    const preview = await window.codingPlanBar.latestImportAccounts();
+    if (!preview || preview.canceled) {
+      state.status = preview?.message || "没有找到可导入文件";
+      state.statusIsError = true;
+      state.statusTone = "error";
+      updateStatusText();
+      return;
+    }
+    state.importPreview = preview;
+    state.importPreviewClosing = false;
+    state.status = preview.message || "已生成导入预览，请确认";
+    state.statusIsError = false;
+    state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
+    render();
+  } catch (error) {
+    state.status = error.message || String(error);
+    state.statusIsError = true;
+    state.statusTone = "error";
+    updateStatusText();
+  }
+}
+
+function openPasteImport() {
+  state.pasteOpen = true;
+  state.importRaw = "";
+  dismissDropdown();
+  render();
+}
+
+function closePasteImport() {
+  state.pasteOpen = false;
+  state.importRaw = "";
+  render();
+}
+
+async function previewPasteImport() {
+  try {
+    if (!state.importRaw.trim()) throw new Error("请先粘贴 JSON 内容");
+    const preview = await window.codingPlanBar.previewImport(state.importRaw);
+    state.pasteOpen = false;
+    state.importPreview = { ...preview, raw: state.importRaw, sourceType: "paste" };
+    state.importPreviewClosing = false;
+    state.status = preview.message || "已生成粘贴导入预览";
+    state.statusIsError = false;
+    state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
+    render();
+  } catch (error) {
+    state.status = error.message || String(error);
+    state.statusIsError = true;
+    state.statusTone = "error";
+    updateStatusText();
+  }
+}
+
 async function confirmImportAccounts() {
-  if (!state.importPreview?.filePath) return;
+  if (!state.importPreview?.filePath && !state.importPreview?.raw) return;
   try {
     state.status = "正在导入账号...";
     state.statusIsError = false;
     state.statusTone = "loading";
     updateStatusText();
     const firstPositions = captureListPositions();
-    const result = await window.codingPlanBar.importAccounts(state.importPreview.filePath);
+    const result = state.importPreview.raw
+      ? await window.codingPlanBar.importAccountsRaw(state.importPreview.raw)
+      : await window.codingPlanBar.importAccounts(state.importPreview.filePath);
     state.importPreview = null;
+    state.importRaw = "";
     state.importPreviewClosing = false;
     state.config = sanitizeConfig(cloneConfig(result.config));
     state.configPath = result.configPath || state.configPath;
@@ -1034,6 +1363,72 @@ async function confirmImportAccounts() {
     state.statusTone = (result.importedCount || result.updatedCount) ? "success" : "dirty";
     render();
     flipList(firstPositions);
+  } catch (error) {
+    state.status = error.message || String(error);
+    state.statusIsError = true;
+    state.statusTone = "error";
+    updateStatusText();
+  }
+}
+
+function setPanelDensity(value) {
+  state.config.panelDensity = value === "compact" ? "compact" : "comfortable";
+  markDirty();
+  render();
+}
+
+function openAdvancedJson() {
+  if (!state.config.privacy?.suppressAdvancedJsonWarning) {
+    const ok = window.confirm("高级 JSON 里可能包含明文 token/API Key。请不要复制到聊天、Issue 或公共仓库。继续打开吗？");
+    if (!ok) return;
+  }
+  window.codingPlanBar.openConfigJson();
+}
+
+async function backupConfig() {
+  try {
+    if (!state.config.privacy?.suppressBackupWarning) {
+      const ok = window.confirm("备份文件会包含明文 token/API Key，只应保存到可信位置。继续备份吗？");
+      if (!ok) return;
+    }
+    const result = await window.codingPlanBar.backupConfig();
+    state.status = result?.message || "配置已备份";
+    state.statusIsError = false;
+    state.statusTone = "success";
+    updateStatusText();
+  } catch (error) {
+    state.status = error.message || String(error);
+    state.statusIsError = true;
+    state.statusTone = "error";
+    updateStatusText();
+  }
+}
+
+async function restoreConfig() {
+  try {
+    if (!state.config.privacy?.suppressBackupWarning) {
+      const ok = window.confirm("恢复备份会覆盖当前配置，备份内可能包含明文 token/API Key。继续选择备份文件吗？");
+      if (!ok) return;
+    }
+    const result = await window.codingPlanBar.restoreConfig();
+    if (!result || result.canceled) {
+      state.status = "已取消恢复";
+      state.statusIsError = false;
+      state.statusTone = "success";
+      updateStatusText();
+      return;
+    }
+    const ok = window.confirm(`将恢复 ${result.providerCount || 0} 个供应商，当前配置会被覆盖。确认恢复吗？`);
+    if (!ok) return;
+    const applied = await window.codingPlanBar.confirmRestoreConfig(result.restoreToken);
+    state.config = sanitizeConfig(cloneConfig(applied.config));
+    state.configPath = applied.configPath || state.configPath;
+    state.selectedId = state.config.providers[0]?.id || null;
+    state.status = applied.message || "配置已恢复";
+    state.statusIsError = false;
+    state.statusTone = "success";
+    state.dirty = false;
+    render();
   } catch (error) {
     state.status = error.message || String(error);
     state.statusIsError = true;
@@ -1292,9 +1687,16 @@ function cloneConfig(config) {
   return {
     refreshIntervalSeconds: Number(config.refreshIntervalSeconds || 300),
     showOnHover: config.showOnHover !== false,
+    panelDensity: config.panelDensity === "compact" ? "compact" : "comfortable",
+    privacy: {
+      suppressAdvancedJsonWarning: Boolean((config.privacy || {}).suppressAdvancedJsonWarning),
+      suppressBackupWarning: Boolean((config.privacy || {}).suppressBackupWarning),
+      suppressImportWarning: Boolean((config.privacy || {}).suppressImportWarning),
+    },
     autoUpdate: {
       enabled: (config.autoUpdate || {}).enabled !== false,
     },
+    importHistory: Array.isArray(config.importHistory) ? config.importHistory.map(clone) : [],
     providers: Array.isArray(config.providers) ? config.providers.map(clone) : [],
   };
 }
@@ -1319,6 +1721,14 @@ function textToApiKeyEnv(value) {
     .filter(Boolean);
   if (parts.length === 0) return undefined;
   return parts.length === 1 ? parts[0] : parts;
+}
+
+function formatDuration(ms) {
+  const minutes = Math.max(0, Math.floor(Number(ms || 0) / 60000));
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分钟`;
+  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
 }
 
 function escapeHtml(value) {

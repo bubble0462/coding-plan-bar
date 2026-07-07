@@ -36,11 +36,26 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   openConfigJson() {
     return ipcRenderer.invoke("config:open-json");
   },
+  backupConfig() {
+    return ipcRenderer.invoke("config:backup");
+  },
+  restoreConfig() {
+    return ipcRenderer.invoke("config:restore");
+  },
+  confirmRestoreConfig(token) {
+    return ipcRenderer.invoke("config:confirm-restore", token);
+  },
   chooseImportAccounts() {
     return ipcRenderer.invoke("config:choose-import-accounts");
   },
+  latestImportAccounts() {
+    return ipcRenderer.invoke("config:latest-import-accounts");
+  },
   importAccounts(filePath) {
     return ipcRenderer.invoke("config:import-accounts", filePath);
+  },
+  importAccountsRaw(raw) {
+    return ipcRenderer.invoke("config:import-accounts-raw", raw);
   },
   previewImport(raw) {
     return ipcRenderer.invoke("config:preview-import", raw);
