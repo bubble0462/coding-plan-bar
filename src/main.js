@@ -12,7 +12,7 @@ const {
 const fs = require("fs");
 const path = require("path");
 const { readConfigFile, writeConfigFile, providerTemplates } = require("./config-store");
-const { importAccountsIntoConfig } = require("./account-importer");
+const { importAccountsIntoConfig, previewAccountsImport } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { loadConfig, refreshProviders } = require("./providers");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
@@ -335,7 +335,7 @@ function openConfigJson() {
   if (configPath) shell.openPath(configPath);
 }
 
-async function importAccountsFromFile() {
+async function chooseImportAccountsFile() {
   const result = await dialog.showOpenDialog(settingsWindow || undefined, {
     title: "导入账号 JSON",
     properties: ["openFile"],
@@ -345,16 +345,19 @@ async function importAccountsFromFile() {
     ],
   });
   if (result.canceled || !result.filePaths.length) return { canceled: true };
-
   const filePath = result.filePaths[0];
-  const text = fs.readFileSync(filePath, "utf8");
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`JSON 解析失败：${error.message}`);
-  }
+  const parsed = readImportJson(filePath);
+  const current = readConfigFile(configPath);
+  return {
+    ...previewAccountsImport(current, parsed, filePath),
+    filePath,
+    configPath,
+  };
+}
 
+async function importAccountsFromFile(_event, filePath) {
+  if (!filePath) throw new Error("缺少导入文件路径");
+  const parsed = readImportJson(filePath);
   const current = readConfigFile(configPath);
   const imported = importAccountsIntoConfig(current, parsed, filePath);
   if (imported.importedCount > 0 || imported.updatedCount > 0) {
@@ -379,6 +382,15 @@ async function importAccountsFromFile() {
   };
 }
 
+function readImportJson(filePath) {
+  const text = fs.readFileSync(filePath, "utf8");
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`JSON 解析失败：${error.message}`);
+  }
+}
+
 async function previewImportedAccounts(_event, raw) {
   let parsed;
   try {
@@ -387,22 +399,7 @@ async function previewImportedAccounts(_event, raw) {
     throw new Error(`JSON 解析失败：${error.message}`);
   }
   const current = readConfigFile(configPath);
-  const imported = importAccountsIntoConfig(current, parsed, "pasted-json");
-  return {
-    importedCount: imported.importedCount,
-    updatedCount: imported.updatedCount,
-    skippedCount: imported.skippedCount,
-    affectedIds: imported.affectedIds,
-    format: imported.format,
-    message: imported.message,
-    providers: imported.config.providers.map((provider) => ({
-      id: provider.id,
-      name: provider.name,
-      accountEmail: provider.accountEmail,
-      planType: provider.planType,
-      importedFrom: provider.importedFrom,
-    })),
-  };
+  return previewAccountsImport(current, parsed, "pasted-json");
 }
 
 // ===== Updater =====
@@ -627,6 +624,7 @@ async function startApp() {
   ipcMain.handle("config:get", getConfigForSettings);
   ipcMain.handle("config:save", saveConfigFromSettings);
   ipcMain.handle("config:open-json", openConfigJson);
+  ipcMain.handle("config:choose-import-accounts", chooseImportAccountsFile);
   ipcMain.handle("config:import-accounts", importAccountsFromFile);
   ipcMain.handle("config:preview-import", previewImportedAccounts);
   ipcMain.handle("quota:hide", hidePopup);

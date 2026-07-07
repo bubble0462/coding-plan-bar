@@ -35,9 +35,12 @@ let state = {
   templateOrigin: null,
   openDropdown: null,
   closingDropdown: null,
+  importPreview: null,
+  importPreviewClosing: false,
 };
 
 let templatesCloseTimer = null;
+let importPreviewCloseTimer = null;
 let dropdownCloseTimer = null;
 let hasRenderedSettingsShell = false;
 let providerDrag = { sourceId: null, targetId: null, position: null };
@@ -47,6 +50,11 @@ window.addEventListener("click", (event) => {
   // Re-rendering on every click destroys <select> dropdowns and input focus.
   if (state.openDropdown && !event.target.closest(".custom-select")) {
     closeDropdown();
+    return;
+  }
+  if (state.importPreview && !state.importPreviewClosing) {
+    if (event.target.closest(".import-popover") || event.target.closest("[data-action='import-accounts']")) return;
+    closeImportPreview();
     return;
   }
   if (!state.showTemplates || state.templatesClosing) return;
@@ -135,7 +143,7 @@ function render() {
           </div>
           <div class="provider-list has-bar ${state.view === "providers" ? "" : "is-dimmed"}">
             <div class="selection-bar" aria-hidden="true"></div>
-            ${state.config.providers.length ? state.config.providers.map(renderProviderItem).join("") : renderEmptyList()}
+            ${renderProviderList()}
           </div>
           <nav class="sidebar-nav">
             <button class="nav-item ${state.view === "update" ? "is-active" : ""}" data-action="show-update">
@@ -165,6 +173,7 @@ function render() {
         </div>
       </footer>
 
+      ${renderImportPreview()}
     </section>
   `;
 
@@ -208,12 +217,40 @@ function flashFormSwap() {
   window.setTimeout(() => editor.classList.remove("is-swapping"), 220);
 }
 
+function renderProviderList() {
+  if (!state.config.providers.length) return renderEmptyList();
+  return providerGroups()
+    .map(
+      (group) => `
+        <div class="provider-group">
+          <div class="provider-group-title">
+            <span>${escapeHtml(group.label)}</span>
+            <em>${group.providers.length}</em>
+          </div>
+          ${group.providers.map(renderProviderItem).join("")}
+        </div>
+      `,
+    )
+    .join("");
+}
+
+function providerGroups() {
+  const groups = [
+    { key: "accounts", label: "官方账号", providers: [] },
+    { key: "balance", label: "余额接口", providers: [] },
+    { key: "other", label: "其他供应商", providers: [] },
+  ];
+  for (const provider of state.config.providers) {
+    if (provider.kind === "official-subscription") groups[0].providers.push(provider);
+    else if (provider.kind === "balance" || provider.kind === "coding-plan") groups[1].providers.push(provider);
+    else groups[2].providers.push(provider);
+  }
+  return groups.filter((group) => group.providers.length);
+}
+
 function renderProviderItem(provider) {
   const selected = provider.id === state.selectedId ? "is-selected" : "";
-  const detail =
-    provider.kind === "official-subscription"
-      ? KIND_LABELS[provider.kind]
-      : `${KIND_LABELS[provider.kind] || provider.kind}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`;
+  const detail = providerDetail(provider);
   return `
     <div class="provider-item ${selected}" data-action="select-provider" data-id="${escapeAttr(provider.id)}" role="button" tabindex="0">
       <button class="drag-handle" type="button" draggable="true" data-action="drag-provider" data-id="${escapeAttr(provider.id)}" title="拖动调整顺序" aria-label="拖动 ${escapeAttr(provider.name || provider.id)} 调整顺序">
@@ -232,6 +269,16 @@ function renderProviderItem(provider) {
   `;
 }
 
+function providerDetail(provider) {
+  if (provider.kind === "official-subscription") {
+    const parts = [KIND_LABELS[provider.kind]];
+    if (provider.importedFrom) parts.push(provider.importedFrom);
+    if (provider.planType) parts.push(provider.planType);
+    return parts.join(" · ");
+  }
+  return `${KIND_LABELS[provider.kind] || provider.kind}${provider.baseUrl ? ` · ${provider.baseUrl}` : ""}`;
+}
+
 function renderEmptyList() {
   return `<div class="empty"><p class="hint">还没有供应商。</p></div>`;
 }
@@ -244,6 +291,8 @@ function renderUpdatePage() {
   const checkedText = u.checkedAt ? new Date(u.checkedAt).toLocaleString("zh-CN") : "尚未检查";
   const publishedText = result.publishedAt ? new Date(result.publishedAt).toLocaleString("zh-CN") : "";
   const autoEnabled = state.config.autoUpdate ? state.config.autoUpdate.enabled !== false : true;
+  const asset = result.asset || null;
+  const releaseNotes = releaseNotesPreview(result.releaseNotes);
 
   // Derive the primary action button + status line from the updater state machine.
   let primary = "";
@@ -301,6 +350,21 @@ function renderUpdatePage() {
 
       <p class="update-status ${u.status === "error" ? "is-error" : ""}">${statusLine}</p>
 
+      ${asset ? `
+        <div class="update-asset-card">
+          <span>安装包</span>
+          <strong>${escapeHtml(asset.name || "Windows x64 安装包")}</strong>
+          <em>${asset.size ? formatBytes(asset.size) : "大小未知"}</em>
+        </div>
+      ` : ""}
+
+      ${releaseNotes ? `
+        <div class="update-notes-card">
+          <strong>更新摘要</strong>
+          <p>${escapeHtml(releaseNotes)}</p>
+        </div>
+      ` : ""}
+
       ${u.status === "available" && result.releaseUrl ? `<a class="update-release-link" href="#" data-action="open-release">查看 GitHub 发布详情</a>` : ""}
 
       <div class="update-actions">
@@ -340,6 +404,17 @@ function maskSecret(value) {
 function displayVersion(value) {
   if (!value) return "—";
   return String(value).trim().replace(/^v(?=\d)/i, "");
+}
+
+function releaseNotesPreview(value) {
+  const text = String(value || "")
+    .replace(/[#>*_`-]/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(" · ");
+  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
 }
 
 function formatBytes(bytes) {
@@ -525,6 +600,73 @@ function renderCustomSelect(field, value, options) {
   `;
 }
 
+function renderImportPreview() {
+  if (!state.importPreview) return "";
+  const preview = state.importPreview;
+  const closing = state.importPreviewClosing ? "is-leaving" : "";
+  return `
+    <div class="import-backdrop ${closing}" data-action="cancel-import-preview">
+      <div class="import-popover ${closing}" role="dialog" aria-modal="true" aria-label="导入账号预览">
+        <div class="import-head">
+          <div>
+            <strong>导入账号预览</strong>
+            <span>${escapeHtml(preview.fileName || preview.filePath || "账号 JSON")}</span>
+          </div>
+          <button class="icon-close" data-action="cancel-import-preview" aria-label="关闭">×</button>
+        </div>
+        <div class="import-summary">
+          <div><strong>${Number(preview.accountCount || 0)}</strong><span>检测账号</span></div>
+          <div class="is-add"><strong>${Number(preview.importedCount || 0)}</strong><span>新增</span></div>
+          <div class="is-update"><strong>${Number(preview.updatedCount || 0)}</strong><span>更新</span></div>
+          <div class="is-skip"><strong>${Number(preview.skippedCount || 0)}</strong><span>跳过</span></div>
+        </div>
+        ${renderImportDuplicateNotes(preview)}
+        <div class="import-list">
+          ${(preview.items || []).map(renderImportPreviewItem).join("") || `<div class="empty"><p class="hint">没有可导入账号。</p></div>`}
+        </div>
+        <div class="import-actions">
+          <button class="btn" data-action="cancel-import-preview">取消</button>
+          <button class="btn primary" data-action="confirm-import-preview" ${(preview.importedCount || preview.updatedCount) ? "" : "disabled"}>确认导入</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderImportDuplicateNotes(preview) {
+  const groups = preview.duplicateGroups || [];
+  if (!groups.length) return "";
+  return `
+    <div class="import-notes">
+      ${groups
+        .map(
+          (group) => `
+            <div class="import-note">
+              <strong>同主邮箱多账号</strong>
+              <span>${escapeHtml(group.message || "已按 accountId 分开保留。")}（${Number(group.count || 0)} 个）</span>
+            </div>
+          `,
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function renderImportPreviewItem(item) {
+  const actionClass = item.action === "add" ? "is-add" : item.action === "update" ? "is-update" : "is-skip";
+  const expires = item.expiresAt ? new Date(item.expiresAt).toLocaleString("zh-CN") : "未知";
+  return `
+    <div class="import-row ${actionClass}">
+      <span class="import-action">${escapeHtml(item.actionLabel || item.action || "导入")}</span>
+      <span class="import-account">
+        <strong>${escapeHtml(item.name || item.email || "OpenAI OAuth")}</strong>
+        <small>${escapeHtml([item.identityLabel, item.planType, `过期：${expires}`].filter(Boolean).join(" · "))}</small>
+      </span>
+      <span class="import-reason">${escapeHtml(item.reason || "")}</span>
+    </div>
+  `;
+}
+
 function bindEvents() {
   root.querySelectorAll("[data-action='select-provider']").forEach((row) => {
     row.addEventListener("click", (event) => {
@@ -563,7 +705,14 @@ function bindEvents() {
     openTemplates(event.currentTarget);
   });
 
-  root.querySelector("[data-action='import-accounts']")?.addEventListener("click", importAccounts);
+  root.querySelector("[data-action='import-accounts']")?.addEventListener("click", chooseImportAccounts);
+  root.querySelectorAll("[data-action='cancel-import-preview']").forEach((element) => {
+    element.addEventListener("click", (event) => {
+      if (event.target.closest(".import-popover") && !event.target.closest(".icon-close")) return;
+      closeImportPreview();
+    });
+  });
+  root.querySelector("[data-action='confirm-import-preview']")?.addEventListener("click", confirmImportAccounts);
 
   root.querySelector("[data-action='delete-provider']")?.addEventListener("click", () => deleteSelectedProvider());
   root.querySelector("[data-action='save']")?.addEventListener("click", save);
@@ -836,21 +985,45 @@ function deleteSelectedProvider() {
   }
 }
 
-async function importAccounts() {
+async function chooseImportAccounts() {
   try {
     state.status = "请选择 sessions.json 或 sub2api 导出的 JSON 文件...";
     state.statusIsError = false;
     state.statusTone = "loading";
     updateStatusText();
-    const firstPositions = captureListPositions();
-    const result = await window.codingPlanBar.importAccounts();
-    if (!result || result.canceled) {
+    const preview = await window.codingPlanBar.chooseImportAccounts();
+    if (!preview || preview.canceled) {
       state.status = "已取消导入";
       state.statusIsError = false;
       state.statusTone = "success";
       updateStatusText();
       return;
     }
+    state.importPreview = preview;
+    state.importPreviewClosing = false;
+    state.status = preview.message || "已生成导入预览，请确认";
+    state.statusIsError = false;
+    state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
+    render();
+  } catch (error) {
+    state.status = error.message || String(error);
+    state.statusIsError = true;
+    state.statusTone = "error";
+    updateStatusText();
+  }
+}
+
+async function confirmImportAccounts() {
+  if (!state.importPreview?.filePath) return;
+  try {
+    state.status = "正在导入账号...";
+    state.statusIsError = false;
+    state.statusTone = "loading";
+    updateStatusText();
+    const firstPositions = captureListPositions();
+    const result = await window.codingPlanBar.importAccounts(state.importPreview.filePath);
+    state.importPreview = null;
+    state.importPreviewClosing = false;
     state.config = sanitizeConfig(cloneConfig(result.config));
     state.configPath = result.configPath || state.configPath;
     state.selectedId = result.selectedId || result.affectedIds?.[0] || state.selectedId || state.config.providers[0]?.id || null;
@@ -867,6 +1040,18 @@ async function importAccounts() {
     state.statusTone = "error";
     updateStatusText();
   }
+}
+
+function closeImportPreview() {
+  if (!state.importPreview) return;
+  window.clearTimeout(importPreviewCloseTimer);
+  state.importPreviewClosing = true;
+  render();
+  importPreviewCloseTimer = window.setTimeout(() => {
+    state.importPreview = null;
+    state.importPreviewClosing = false;
+    render();
+  }, 180);
 }
 
 /* Record each list row's position keyed by provider id. */
