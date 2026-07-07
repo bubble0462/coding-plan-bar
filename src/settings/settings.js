@@ -310,8 +310,8 @@ function providerGroups() {
   ];
   for (const provider of filteredProviders()) {
     if (provider.kind === "official-subscription" && provider.importedFrom === "sub2api") groups[1].providers.push(provider);
-    else if (provider.kind === "official-subscription") groups[0].providers.push(provider);
-    else if (provider.kind === "balance" || provider.kind === "coding-plan") groups[2].providers.push(provider);
+    else if (provider.kind === "official-subscription" || provider.kind === "coding-plan") groups[0].providers.push(provider);
+    else if (provider.kind === "balance") groups[2].providers.push(provider);
     else groups[3].providers.push(provider);
   }
   return groups.filter((group) => group.providers.length);
@@ -332,9 +332,9 @@ function syncSelectedProviderWithFilters() {
 function matchesAccountFilter(provider) {
   const filter = state.accountFilter || "all";
   if (filter === "all") return true;
-  if (filter === "accounts") return provider.kind === "official-subscription" && provider.importedFrom !== "sub2api";
+  if (filter === "accounts") return (provider.kind === "official-subscription" && provider.importedFrom !== "sub2api") || provider.kind === "coding-plan";
   if (filter === "sub2api") return provider.kind === "official-subscription" && provider.importedFrom === "sub2api";
-  if (filter === "balance") return provider.kind === "balance" || provider.kind === "coding-plan";
+  if (filter === "balance") return provider.kind === "balance";
   if (filter === "disabled") return provider.enabled === false;
   if (filter === "attention") return providerNeedsAttention(provider);
   return true;
@@ -366,8 +366,8 @@ function providerNeedsAttention(provider) {
   const runtime = runtimeProvider(provider.id);
   const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
   const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
+  if (provider.enabled === false) return false;
   return (
-    provider.enabled === false ||
     ["error", "expired", "missing", "danger"].includes(runtime?.status) ||
     Boolean(runtime?.failure) ||
     Boolean(expiry?.expired || expiry?.soon) ||
@@ -577,6 +577,7 @@ function renderHealthRow(row) {
 function healthRows() {
   const snapshots = new Map((state.snapshot.providers || []).map((provider) => [provider.id, provider]));
   return state.config.providers
+    .filter((provider) => provider.enabled !== false)
     .map((provider) => healthRow(provider, snapshots.get(provider.id)))
     .filter((row) => row.tone !== "ok");
 }
