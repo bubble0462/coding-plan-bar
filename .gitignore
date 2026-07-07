@@ -6,3 +6,6 @@ release/
 *.log
 config.local.json
 .env
+
+# Local AI planning artifacts
+.ai/
