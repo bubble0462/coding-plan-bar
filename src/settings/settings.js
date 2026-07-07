@@ -84,7 +84,13 @@ load();
 let lastUpdaterStatus = "idle";
 window.codingPlanBar.onSnapshot((next) => {
   state.snapshot = next || state.snapshot;
-  if (state.view === "health") render();
+  if (state.view === "health") {
+    render();
+    return;
+  }
+  if (state.view === "providers" && root.childElementCount) {
+    refreshProviderRuntimeState();
+  }
 });
 
 window.codingPlanBar.onUpdaterState((next) => {
@@ -1285,9 +1291,6 @@ function bindProviderReorder() {
     });
   });
 
-  list.addEventListener("dragover", (event) => {
-    if (providerDrag.sourceId) event.preventDefault();
-  });
 }
 
 function showProviderDropTarget(targetId, position) {
@@ -1441,11 +1444,18 @@ function updateProvider(id, patch) {
   if (!provider) return;
   Object.assign(provider, patch);
   markDirty();
-  refreshProviderListItem(id);
-  refreshSelectedEnabledControl(id);
-  refreshSelectedProviderPreview(id);
+  if (state.view === "providers" && !matchesAccountFilter(provider)) {
+    syncSelectedProviderWithFilters();
+    refreshProviderListOnly();
+    replaceEditorForSelectedProvider();
+  } else {
+    refreshProviderListItem(id);
+    refreshSelectedEnabledControl(id);
+    refreshSelectedProviderPreview(id);
+    refreshSelectedAccountDetail(id);
+    positionSelectionBar();
+  }
   updateStatusText();
-  positionSelectionBar();
 }
 
 function selectProviderFromList(id) {
@@ -1466,6 +1476,17 @@ function selectProviderFromList(id) {
   replaceEditorForSelectedProvider();
 }
 
+function refreshProviderRuntimeState() {
+  const beforeSelected = state.selectedId;
+  syncSelectedProviderWithFilters();
+  refreshProviderListOnly();
+  if (beforeSelected !== state.selectedId) {
+    replaceEditorForSelectedProvider();
+  } else if (state.selectedId) {
+    refreshSelectedAccountDetail(state.selectedId);
+  }
+}
+
 function refreshProviderListOnly() {
   const list = root.querySelector(".provider-list");
   if (!list) return;
@@ -1477,6 +1498,13 @@ function refreshProviderListOnly() {
 }
 
 function bindProviderListEvents() {
+  const list = root.querySelector(".provider-list");
+  if (list && !list.dataset.reorderBound) {
+    list.dataset.reorderBound = "true";
+    list.addEventListener("dragover", (event) => {
+      if (providerDrag.sourceId) event.preventDefault();
+    });
+  }
   root.querySelectorAll("[data-action='select-provider']").forEach((row) => {
     row.addEventListener("click", (event) => {
       if (event.target.closest(".switch, .drag-handle")) return;
@@ -1502,9 +1530,18 @@ function refreshProviderListItem(id) {
   const provider = state.config.providers.find((item) => item.id === id);
   const row = root.querySelector(`.provider-item[data-id="${cssEscape(id)}"]`);
   if (!provider || !row) return;
+  const badge = providerBadge(provider);
   row.classList.toggle("is-selected", provider.id === state.selectedId);
+  row.classList.toggle("is-attention", providerNeedsAttention(provider));
   const dot = row.querySelector(".dot");
-  dot?.classList.toggle("is-off", provider.enabled === false);
+  if (dot) {
+    dot.className = `dot ${provider.enabled === false ? "is-off" : badge.tone === "danger" ? "is-danger" : badge.tone === "warn" ? "is-warn" : ""}`;
+  }
+  const badgeNode = row.querySelector(".provider-badge");
+  if (badgeNode) {
+    badgeNode.className = `provider-badge is-${badge.tone}`;
+    badgeNode.textContent = badge.label;
+  }
   const input = row.querySelector("[data-action='toggle-enabled']");
   if (input) input.checked = provider.enabled !== false;
 }
@@ -1521,6 +1558,21 @@ function refreshSelectedProviderPreview(id) {
   const provider = selectedProvider();
   const preview = root.querySelector(".editor .json-preview");
   if (provider && preview) preview.textContent = JSON.stringify(safeProviderPreview(provider), null, 2);
+}
+
+function refreshSelectedAccountDetail(id) {
+  if (state.selectedId !== id || state.view !== "providers") return;
+  const provider = selectedProvider();
+  const card = root.querySelector(".editor .account-detail-card");
+  if (provider && card) {
+    card.outerHTML = renderAccountDetailCard(provider);
+  }
+  const badge = provider ? providerBadge(provider) : null;
+  const headBadge = root.querySelector(".editor-head .provider-badge");
+  if (badge && headBadge) {
+    headBadge.className = `provider-badge is-${badge.tone}`;
+    headBadge.textContent = badge.label;
+  }
 }
 
 function updateProviderSelection(id) {
