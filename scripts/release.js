@@ -11,13 +11,20 @@ const tag = version.startsWith("v") ? version : `v${version}`;
 const plain = tag.slice(1);
 const asset = path.join(root, "release", `Coding Plan Bar-Setup-${plain}-x64.exe`);
 
+function shellQuote(value) {
+  const text = String(value);
+  if (!/[\s"'()&|<>^]/.test(text)) return text;
+  return `"${text.replace(/"/g, '\\"')}"`;
+}
+
 function run(command, args, options = {}) {
-  console.log(`> ${command} ${args.join(" ")}`);
-  return execFileSync(command, args, {
+  const line = [command, ...args].map(shellQuote).join(" ");
+  console.log(`> ${line}`);
+  return execFileSync(line, {
     cwd: root,
     stdio: options.capture ? "pipe" : "inherit",
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: true,
   });
 }
 
