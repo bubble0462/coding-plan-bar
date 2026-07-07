@@ -901,19 +901,13 @@ function bindEvents() {
   root.querySelectorAll("[data-action='select-provider']").forEach((row) => {
     row.addEventListener("click", (event) => {
       if (event.target.closest(".switch, .drag-handle")) return;
-      state.selectedId = row.dataset.id;
-      state.view = "providers";
-      dismissTemplates();
-      render();
+      selectProviderFromList(row.dataset.id);
     });
     row.addEventListener("keydown", (event) => {
       if (event.target.closest(".drag-handle")) return;
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
-      state.selectedId = row.dataset.id;
-      state.view = "providers";
-      dismissTemplates();
-      render();
+      selectProviderFromList(row.dataset.id);
     });
   });
 
@@ -958,7 +952,7 @@ function bindEvents() {
     state.importRaw = event.target.value;
   });
 
-  root.querySelector("[data-action='delete-provider']")?.addEventListener("click", () => deleteSelectedProvider());
+  bindProviderEditorEvents(root);
   root.querySelector("[data-action='save']")?.addEventListener("click", save);
   root.querySelector("[data-action='reset']")?.addEventListener("click", load);
   root.querySelector("[data-action='refresh']")?.addEventListener("click", load);
@@ -977,7 +971,13 @@ function bindEvents() {
     render();
   });
 
-  root.querySelectorAll("[data-action='toggle-dropdown']").forEach((button) => {
+  bindUpdateEvents();
+}
+
+function bindProviderEditorEvents(scope = root) {
+  scope.querySelector("[data-action='delete-provider']")?.addEventListener("click", () => deleteSelectedProvider());
+
+  scope.querySelectorAll("[data-action='toggle-dropdown']").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       if (state.openDropdown === button.dataset.field) {
@@ -988,7 +988,7 @@ function bindEvents() {
     });
   });
 
-  root.querySelectorAll("[data-action='select-option']").forEach((button) => {
+  scope.querySelectorAll("[data-action='select-option']").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       updateSelectedField(button.dataset.field, button.dataset.value, false);
@@ -996,11 +996,15 @@ function bindEvents() {
     });
   });
 
-  root.querySelectorAll("input[data-field]").forEach((field) => {
+  scope.querySelectorAll("input[data-field]").forEach((field) => {
     if (["suppressBackupWarning"].includes(field.dataset.field)) return;
     if (field.type === "checkbox") {
       field.addEventListener("change", () => {
         pulseToggle(field);
+        if (field.dataset.field === "enabled") {
+          updateProvider(state.selectedId, { enabled: field.checked });
+          return;
+        }
         updateSelectedFromField(field, true);
       });
       return;
@@ -1008,8 +1012,6 @@ function bindEvents() {
     field.addEventListener("input", () => updateSelectedFromField(field, false));
     field.addEventListener("change", () => updateSelectedFromField(field, true));
   });
-
-  bindUpdateEvents();
 }
 
 function bindProviderReorder() {
@@ -1203,18 +1205,89 @@ function updateSelectedField(field, rawValue, shouldRender) {
   if (field === "id") state.selectedId = value || oldId;
   markDirty();
   if (field === "kind" || field === "tool") state.openDropdown = field;
-  if (shouldRender) render();
-  else updateStatusText();
+  if (shouldRender) {
+    const scrollTop = captureProviderListScroll();
+    render();
+    restoreProviderListScroll(scrollTop);
+  } else {
+    updateStatusText();
+    refreshProviderListItem(state.selectedId || oldId);
+    if (field === "id" && state.selectedId !== oldId) updateProviderSelection(state.selectedId);
+  }
 }
 
 function updateProvider(id, patch) {
   const provider = state.config.providers.find((item) => item.id === id);
   if (!provider) return;
-  const scrollTop = captureProviderListScroll();
   Object.assign(provider, patch);
   markDirty();
-  render();
-  restoreProviderListScroll(scrollTop);
+  refreshProviderListItem(id);
+  refreshSelectedEnabledControl(id);
+  refreshSelectedProviderPreview(id);
+  updateStatusText();
+  positionSelectionBar();
+}
+
+function selectProviderFromList(id) {
+  if (!id) return;
+  const viewChanged = state.view !== "providers";
+  const selectedChanged = state.selectedId !== id;
+  state.selectedId = id;
+  state.view = "providers";
+  dismissTemplates();
+  if (viewChanged) {
+    const scrollTop = captureProviderListScroll();
+    render();
+    restoreProviderListScroll(scrollTop);
+    return;
+  }
+  if (!selectedChanged) return;
+  updateProviderSelection(id);
+  replaceEditorForSelectedProvider();
+}
+
+function refreshProviderListItem(id) {
+  const provider = state.config.providers.find((item) => item.id === id);
+  const row = root.querySelector(`.provider-item[data-id="${cssEscape(id)}"]`);
+  if (!provider || !row) return;
+  row.classList.toggle("is-selected", provider.id === state.selectedId);
+  const dot = row.querySelector(".dot");
+  dot?.classList.toggle("is-off", provider.enabled === false);
+  const input = row.querySelector("[data-action='toggle-enabled']");
+  if (input) input.checked = provider.enabled !== false;
+}
+
+function refreshSelectedEnabledControl(id) {
+  if (state.selectedId !== id || state.view !== "providers") return;
+  const provider = selectedProvider();
+  const input = root.querySelector(".editor [data-field='enabled']");
+  if (provider && input) input.checked = provider.enabled !== false;
+}
+
+function refreshSelectedProviderPreview(id) {
+  if (state.selectedId !== id || state.view !== "providers") return;
+  const provider = selectedProvider();
+  const preview = root.querySelector(".editor .json-preview");
+  if (provider && preview) preview.textContent = JSON.stringify(safeProviderPreview(provider), null, 2);
+}
+
+function updateProviderSelection(id) {
+  root.querySelectorAll(".provider-item").forEach((row) => {
+    row.classList.toggle("is-selected", row.dataset.id === id);
+  });
+  positionSelectionBar();
+}
+
+function replaceEditorForSelectedProvider() {
+  const editor = root.querySelector(".editor");
+  const selected = selectedProvider();
+  if (!editor) return;
+  editor.innerHTML = selected
+    ? renderEditor(selected)
+    : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧“添加”创建一个供应商。</p></div></div>`;
+  bindProviderEditorEvents(editor);
+  flashFormSwap();
+  lastSelectedId = state.selectedId;
 }
 
 function addTemplate(templateId) {
