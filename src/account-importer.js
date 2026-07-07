@@ -106,8 +106,8 @@ function applyAccountsToProviders(currentProviders, accounts, sourcePath) {
       }));
     } else {
       provider.id = uniqueId(provider.id, providers);
-      if (hasSameEmailDifferentAccount(providers, provider)) {
-        provider.name = `${provider.name} · ${shortId(provider.accountId)}`;
+      if (hasSameEmailDifferentAccount(providers, provider) || hasSameSub2apiAccountDifferentRecord(providers, provider)) {
+        provider.name = providerDisplayNameWithIdentity(provider);
       }
       providers.push(provider);
       affectedIds.push(provider.id);
@@ -261,11 +261,17 @@ function accountToProvider(account, sourcePath) {
 function sameImportedAccount(existing, incoming) {
   if (!existing || !incoming) return false;
 
+  const existingSub2api = sub2apiIdentity(existing);
+  const incomingSub2api = sub2apiIdentity(incoming);
+  if (existingSub2api || incomingSub2api) {
+    return Boolean(existingSub2api && incomingSub2api && existingSub2api === incomingSub2api);
+  }
+
+  if (existing.importKey && incoming.importKey && existing.importKey === incoming.importKey) return true;
   // OpenAI can expose multiple ChatGPT accounts/workspaces under the same login
   // email. When account ids are present, treat them as the stronger identity and
   // do not collapse distinct accounts just because their email matches.
   if (existing.accountId && incoming.accountId) return existing.accountId === incoming.accountId;
-  if (existing.importKey && incoming.importKey && existing.importKey === incoming.importKey) return true;
   if (!existing.accountId && !incoming.accountId && existing.accountEmail && incoming.accountEmail) {
     return canonicalEmail(existing.accountEmail) === canonicalEmail(incoming.accountEmail);
   }
@@ -282,6 +288,25 @@ function hasSameEmailDifferentAccount(providers, incoming) {
       provider.accountId !== incoming.accountId &&
       canonicalEmail(provider.accountEmail) === email,
   );
+}
+
+function hasSameSub2apiAccountDifferentRecord(providers, incoming) {
+  if (incoming.importedFrom !== "sub2api" || !incoming.accountEmail || !incoming.accountId) return false;
+  const email = normalizeEmail(incoming.accountEmail);
+  return providers.some(
+    (provider) =>
+      provider.kind === "official-subscription" &&
+      provider.importedFrom === "sub2api" &&
+      normalizeEmail(provider.accountEmail) === email &&
+      provider.accountId === incoming.accountId &&
+      sub2apiIdentity(provider) !== sub2apiIdentity(incoming),
+  );
+}
+
+function providerDisplayNameWithIdentity(provider) {
+  const baseName = provider.accountEmail || provider.name || "OpenAI OAuth";
+  const suffix = provider.importedFrom === "sub2api" ? shortToken(provider.importKey) : shortId(provider.accountId);
+  return baseName.includes(suffix) ? baseName : `${baseName} · ${suffix}`;
 }
 
 function shouldRefreshImportedName(existing, incoming) {
@@ -301,9 +326,7 @@ function labelDuplicateImportedAccounts(providers) {
   for (const group of groups.values()) {
     if (group.length < 2) continue;
     for (const provider of group) {
-      const baseName = provider.accountEmail || provider.name || "OpenAI OAuth";
-      const suffix = shortId(provider.accountId);
-      provider.name = baseName.includes(suffix) ? baseName : `${baseName} · ${suffix}`;
+      provider.name = providerDisplayNameWithIdentity(provider);
     }
   }
 }
@@ -318,12 +341,17 @@ function duplicateImportedGroups(providers) {
   }
   return [...groups.entries()]
     .filter(([, providersInGroup]) => providersInGroup.length > 1)
-    .map(([email, providersInGroup]) => ({
-      email,
-      count: providersInGroup.length,
-      accountIds: providersInGroup.map((provider) => shortId(provider.accountId)),
-      message: "同一个 Gmail 主邮箱下存在多个不同 accountId，已按 accountId 分开保留。",
-    }));
+    .map(([email, providersInGroup]) => {
+      const hasSub2api = providersInGroup.some((provider) => provider.importedFrom === "sub2api");
+      return {
+        email,
+        count: providersInGroup.length,
+        accountIds: providersInGroup.map((provider) => shortId(provider.accountId)),
+        message: hasSub2api
+          ? "同邮箱/同 accountId 可能对应多个 sub2api 独立额度条目，已按独立额度分开保留。"
+          : "同一个 Gmail 主邮箱下存在多个不同 accountId，已按 accountId 分开保留。",
+      };
+    });
 }
 
 function importHistoryEntry(parsed, applied, sourcePath) {
@@ -342,10 +370,32 @@ function importHistoryEntry(parsed, applied, sourcePath) {
 }
 
 function importedAccountKey(account) {
+  if (account.format === "sub2api") return `sub2api:${sub2apiRecordKey(account)}`;
   if (account.accountId) return `openai:${account.accountId}`;
   if (account.email) return `openai:${canonicalEmail(account.email)}`;
   if (account.userId) return `openai:${account.userId}`;
   return `openai:${tokenHash(account.accessToken)}`;
+}
+
+function sub2apiIdentity(provider) {
+  if (provider.importedFrom !== "sub2api") return null;
+  if (provider.importKey && provider.importKey.startsWith("sub2api:")) return provider.importKey;
+  if (!provider.accessToken) return null;
+  return `sub2api:${sub2apiRecordKey({
+    email: provider.accountEmail || provider.name,
+    accountId: provider.accountId,
+    userId: provider.accountUserId,
+    accessToken: provider.accessToken,
+  })}`;
+}
+
+function sub2apiRecordKey(account) {
+  const email = normalizeEmail(account.email || account.name);
+  if (email && account.accountId) return [email, account.accountId].map((part) => slug(part) || "x").join(":");
+  if (email && account.userId) return [email, account.userId].map((part) => slug(part) || "x").join(":");
+  return [email || "no-email", account.accountId || account.userId || tokenHash(account.accessToken).slice(0, 16)]
+    .map((part) => slug(part) || "x")
+    .join(":");
 }
 
 function importPreviewItem(account, provider, context) {
@@ -376,6 +426,9 @@ function refreshPreviewNames(items, providers) {
 }
 
 function previewIdentity(account, provider) {
+  if (account.format === "sub2api" || provider.importedFrom === "sub2api") {
+    return { method: "sub2api", label: `sub2api 独立额度 · ${shortId(account.accountId || provider.accountId || provider.importKey)}` };
+  }
   if (account.accountId || provider.accountId) {
     return { method: "accountId", label: `accountId · ${shortId(account.accountId || provider.accountId)}` };
   }
@@ -388,6 +441,11 @@ function previewIdentity(account, provider) {
 }
 
 function updateReason(existing, incoming) {
+  const existingSub2api = sub2apiIdentity(existing);
+  const incomingSub2api = sub2apiIdentity(incoming);
+  if (existingSub2api && incomingSub2api && existingSub2api === incomingSub2api) {
+    return "sub2api 独立额度身份相同，将更新对应条目";
+  }
   if (existing.accountId && incoming.accountId && existing.accountId === incoming.accountId) {
     if (existing.accountEmail && incoming.accountEmail && normalizeEmail(existing.accountEmail) !== normalizeEmail(incoming.accountEmail)) {
       return "accountId 相同，邮箱/别名变化，将更新已有账号";
@@ -400,6 +458,7 @@ function updateReason(existing, incoming) {
 }
 
 function identityReason(provider) {
+  if (provider.importedFrom === "sub2api") return "新的 sub2api 独立额度条目，将新增账号";
   if (provider.accountId) return "新的 accountId，将新增官方订阅账号";
   if (provider.accountEmail) return "未提供 accountId，将按邮箱新增账号";
   return "未提供稳定账号标识，将按 token 指纹新增账号";
@@ -485,6 +544,10 @@ function tokenHash(token) {
 function shortId(value) {
   const text = String(value || "");
   return text.length <= 8 ? text : text.slice(0, 4) + "…" + text.slice(-4);
+}
+
+function shortToken(value) {
+  return tokenHash(value || "").slice(0, 8);
 }
 
 module.exports = {
