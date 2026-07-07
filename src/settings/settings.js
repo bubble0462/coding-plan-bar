@@ -232,11 +232,10 @@ function positionSelectionBar() {
     bar.style.opacity = "0";
     return;
   }
-  const listRect = list.getBoundingClientRect();
-  const itemRect = selected.getBoundingClientRect();
-  bar.style.transform = `translateY(${itemRect.top - listRect.top}px)`;
-  bar.style.width = `${itemRect.width}px`;
-  bar.style.height = `${itemRect.height + 6}px`;
+  const y = selected.offsetTop;
+  bar.style.transform = `translateY(${y}px)`;
+  bar.style.width = `${selected.offsetWidth}px`;
+  bar.style.height = `${selected.offsetHeight + 6}px`;
   bar.style.opacity = "1";
 }
 

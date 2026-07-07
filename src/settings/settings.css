@@ -1321,6 +1321,7 @@ button {
 
 .selection-bar {
   position: absolute;
+  top: 0;
   left: 8px;
   right: 8px;
   border-radius: 8px;
