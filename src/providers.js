@@ -30,7 +30,7 @@ async function refreshProviders(config) {
     Promise.all(enabled.map((provider) => refreshProvider(provider))),
     collectLocalUsage(enabled).catch(() => []),
   ]);
-  return snapshots.map((snapshot, index) => attachUsageToProvider(enabled[index], snapshot, localUsage));
+  return snapshots.map((snapshot, index) => attachUsageToProvider(enabled[index], snapshot, localUsage, Date.now(), enabled));
 }
 
 async function refreshProvider(provider) {

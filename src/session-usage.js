@@ -96,6 +96,8 @@ function parseCodexJsonl(content, fileKey = "codex") {
   const events = [];
   let sessionId = path.basename(fileKey, path.extname(fileKey));
   let model = "unknown";
+  let accountId = null;
+  let accountEmail = null;
   let previous = null;
   let eventIndex = 0;
 
@@ -107,15 +109,21 @@ function parseCodexJsonl(content, fileKey = "codex") {
 
     if (value.type === "session_meta") {
       sessionId = String(payload.id || payload.session_id || payload.sessionId || sessionId);
+      accountId = firstString([payload.account_id, payload.accountId, payload.chatgpt_account_id, payload.info?.account_id, payload.info?.accountId]) || accountId;
+      accountEmail = firstString([payload.email, payload.account_email, payload.accountEmail, payload.info?.email, payload.info?.account_email]) || accountEmail;
       continue;
     }
     if (value.type === "turn_context") {
       model = normalizeModelId(payload.model || payload.info?.model || model);
+      accountId = firstString([payload.account_id, payload.accountId, payload.chatgpt_account_id, payload.info?.account_id, payload.info?.accountId]) || accountId;
+      accountEmail = firstString([payload.email, payload.account_email, payload.accountEmail, payload.info?.email, payload.info?.account_email]) || accountEmail;
       continue;
     }
     if (value.type !== "event_msg" || payload.type !== "token_count" || !payload.info) continue;
 
     model = normalizeModelId(payload.info.model || payload.info.model_name || payload.model || model);
+    accountId = firstString([payload.info.account_id, payload.info.accountId, payload.info.chatgpt_account_id, payload.account_id, payload.accountId]) || accountId;
+    accountEmail = firstString([payload.info.email, payload.info.account_email, payload.info.accountEmail, payload.email, payload.account_email]) || accountEmail;
     const total = tokenShape(payload.info.total_token_usage);
     const last = tokenShape(payload.info.last_token_usage);
     if (!total && !last) continue;
@@ -128,6 +136,8 @@ function parseCodexJsonl(content, fileKey = "codex") {
       id: `codex:${sessionId}:${eventIndex}`,
       source: "codex",
       model,
+      accountId,
+      accountEmail,
       timestamp: value.timestamp,
       ...delta,
     }));
@@ -155,6 +165,7 @@ function parseClaudeJsonl(content, fileKey = "claude") {
       id: `claude:${message.id || `${path.basename(fileKey)}:${fallbackIndex}`}`,
       source: "claude",
       model: normalizeModelId(message.model),
+      accountEmail: firstString([value.account_email, value.accountEmail, value.email, value.user_email, value.userEmail]),
       timestamp: value.timestamp,
       ...tokens,
     }));
@@ -178,29 +189,31 @@ function usageEvent(event) {
   return normalized;
 }
 
-function attachUsageToProvider(provider, normalizedProvider, events, now = Date.now()) {
+function attachUsageToProvider(provider, normalizedProvider, events, now = Date.now(), allProviders = []) {
   if (provider?.kind === "balance") {
     if (normalizedProvider?.usage || !supportsUsage(provider)) return normalizedProvider;
-    const matching = (events || []).filter((event) => matchesProvider(provider, event));
+    const matching = matchingUsageEvents(provider, events || [], allProviders);
     return {
       ...normalizedProvider,
-      usage: aggregateWindowUsage(matching, now - 7 * 24 * 60 * 60 * 1000, now, {
-        scope: "近 7 天",
-        estimated: true,
-        source: "local",
-        currency: "USD",
-      }),
+      usage: matching == null
+        ? null
+        : aggregateWindowUsage(matching, now - 7 * 24 * 60 * 60 * 1000, now, {
+          scope: "近 7 天",
+          estimated: true,
+          source: "local",
+          currency: "USD",
+        }),
     };
   }
 
   if (!supportsUsage(provider) || !normalizedProvider?.tiers?.length) return normalizedProvider;
-  const matching = (events || []).filter((event) => matchesProvider(provider, event));
+  const matching = matchingUsageEvents(provider, events || [], allProviders);
 
   return {
     ...normalizedProvider,
     tiers: normalizedProvider.tiers.map((tier) => ({
       ...tier,
-      usage: aggregateTierUsage(tier, matching, now),
+      usage: matching == null ? null : aggregateTierUsage(tier, matching, now),
     })),
   };
 }
@@ -258,6 +271,67 @@ function matchesProvider(provider, event) {
   if (url.includes("bigmodel") || url.includes("z.ai")) return /^(?:glm-|zhipu-)/.test(model);
   if (url.includes("minimax")) return /^minimax-/.test(model);
   return false;
+}
+
+function matchingUsageEvents(provider, events, allProviders = []) {
+  const providerMatches = (events || []).filter((event) => matchesProvider(provider, event));
+  if (!providerMatches.length) return [];
+
+  const ownMatches = providerMatches.filter((event) => matchesProviderIdentity(provider, event));
+  if (ownMatches.length) return ownMatches;
+
+  const providerIdentity = providerUsageIdentity(provider);
+  if (!providerIdentity) {
+    return providerMatches.filter((event) => !eventUsageIdentity(event));
+  }
+
+  const sameFamilyProviders = (allProviders || []).filter(
+    (item) => supportsUsage(item) && providerFamilyKey(item) === providerFamilyKey(provider),
+  );
+  const hasIdentifiedEventsForFamily = providerMatches.some((event) => eventUsageIdentity(event));
+  if (hasIdentifiedEventsForFamily) return null;
+  return sameFamilyProviders.length <= 1 ? providerMatches.filter((event) => !eventUsageIdentity(event)) : null;
+}
+
+function matchesProviderIdentity(provider, event) {
+  const providerIdentity = providerUsageIdentity(provider);
+  const eventIdentity = eventUsageIdentity(event);
+  return Boolean(providerIdentity && eventIdentity && providerIdentity === eventIdentity);
+}
+
+function providerUsageIdentity(provider) {
+  const accountId = normalizeIdentity(provider?.accountId);
+  if (accountId) return `id:${accountId}`;
+  const email = normalizeEmail(provider?.accountEmail || provider?.email);
+  return email ? `email:${email}` : null;
+}
+
+function eventUsageIdentity(event) {
+  const accountId = normalizeIdentity(event?.accountId);
+  if (accountId) return `id:${accountId}`;
+  const email = normalizeEmail(event?.accountEmail || event?.email);
+  return email ? `email:${email}` : null;
+}
+
+function providerFamilyKey(provider) {
+  if (provider?.kind === "official-subscription") return `official:${provider.tool || ""}`;
+  if (provider?.kind === "balance") return `balance:${String(provider.baseUrl || "").toLowerCase()}`;
+  return `${provider?.kind || ""}:${String(provider?.baseUrl || "").toLowerCase()}`;
+}
+
+function normalizeIdentity(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function firstString(values) {
+  for (const value of values || []) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
 }
 
 function tierDurationMs(name) {
