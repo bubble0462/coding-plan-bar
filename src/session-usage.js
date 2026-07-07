@@ -209,9 +209,11 @@ function aggregateTierUsage(tier, events, now = Date.now()) {
   const duration = tierDurationMs(tier.name);
   if (!duration) return null;
   const resetAt = Date.parse(tier.resetsAt || "");
-  const start = Number.isFinite(resetAt) && resetAt > now - duration && resetAt < now + duration * 2
+  const nominalStart = now - duration;
+  const cycleStart = Number.isFinite(resetAt) && resetAt > nominalStart && resetAt < now + duration * 2
     ? resetAt - duration
-    : now - duration;
+    : nominalStart;
+  const start = Math.min(cycleStart, nominalStart);
   return aggregateWindowUsage(events, start, now, { estimated: true, source: "local" });
 }
 
