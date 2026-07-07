@@ -6,35 +6,97 @@ function importAccountsIntoConfig(config, parsedJson, sourcePath) {
   const normalized = normalizeConfig(config);
   const parsed = parseAccountImport(parsedJson, sourcePath);
   if (parsed.accounts.length === 0) {
+    return emptyImportResult(normalized, parsed);
+  }
+
+  const applied = applyAccountsToProviders(normalized.providers, parsed.accounts, sourcePath);
+  return {
+    config: { ...normalized, providers: applied.providers },
+    importedCount: applied.importedCount,
+    updatedCount: applied.updatedCount,
+    skippedCount: parsed.skippedCount,
+    affectedIds: applied.affectedIds,
+    selectedId: applied.affectedIds[0] || null,
+    format: parsed.format,
+    message: importMessage(parsed.format, applied.importedCount, applied.updatedCount, parsed.skippedCount),
+  };
+}
+
+function previewAccountsImport(config, parsedJson, sourcePath = "") {
+  const normalized = normalizeConfig(config);
+  const parsed = parseAccountImport(parsedJson, sourcePath);
+  if (parsed.accounts.length === 0) {
+    const empty = emptyImportResult(normalized, parsed);
     return {
-      config: normalized,
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: parsed.skippedCount,
-      format: parsed.format,
-      message: parsed.skippedCount > 0 ? "没有找到可导入的 OpenAI OAuth 账号" : "文件中没有账号数据",
+      importedCount: empty.importedCount,
+      updatedCount: empty.updatedCount,
+      skippedCount: empty.skippedCount,
+      format: empty.format,
+      message: empty.message,
+      fileName: path.basename(sourcePath || ""),
+      accountCount: 0,
+      affectedIds: [],
+      selectedId: null,
+      items: [],
+      duplicateGroups: [],
     };
   }
 
-  const providers = [...normalized.providers];
+  const applied = applyAccountsToProviders(normalized.providers, parsed.accounts, sourcePath);
+  return {
+    importedCount: applied.importedCount,
+    updatedCount: applied.updatedCount,
+    skippedCount: parsed.skippedCount,
+    affectedIds: applied.affectedIds,
+    selectedId: applied.affectedIds[0] || null,
+    format: parsed.format,
+    fileName: path.basename(sourcePath || ""),
+    accountCount: parsed.accounts.length,
+    message: importMessage(parsed.format, applied.importedCount, applied.updatedCount, parsed.skippedCount),
+    items: applied.items,
+    duplicateGroups: duplicateImportedGroups(applied.providers),
+  };
+}
+
+function emptyImportResult(config, parsed) {
+  return {
+    config,
+    importedCount: 0,
+    updatedCount: 0,
+    skippedCount: parsed.skippedCount,
+    format: parsed.format,
+    message: parsed.skippedCount > 0 ? "没有找到可导入的 OpenAI OAuth 账号" : "文件中没有账号数据",
+  };
+}
+
+function applyAccountsToProviders(currentProviders, accounts, sourcePath) {
+  const providers = currentProviders.map((provider) => ({ ...provider }));
   let importedCount = 0;
   let updatedCount = 0;
   const affectedIds = [];
+  const items = [];
 
-  for (const account of parsed.accounts) {
+  for (const [index, account] of accounts.entries()) {
     const provider = accountToProvider(account, sourcePath);
     const existingIndex = providers.findIndex((item) => sameImportedAccount(item, provider));
     if (existingIndex >= 0) {
       const existing = providers[existingIndex];
-      providers[existingIndex] = {
+      const next = {
         ...existing,
         ...provider,
         id: existing.id,
         name: shouldRefreshImportedName(existing, provider) ? provider.name : existing.name || provider.name,
         enabled: existing.enabled !== false,
       };
+      providers[existingIndex] = next;
       affectedIds.push(existing.id);
       updatedCount += 1;
+      items.push(importPreviewItem(account, next, {
+        index,
+        action: "update",
+        existing,
+        reason: updateReason(existing, provider),
+      }));
     } else {
       provider.id = uniqueId(provider.id, providers);
       if (hasSameEmailDifferentAccount(providers, provider)) {
@@ -43,20 +105,18 @@ function importAccountsIntoConfig(config, parsedJson, sourcePath) {
       providers.push(provider);
       affectedIds.push(provider.id);
       importedCount += 1;
+      items.push(importPreviewItem(account, provider, {
+        index,
+        action: "add",
+        existing: null,
+        reason: identityReason(provider),
+      }));
     }
   }
   labelDuplicateImportedAccounts(providers);
+  refreshPreviewNames(items, providers);
 
-  return {
-    config: { ...normalized, providers },
-    importedCount,
-    updatedCount,
-    skippedCount: parsed.skippedCount,
-    affectedIds,
-    selectedId: affectedIds[0] || null,
-    format: parsed.format,
-    message: importMessage(parsed.format, importedCount, updatedCount, parsed.skippedCount),
-  };
+  return { providers, importedCount, updatedCount, affectedIds, items };
 }
 
 function parseAccountImport(parsedJson, sourcePath = "") {
@@ -241,11 +301,86 @@ function labelDuplicateImportedAccounts(providers) {
   }
 }
 
+function duplicateImportedGroups(providers) {
+  const groups = new Map();
+  for (const provider of providers) {
+    if (provider.kind !== "official-subscription" || !provider.accountEmail || !provider.accountId) continue;
+    const key = canonicalEmail(provider.accountEmail);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(provider);
+  }
+  return [...groups.entries()]
+    .filter(([, providersInGroup]) => providersInGroup.length > 1)
+    .map(([email, providersInGroup]) => ({
+      email,
+      count: providersInGroup.length,
+      accountIds: providersInGroup.map((provider) => shortId(provider.accountId)),
+      message: "同一个 Gmail 主邮箱下存在多个不同 accountId，已按 accountId 分开保留。",
+    }));
+}
+
 function importedAccountKey(account) {
   if (account.accountId) return `openai:${account.accountId}`;
   if (account.email) return `openai:${canonicalEmail(account.email)}`;
   if (account.userId) return `openai:${account.userId}`;
   return `openai:${tokenHash(account.accessToken)}`;
+}
+
+function importPreviewItem(account, provider, context) {
+  const identity = previewIdentity(account, provider);
+  return {
+    index: context.index + 1,
+    action: context.action,
+    actionLabel: context.action === "add" ? "新增" : "更新",
+    id: provider.id,
+    existingId: context.existing?.id || null,
+    name: provider.name,
+    email: account.email || provider.accountEmail || "",
+    accountIdShort: account.accountId ? shortId(account.accountId) : "",
+    userIdShort: account.userId ? shortId(account.userId) : "",
+    planType: account.planType || provider.planType || "",
+    expiresAt: account.expiresAt || provider.expiresAt || "",
+    identityMethod: identity.method,
+    identityLabel: identity.label,
+    reason: context.reason,
+  };
+}
+
+function refreshPreviewNames(items, providers) {
+  const names = new Map(providers.map((provider) => [provider.id, provider.name]));
+  for (const item of items) {
+    if (names.has(item.id)) item.name = names.get(item.id);
+  }
+}
+
+function previewIdentity(account, provider) {
+  if (account.accountId || provider.accountId) {
+    return { method: "accountId", label: `accountId · ${shortId(account.accountId || provider.accountId)}` };
+  }
+  if (account.email || provider.accountEmail) {
+    const email = account.email || provider.accountEmail;
+    return { method: isGmail(email) ? "gmail" : "email", label: isGmail(email) ? "Gmail 主邮箱" : "邮箱" };
+  }
+  if (account.userId || provider.accountUserId) return { method: "userId", label: "userId" };
+  return { method: "token", label: "token 指纹" };
+}
+
+function updateReason(existing, incoming) {
+  if (existing.accountId && incoming.accountId && existing.accountId === incoming.accountId) {
+    if (existing.accountEmail && incoming.accountEmail && normalizeEmail(existing.accountEmail) !== normalizeEmail(incoming.accountEmail)) {
+      return "accountId 相同，邮箱/别名变化，将更新已有账号";
+    }
+    return "accountId 相同，将更新已有账号";
+  }
+  if (existing.importKey && incoming.importKey && existing.importKey === incoming.importKey) return "导入身份键相同，将更新已有账号";
+  if (existing.accountEmail && incoming.accountEmail) return "未提供 accountId，按邮箱兜底匹配";
+  return "匹配到已有账号，将更新";
+}
+
+function identityReason(provider) {
+  if (provider.accountId) return "新的 accountId，将新增官方订阅账号";
+  if (provider.accountEmail) return "未提供 accountId，将按邮箱新增账号";
+  return "未提供稳定账号标识，将按 token 指纹新增账号";
 }
 
 function uniqueId(base, providers) {
@@ -307,6 +442,11 @@ function canonicalEmail(value) {
   return `${canonicalLocal}@${domain}`;
 }
 
+function isGmail(value) {
+  const domain = normalizeEmail(value).split("@")[1];
+  return domain === "gmail.com" || domain === "googlemail.com";
+}
+
 function slug(value) {
   return String(value || "")
     .toLowerCase()
@@ -328,4 +468,5 @@ function shortId(value) {
 module.exports = {
   importAccountsIntoConfig,
   parseAccountImport,
+  previewAccountsImport,
 };

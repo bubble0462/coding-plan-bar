@@ -36,8 +36,11 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   openConfigJson() {
     return ipcRenderer.invoke("config:open-json");
   },
-  importAccounts() {
-    return ipcRenderer.invoke("config:import-accounts");
+  chooseImportAccounts() {
+    return ipcRenderer.invoke("config:choose-import-accounts");
+  },
+  importAccounts(filePath) {
+    return ipcRenderer.invoke("config:import-accounts", filePath);
   },
   previewImport(raw) {
     return ipcRenderer.invoke("config:preview-import", raw);

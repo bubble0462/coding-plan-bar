@@ -2,10 +2,12 @@ const fs = require("fs");
 const path = require("path");
 const { app, BrowserWindow, ipcMain } = require("electron");
 const { providerTemplates } = require("../src/config-store");
+const { importAccountsIntoConfig, previewAccountsImport } = require("../src/account-importer");
 
 const showTemplates = process.argv.includes("--templates");
 const showUpdate = process.argv.includes("--update");
 const showReorder = process.argv.includes("--reorder");
+const showImport = process.argv.includes("--import");
 const outputPath = path.join(
   __dirname,
   "..",
@@ -16,7 +18,9 @@ const outputPath = path.join(
       ? "settings-screenshot-update.png"
       : showReorder
         ? "settings-screenshot-reorder.png"
-        : "settings-screenshot.png",
+        : showImport
+          ? "settings-screenshot-import.png"
+          : "settings-screenshot.png",
 );
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-settings-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
@@ -45,6 +49,37 @@ const sampleConfig = {
     },
   ],
 };
+
+const sampleImportJson = {
+  exported_at: "2026-07-07T00:00:00Z",
+  accounts: [
+    {
+      platform: "openai",
+      type: "oauth",
+      credentials: {
+        access_token: "sample-token-a",
+        chatgpt_account_id: "acct-sample-a",
+        chatgpt_user_id: "user-sample",
+        email: "demo+one@gmail.com",
+        expires_at: "2027-01-01T00:00:00Z",
+        plan_type: "plus",
+      },
+    },
+    {
+      platform: "openai",
+      type: "oauth",
+      credentials: {
+        access_token: "sample-token-b",
+        chatgpt_account_id: "acct-sample-b",
+        chatgpt_user_id: "user-sample",
+        email: "demo+two@gmail.com",
+        expires_at: "2027-01-01T00:00:00Z",
+        plan_type: "plus",
+      },
+    },
+  ],
+};
+const sampleImportPath = path.join(__dirname, "..", "tmp", "sub2api-preview-sample.json");
 
 // Mock updater state injected into the settings page. For --update we report a
 // newer release is available so the screenshot exercises the download path.
@@ -86,6 +121,17 @@ async function main() {
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
   }));
   ipcMain.handle("config:open-json", () => {});
+  ipcMain.handle("config:choose-import-accounts", () => ({
+    ...previewAccountsImport(sampleConfig, sampleImportJson, sampleImportPath),
+    filePath: sampleImportPath,
+    configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
+  }));
+  ipcMain.handle("config:import-accounts", () => ({
+    ...importAccountsIntoConfig(sampleConfig, sampleImportJson, sampleImportPath),
+    configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
+    filePath: sampleImportPath,
+  }));
+  ipcMain.handle("config:preview-import", (_event, raw) => previewAccountsImport(sampleConfig, raw, "pasted-json"));
   ipcMain.handle("quota:refresh", () => {});
   ipcMain.handle("quota:open-config", () => {});
   ipcMain.handle("quota:hide", () => {});
@@ -107,9 +153,9 @@ async function main() {
   const window = new BrowserWindow({
     width: 940,
     height: 660,
-    show: showTemplates || showUpdate || showReorder,
-    x: showTemplates || showUpdate || showReorder ? -2200 : undefined,
-    y: showTemplates || showUpdate || showReorder ? 80 : undefined,
+    show: showTemplates || showUpdate || showReorder || showImport,
+    x: showTemplates || showUpdate || showReorder || showImport ? -2200 : undefined,
+    y: showTemplates || showUpdate || showReorder || showImport ? 80 : undefined,
     frame: true,
     backgroundColor: "#f6f8fb",
     webPreferences: {
@@ -198,6 +244,24 @@ async function main() {
       })()`,
     );
     if (!rendered) throw new Error("Update page did not render with version info");
+  }
+
+  if (showImport) {
+    window.showInactive();
+    await wait(120);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="import-accounts"]')?.click();
+    `);
+    await wait(450);
+    const rendered = await window.webContents.executeJavaScript(
+      `(() => {
+        const popover = document.querySelector(".import-popover");
+        if (!popover) return false;
+        const text = popover.textContent || "";
+        return text.includes("导入账号预览") && text.includes("检测账号") && text.includes("新增") && text.includes("同主邮箱多账号");
+      })()`,
+    );
+    if (!rendered) throw new Error("Import preview did not render expected summary");
   }
 
   if (showReorder) {
