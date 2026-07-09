@@ -189,7 +189,7 @@ async function queryOfficialSubscription(provider) {
     if (credentials.status !== "valid" && !credentials.accessToken) {
       return subscriptionError("grok", credentials.status, credentials.message);
     }
-    return queryGrokQuota(credentials.accessToken, credentials.message);
+    return queryGrokQuota(credentials);
   }
 
   return subscriptionError(provider.tool || provider.id, "not_found", "不支持的官方工具");
@@ -291,9 +291,9 @@ function readGrokCredentials(provider) {
 
   try {
     const parsed = JSON.parse(fs.readFileSync(authPath, "utf8"));
-    const entries = Object.values(parsed || {}).filter((entry) => entry && typeof entry === "object");
-    const entry = entries.find((item) => item.key) || entries[0];
-    if (!entry?.key) {
+    const entries = Object.entries(parsed || {}).filter(([, entry]) => entry && typeof entry === "object");
+    const [entryKey, entry] = entries.find(([, item]) => item.key) || entries[0] || [];
+    if (!entry?.key && !entry?.refresh_token) {
       return {
         accessToken: null,
         status: "parse_error",
@@ -302,9 +302,16 @@ function readGrokCredentials(provider) {
     }
     const expired = entry.expires_at ? isExpired(entry.expires_at) : false;
     return {
-      accessToken: entry.key,
-      status: expired ? "expired" : "valid",
-      message: expired ? "Grok Build 授权已过期" : entry.email || null,
+      accessToken: entry.key || null,
+      refreshToken: entry.refresh_token || null,
+      clientId: entry.oidc_client_id || null,
+      issuer: entry.oidc_issuer || "https://auth.x.ai",
+      authPath,
+      authDocument: parsed,
+      authEntryKey: entryKey,
+      status: expired && !entry.refresh_token ? "expired" : "valid",
+      shouldRefresh: expired,
+      message: entry.email || null,
     };
   } catch (error) {
     return { accessToken: null, status: "parse_error", message: error.message };
@@ -353,15 +360,22 @@ async function queryClaudeQuota(accessToken) {
   };
 }
 
-async function queryGrokQuota(accessToken, planLabel = null) {
-  const response = await fetchJson("https://cli-chat-proxy.grok.com/v1/billing?format=credits", {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "X-XAI-Token-Auth": "xai-grok-cli",
-      Accept: "application/json",
-      "User-Agent": "grok-cli",
-    },
-  });
+async function queryGrokQuota(credentials) {
+  let accessToken = credentials.accessToken;
+  if (credentials.shouldRefresh) {
+    const refreshed = await refreshGrokToken(credentials);
+    if (refreshed.success) accessToken = refreshed.accessToken;
+    else if (!accessToken) return subscriptionError("grok", "expired", refreshed.error);
+  }
+
+  let response = await fetchGrokBilling(accessToken);
+  if ((response.status === 401 || response.status === 403) && credentials.refreshToken) {
+    const refreshed = await refreshGrokToken(credentials);
+    if (refreshed.success) {
+      accessToken = refreshed.accessToken;
+      response = await fetchGrokBilling(accessToken);
+    }
+  }
 
   if (response.status === 401 || response.status === 403) {
     return subscriptionError("grok", "expired", `Authentication failed (HTTP ${response.status})`);
@@ -378,7 +392,7 @@ async function queryGrokQuota(accessToken, planLabel = null) {
   return {
     tool: "grok",
     credentialStatus: "valid",
-    credentialMessage: planLabel,
+    credentialMessage: credentials.message || null,
     success: true,
     tiers: [
       {
@@ -391,6 +405,56 @@ async function queryGrokQuota(accessToken, planLabel = null) {
     error: null,
     queriedAt: Date.now(),
   };
+}
+
+function fetchGrokBilling(accessToken) {
+  return fetchJson("https://cli-chat-proxy.grok.com/v1/billing?format=credits", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "X-XAI-Token-Auth": "xai-grok-cli",
+      Accept: "application/json",
+      "User-Agent": "grok-cli",
+    },
+  });
+}
+
+async function refreshGrokToken(credentials) {
+  if (!credentials.refreshToken || !credentials.clientId) {
+    return { success: false, error: "Grok Build 授权已过期，请重新登录 Grok Build" };
+  }
+  const response = await fetchJson(`${String(credentials.issuer || "https://auth.x.ai").replace(/\/$/, "")}/oauth2/token`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+      "User-Agent": "grok-cli",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: credentials.refreshToken,
+      client_id: credentials.clientId,
+    }).toString(),
+  });
+  if (!response.ok) {
+    return { success: false, error: `Grok token 刷新失败 (HTTP ${response.status})` };
+  }
+  const accessToken = response.json?.access_token;
+  if (!accessToken) return { success: false, error: "Grok token 刷新响应缺少 access_token" };
+  persistGrokToken(credentials, response.json);
+  return { success: true, accessToken };
+}
+
+function persistGrokToken(credentials, token) {
+  if (!credentials.authPath || !credentials.authDocument || !credentials.authEntryKey) return;
+  const entry = credentials.authDocument[credentials.authEntryKey];
+  if (!entry || typeof entry !== "object") return;
+  entry.key = token.access_token;
+  if (token.refresh_token) entry.refresh_token = token.refresh_token;
+  const expiresIn = Number(token.expires_in || 0);
+  if (Number.isFinite(expiresIn) && expiresIn > 0) {
+    entry.expires_at = new Date(Date.now() + expiresIn * 1000).toISOString();
+  }
+  fs.writeFileSync(credentials.authPath, JSON.stringify(credentials.authDocument, null, 2));
 }
 
 async function queryCodexQuota(accessToken, accountId, tool = "codex") {
