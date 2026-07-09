@@ -805,6 +805,7 @@ function renderEditor(provider) {
                 ${renderCustomSelect("tool", provider.tool || "codex", [
                   ["codex", "Codex"],
                   ["claude", "Claude"],
+                  ["grok", "Grok"],
                 ])}
               </div>
             `

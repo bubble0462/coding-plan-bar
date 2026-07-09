@@ -32,6 +32,9 @@ function usageRequirements(providers) {
       claudeDirs.add(provider.credentialsPath ? path.dirname(provider.credentialsPath) : defaultClaude);
       continue;
     }
+    if (provider.kind === "official-subscription" && provider.tool === "grok") {
+      continue;
+    }
 
     // Coding-plan model families may appear in either CLI's local history.
     codexDirs.add(defaultCodex);
@@ -247,7 +250,8 @@ function aggregateWindowUsage(events, start, end, metadata = {}) {
 }
 
 function supportsUsage(provider) {
-  if (provider?.kind === "official-subscription" || provider?.kind === "coding-plan") return true;
+  if (provider?.kind === "official-subscription") return provider.tool !== "grok";
+  if (provider?.kind === "coding-plan") return true;
   if (provider?.kind !== "balance") return false;
   const url = String(provider.baseUrl || "").toLowerCase();
   return url.includes("api.deepseek.com") || url.includes("api.moonshot") || url.includes("api.kimi");
@@ -258,6 +262,7 @@ function matchesProvider(provider, event) {
   if (provider.kind === "official-subscription") {
     if (provider.tool === "codex") return event.source === "codex" && /^(?:gpt-|o\d|codex)/.test(model);
     if (provider.tool === "claude") return event.source === "claude" && /^claude-/.test(model);
+    if (provider.tool === "grok") return false;
     return false;
   }
 

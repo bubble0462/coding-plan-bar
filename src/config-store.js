@@ -159,6 +159,21 @@ function providerTemplates() {
       },
     },
     {
+      id: "grok",
+      label: "Grok 官方订阅",
+      short: "Gk",
+      category: "官方订阅",
+      description: "读取本机 Grok Build 登录授权，只显示周额度。",
+      homepage: "https://grok.com/build",
+      provider: {
+        id: "grok",
+        name: "Grok Build",
+        kind: "official-subscription",
+        tool: "grok",
+        enabled: true,
+      },
+    },
+    {
       id: "glm",
       label: "Zhipu GLM",
       short: "GLM",

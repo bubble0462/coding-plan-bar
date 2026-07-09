@@ -184,6 +184,14 @@ async function queryOfficialSubscription(provider) {
     return queryClaudeQuota(credentials.accessToken);
   }
 
+  if (provider.tool === "grok") {
+    const credentials = readGrokCredentials(provider);
+    if (credentials.status !== "valid" && !credentials.accessToken) {
+      return subscriptionError("grok", credentials.status, credentials.message);
+    }
+    return queryGrokQuota(credentials.accessToken, credentials.message);
+  }
+
   return subscriptionError(provider.tool || provider.id, "not_found", "不支持的官方工具");
 }
 
@@ -266,6 +274,43 @@ function readClaudeCredentials(provider) {
   }
 }
 
+function readGrokCredentials(provider) {
+  if (provider.accessToken) {
+    const expired = provider.expiresAt ? isExpired(provider.expiresAt) : false;
+    return {
+      accessToken: provider.accessToken,
+      status: expired ? "expired" : "valid",
+      message: expired ? "Grok token 已过期" : provider.accountEmail || null,
+    };
+  }
+
+  const authPath = provider.authPath || path.join(os.homedir(), ".grok", "auth.json");
+  if (!fs.existsSync(authPath)) {
+    return { accessToken: null, status: "not_found", message: null };
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8"));
+    const entries = Object.values(parsed || {}).filter((entry) => entry && typeof entry === "object");
+    const entry = entries.find((item) => item.key) || entries[0];
+    if (!entry?.key) {
+      return {
+        accessToken: null,
+        status: "parse_error",
+        message: "缺少 Grok Build 授权 key",
+      };
+    }
+    const expired = entry.expires_at ? isExpired(entry.expires_at) : false;
+    return {
+      accessToken: entry.key,
+      status: expired ? "expired" : "valid",
+      message: expired ? "Grok Build 授权已过期" : entry.email || null,
+    };
+  } catch (error) {
+    return { accessToken: null, status: "parse_error", message: error.message };
+  }
+}
+
 async function queryClaudeQuota(accessToken) {
   const response = await fetchJson("https://api.anthropic.com/api/oauth/usage", {
     headers: {
@@ -303,6 +348,46 @@ async function queryClaudeQuota(accessToken) {
     success: true,
     tiers,
     extraUsage: camelExtraUsage(response.json?.extra_usage),
+    error: null,
+    queriedAt: Date.now(),
+  };
+}
+
+async function queryGrokQuota(accessToken, planLabel = null) {
+  const response = await fetchJson("https://cli-chat-proxy.grok.com/v1/billing?format=credits", {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "X-XAI-Token-Auth": "xai-grok-cli",
+      Accept: "application/json",
+      "User-Agent": "grok-cli",
+    },
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    return subscriptionError("grok", "expired", `Authentication failed (HTTP ${response.status})`);
+  }
+  if (!response.ok) {
+    return subscriptionError("grok", "valid", `API error (HTTP ${response.status}): ${response.text}`);
+  }
+
+  const config = response.json?.config || response.json || {};
+  const utilization = firstNumber([config.creditUsagePercent, config.usagePercent, config.weeklyUsagePercent]);
+  if (utilization == null) {
+    return subscriptionError("grok", "parse_error", "Grok billing 响应缺少 creditUsagePercent");
+  }
+  return {
+    tool: "grok",
+    credentialStatus: "valid",
+    credentialMessage: planLabel,
+    success: true,
+    tiers: [
+      {
+        name: "weekly_limit",
+        utilization,
+        resetsAt: config.currentPeriod?.end || config.billingPeriodEnd || null,
+      },
+    ],
+    extraUsage: parseGrokExtraUsage(config),
     error: null,
     queriedAt: Date.now(),
   };
@@ -897,6 +982,25 @@ function okSubscription(tool, tiers, credentialMessage) {
     error: null,
     queriedAt: Date.now(),
   };
+}
+
+function parseGrokExtraUsage(config) {
+  return {
+    isEnabled: Boolean(config.isUnifiedBillingUser),
+    monthlyLimit: firstNumber([config.onDemandCap?.val]),
+    usedCredits: firstNumber([config.onDemandUsed?.val]),
+    utilization: firstNumber([config.creditUsagePercent]),
+    currency: "credits",
+    prepaidBalance: firstNumber([config.prepaidBalance?.val]),
+  };
+}
+
+function firstNumber(values) {
+  for (const value of values || []) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
 }
 
 function camelExtraUsage(extra) {
