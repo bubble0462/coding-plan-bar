@@ -454,7 +454,21 @@ function persistGrokToken(credentials, token) {
   if (Number.isFinite(expiresIn) && expiresIn > 0) {
     entry.expires_at = new Date(Date.now() + expiresIn * 1000).toISOString();
   }
-  fs.writeFileSync(credentials.authPath, JSON.stringify(credentials.authDocument, null, 2));
+  writeJsonFileAtomic(credentials.authPath, credentials.authDocument);
+}
+
+function writeJsonFileAtomic(filePath, value) {
+  const dir = path.dirname(filePath);
+  const tempPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
+  const content = `${JSON.stringify(value, null, 2)}\n`;
+  const fd = fs.openSync(tempPath, "w");
+  try {
+    fs.writeFileSync(fd, content);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tempPath, filePath);
 }
 
 async function queryCodexQuota(accessToken, accountId, tool = "codex") {
@@ -1143,4 +1157,6 @@ module.exports = {
   parseGenericBalanceResponse,
   parseBalanceUsage,
   windowSecondsToTierName,
+  writeJsonFileAtomic,
+  queryGrokQuota,
 };

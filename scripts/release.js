@@ -48,13 +48,45 @@ function main() {
     run("gh", ["release", "view", tag], { capture: true });
     run("gh", ["release", "edit", tag, "--title", tag, "--notes", notes]);
   } catch (_error) {
-    run("gh", ["release", "create", tag, asset, "--target", "main", "--title", tag, "--notes", notes]);
+    run("gh", ["release", "create", tag, "--target", "main", "--title", tag, "--notes", notes]);
   }
   run("gh", ["release", "upload", tag, asset, "--clobber"]);
-  const url = run("gh", ["release", "view", tag, "--json", "url", "-q", ".url"], { capture: true }).trim();
-  console.log(`\n发布完成：${url}`);
+  run("gh", ["release", "edit", tag, "--draft=false"]);
+  const release = verifyRelease(tag, sha);
+  console.log(`\n发布完成：${release.url}`);
   console.log(`安装包：${asset}`);
   console.log(`SHA256：${sha}`);
+}
+
+function verifyRelease(expectedTag, expectedSha) {
+  const raw = run("gh", ["release", "view", expectedTag, "--json", "url,tagName,isDraft,assets"], { capture: true });
+  const release = JSON.parse(raw);
+  if (release.tagName !== expectedTag) {
+    throw new Error(`Release tag 校验失败：期望 ${expectedTag}，实际 ${release.tagName || "空"}`);
+  }
+  if (release.isDraft) throw new Error(`${expectedTag} 仍是 draft，未公开发布。`);
+  if (!String(release.url || "").endsWith(`/releases/tag/${expectedTag}`)) {
+    throw new Error(`Release URL 异常：${release.url || "空"}`);
+  }
+
+  const expectedNames = assetNameCandidates(path.basename(asset));
+  const uploaded = (release.assets || []).find((item) => expectedNames.includes(item.name));
+  if (!uploaded) {
+    throw new Error(`Release 缺少安装包 asset：${[...expectedNames].join(" 或 ")}`);
+  }
+
+  const digest = String(uploaded.digest || "").toLowerCase();
+  if (digest && digest !== `sha256:${expectedSha.toLowerCase()}`) {
+    throw new Error(`安装包 SHA256 校验失败：${digest}`);
+  }
+  if (uploaded.state && uploaded.state !== "uploaded") {
+    throw new Error(`安装包 asset 状态异常：${uploaded.state}`);
+  }
+  return release;
+}
+
+function assetNameCandidates(name) {
+  return [name, name.replace(/ /g, ".")];
 }
 
 main();

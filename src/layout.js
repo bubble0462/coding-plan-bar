@@ -26,7 +26,7 @@ function isProviderListScrollable(providers = []) {
 function estimateProviderHeight(provider) {
   if (!provider) return EMPTY_PROVIDER_HEIGHT;
 
-  const messageHeight = provider.message ? 22 : 0;
+  const messageHeight = provider.message || provider.failure ? 22 : 0;
   if (provider.balance) return 127 + (provider.usage ? 20 : 0) + messageHeight;
 
   const tierCount = Math.max(1, Array.isArray(provider.tiers) ? provider.tiers.length : 0);

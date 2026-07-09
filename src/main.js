@@ -36,6 +36,7 @@ let currentState = {
   errorCount: 0,
   providers: [],
 };
+const lastSuccessfulProviders = new Map();
 
 function createTrayIcon() {
   return nativeImage.createFromPath(path.join(__dirname, "assets", "tray-icon.png"));
@@ -253,8 +254,9 @@ function providerLayoutKey(providers = []) {
     .map((provider) => {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
+      const staleCount = provider.lastSuccess ? 1 : 0;
       const shape = provider.balance ? `balance:${provider.usage ? 1 : 0}` : `tiers:${tierCount}`;
-      return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:${provider.message ? 1 : 0}`;
+      return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:stale:${staleCount}:${provider.message ? 1 : 0}`;
     })
     .join("|")}`;
 }
@@ -299,7 +301,7 @@ async function refreshAll(reason = "timer") {
 
   try {
     const config = loadConfig(configPath);
-    const providers = await refreshProviders(config);
+    const providers = applyLastSuccessCache(await refreshProviders(config));
     const errorCount = providers.filter((provider) =>
       ["error", "expired", "missing"].includes(provider.status),
     ).length;
@@ -326,6 +328,44 @@ async function refreshAll(reason = "timer") {
 
   updateTrayTooltip();
   sendSnapshot();
+}
+
+function applyLastSuccessCache(providers) {
+  return (providers || []).map((provider) => {
+    const key = provider.id || provider.name;
+    if (!key) return provider;
+    if (isSuccessfulProvider(provider)) {
+      lastSuccessfulProviders.set(key, cloneProvider(provider));
+      return provider;
+    }
+
+    const previous = lastSuccessfulProviders.get(key);
+    if (!previous || !hasDisplayData(previous)) return provider;
+    return {
+      ...provider,
+      tiers: previous.tiers || provider.tiers,
+      balance: previous.balance || provider.balance,
+      balances: previous.balances || provider.balances,
+      usage: previous.usage || provider.usage,
+      extraUsage: previous.extraUsage || provider.extraUsage,
+      lastSuccess: {
+        queriedAt: previous.queriedAt,
+        statusText: previous.statusText,
+      },
+    };
+  });
+}
+
+function isSuccessfulProvider(provider) {
+  return ["ok", "warn", "danger", "manual"].includes(provider?.status);
+}
+
+function hasDisplayData(provider) {
+  return Boolean(provider?.balance || provider?.tiers?.length);
+}
+
+function cloneProvider(provider) {
+  return JSON.parse(JSON.stringify(provider));
 }
 
 function scheduleRefresh() {

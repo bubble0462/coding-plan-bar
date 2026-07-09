@@ -1,10 +1,15 @@
 const assert = require("assert");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const {
   parseGenericBalanceResponse,
   parseBalanceUsage,
   parseMiniMaxTiers,
   parseZhipuTokenTiers,
   windowSecondsToTierName,
+  writeJsonFileAtomic,
+  queryGrokQuota,
 } = require("../src/providers");
 const { providerTemplates, validateConfig, normalizeConfig } = require("../src/config-store");
 const { computePopupHeight } = require("../src/layout");
@@ -27,6 +32,15 @@ const {
 
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
 assert.strictEqual(windowSecondsToTierName(604800), "seven_day");
+
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-"));
+const atomicPath = path.join(tempDir, "auth.json");
+writeJsonFileAtomic(atomicPath, { account: { key: "new-access-token", refresh_token: "new-refresh-token" } });
+assert.deepStrictEqual(JSON.parse(fs.readFileSync(atomicPath, "utf8")), {
+  account: { key: "new-access-token", refresh_token: "new-refresh-token" },
+});
+assert(!fs.readdirSync(tempDir).some((name) => name.endsWith(".tmp")));
+fs.rmSync(tempDir, { recursive: true, force: true });
 
 // ===== Local token usage and API-equivalent cost estimates =====
 assert.strictEqual(normalizeModelId("openai/GPT-5.4-20260305"), "gpt-5.4");
@@ -294,4 +308,101 @@ assert.strictEqual(latest.hasUpdate, false);
 // Malformed release degrades gracefully instead of throwing.
 assert.strictEqual(buildUpdateResult("0.3.6", null).hasUpdate, false);
 
-console.log("Smoke tests passed");
+async function runGrokRefreshSmoke() {
+  const previousFetch = global.fetch;
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-grok-"));
+  try {
+    const authPath = path.join(temp, "auth.json");
+    const authDocument = {
+      account: {
+        key: "expired-access-token",
+        refresh_token: "refresh-token",
+        oidc_client_id: "grok-client-id",
+        oidc_issuer: "https://auth.x.ai",
+        expires_at: "2000-01-01T00:00:00.000Z",
+      },
+    };
+    fs.writeFileSync(authPath, JSON.stringify(authDocument, null, 2));
+
+    const calls = [];
+    global.fetch = async (url, options = {}) => {
+      calls.push({ url, options });
+      if (String(url).endsWith("/oauth2/token")) {
+        assert.strictEqual(options.method, "POST");
+        assert(String(options.body).includes("grant_type=refresh_token"));
+        return jsonResponse(200, {
+          access_token: "fresh-access-token",
+          refresh_token: "fresh-refresh-token",
+          expires_in: 3600,
+        });
+      }
+      assert.strictEqual(options.headers.Authorization, "Bearer fresh-access-token");
+      return jsonResponse(200, {
+        config: {
+          creditUsagePercent: 12,
+          currentPeriod: { end: "2026-07-12T00:00:00.000Z" },
+        },
+      });
+    };
+
+    const result = await queryGrokQuota({
+      accessToken: "expired-access-token",
+      refreshToken: "refresh-token",
+      clientId: "grok-client-id",
+      issuer: "https://auth.x.ai",
+      authPath,
+      authDocument,
+      authEntryKey: "account",
+      shouldRefresh: true,
+    });
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.tiers[0].utilization, 12);
+    assert.strictEqual(calls.length, 2);
+    const persisted = JSON.parse(fs.readFileSync(authPath, "utf8"));
+    assert.strictEqual(persisted.account.key, "fresh-access-token");
+    assert.strictEqual(persisted.account.refresh_token, "fresh-refresh-token");
+
+    let billingAttempts = 0;
+    global.fetch = async (url, options = {}) => {
+      if (String(url).includes("/v1/billing")) {
+        billingAttempts += 1;
+        if (billingAttempts === 1) {
+          assert.strictEqual(options.headers.Authorization, "Bearer stale-access-token");
+          return jsonResponse(401, { error: "unauthorized" });
+        }
+        assert.strictEqual(options.headers.Authorization, "Bearer retry-access-token");
+        return jsonResponse(200, { config: { creditUsagePercent: 9 } });
+      }
+      return jsonResponse(200, { access_token: "retry-access-token", expires_in: 3600 });
+    };
+
+    const retryResult = await queryGrokQuota({
+      accessToken: "stale-access-token",
+      refreshToken: "refresh-token",
+      clientId: "grok-client-id",
+      issuer: "https://auth.x.ai",
+      shouldRefresh: false,
+    });
+    assert.strictEqual(retryResult.success, true);
+    assert.strictEqual(retryResult.tiers[0].utilization, 9);
+    assert.strictEqual(billingAttempts, 2);
+  } finally {
+    global.fetch = previousFetch;
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+function jsonResponse(status, body) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => JSON.stringify(body),
+  };
+}
+
+runGrokRefreshSmoke()
+  .then(() => console.log("Smoke tests passed"))
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

@@ -172,7 +172,7 @@ function renderProvider(provider, index, fresh, refreshing) {
         <span class="status-pill">${escapeHtml(STATUS_TEXT[provider.status] || provider.statusText || provider.status)}</span>
       </div>
       ${body}
-      ${provider.failure ? `<p class="message failure-help"><strong>${escapeHtml(provider.failure.label)}：</strong>${escapeHtml(provider.failure.action)}</p>` : provider.message ? `<p class="message">${escapeHtml(provider.message)}</p>` : ""}
+      ${renderProviderNotice(provider)}
     </article>
   `;
 }
@@ -182,6 +182,17 @@ function providerAlertClass(provider) {
   const maxUtilization = Math.max(0, ...(provider.tiers || []).map((tier) => Number(tier.utilization || 0)));
   if (maxUtilization >= 90) return "is-attention";
   if (maxUtilization >= 75) return "is-watch";
+  return "";
+}
+
+function renderProviderNotice(provider) {
+  if (provider.failure) {
+    const prefix = provider.lastSuccess
+      ? `显示上次成功数据（${formatUpdated(provider.lastSuccess.queriedAt)}）。`
+      : "";
+    return `<p class="message failure-help"><strong>${escapeHtml(provider.failure.label)}：</strong>${escapeHtml(prefix + provider.failure.action)}</p>`;
+  }
+  if (provider.message) return `<p class="message">${escapeHtml(provider.message)}</p>`;
   return "";
 }
 
