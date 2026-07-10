@@ -9,10 +9,14 @@ const fileCache = new Map();
 
 async function collectLocalUsage(providers, now = Date.now()) {
   const requirements = usageRequirements(providers);
+  const activeFileKeys = new Set();
   const jobs = [];
-  for (const dir of requirements.codexDirs) jobs.push(readSessionTree(dir, "codex", now));
-  for (const dir of requirements.claudeDirs) jobs.push(readSessionTree(dir, "claude", now));
+  for (const dir of requirements.codexDirs) jobs.push(readSessionTree(dir, "codex", now, activeFileKeys));
+  for (const dir of requirements.claudeDirs) jobs.push(readSessionTree(dir, "claude", now, activeFileKeys));
   const groups = await Promise.all(jobs);
+  for (const key of fileCache.keys()) {
+    if (!activeFileKeys.has(key)) fileCache.delete(key);
+  }
   return dedupeEvents(groups.flat());
 }
 
@@ -44,14 +48,14 @@ function usageRequirements(providers) {
   return { codexDirs, claudeDirs };
 }
 
-async function readSessionTree(rootDir, source, now) {
+async function readSessionTree(rootDir, source, now, activeFileKeys) {
   const scanRoots = source === "codex"
     ? [path.join(rootDir, "sessions"), path.join(rootDir, "archived_sessions")]
     : [path.join(rootDir, "projects")];
   const cutoff = now - MAX_WINDOW_MS;
   const files = [];
   for (const scanRoot of scanRoots) await collectRecentJsonl(scanRoot, cutoff, files);
-  return mapLimit(files, 8, (file) => readUsageFile(file, source));
+  return mapLimit(files, 8, (file) => readUsageFile(file, source, activeFileKeys));
 }
 
 async function collectRecentJsonl(dir, cutoff, files) {
@@ -78,8 +82,9 @@ async function collectRecentJsonl(dir, cutoff, files) {
   }));
 }
 
-async function readUsageFile(file, source) {
+async function readUsageFile(file, source, activeFileKeys) {
   const key = `${source}:${file.path}`;
+  activeFileKeys?.add(key);
   const cached = fileCache.get(key);
   if (cached && cached.mtimeMs === file.mtimeMs && cached.size === file.size) return cached.events;
 

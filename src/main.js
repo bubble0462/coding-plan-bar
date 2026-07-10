@@ -16,6 +16,16 @@ const { importAccountsIntoConfig, previewAccountsImport } = require("./account-i
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { loadConfig, refreshProviders } = require("./providers");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
+const {
+  DEFAULT_TTL_MS,
+  providerFingerprint,
+  readProviderCache,
+  writeProviderCache,
+} = require("./provider-cache");
+
+const MAX_IMPORT_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_IMPORT_TEXT_LENGTH = 20 * 1024 * 1024;
+const MAX_IMPORTED_ACCOUNTS = 5000;
 
 let tray = null;
 let popupWindow = null;
@@ -24,6 +34,10 @@ let refreshTimer = null;
 let hideTimer = null;
 let revealTimer = null;
 let configPath = null;
+let providerCachePath = null;
+let refreshGeneration = 0;
+let refreshInFlight = null;
+let pendingRefreshReason = null;
 let isPopupHovered = false;
 let measuredPopupHeight = 0;
 let measuredPopupKey = "";
@@ -36,7 +50,7 @@ let currentState = {
   errorCount: 0,
   providers: [],
 };
-const lastSuccessfulProviders = new Map();
+let lastSuccessfulProviders = new Map();
 
 function createTrayIcon() {
   return nativeImage.createFromPath(path.join(__dirname, "assets", "tray-icon.png"));
@@ -45,11 +59,13 @@ function createTrayIcon() {
 function ensureConfigFile() {
   const userData = app.getPath("userData");
   configPath = path.join(userData, "config.json");
+  providerCachePath = path.join(userData, "quota-cache.json");
   if (!fs.existsSync(configPath)) {
     const examplePath = path.join(__dirname, "..", "config.example.json");
     fs.mkdirSync(userData, { recursive: true });
     fs.copyFileSync(examplePath, configPath);
   }
+  lastSuccessfulProviders = readProviderCache(providerCachePath);
   currentState.configPath = configPath;
 }
 
@@ -289,8 +305,28 @@ function updateTrayTooltip() {
 }
 
 async function refreshAll(reason = "timer") {
+  if (refreshInFlight) {
+    pendingRefreshReason = reason;
+    return refreshInFlight;
+  }
+
+  const task = refreshAllNow(reason);
+  refreshInFlight = task;
+  try {
+    return await task;
+  } finally {
+    if (refreshInFlight !== task) return;
+    refreshInFlight = null;
+    const nextReason = pendingRefreshReason;
+    pendingRefreshReason = null;
+    if (nextReason) void refreshAll(nextReason);
+  }
+}
+
+async function refreshAllNow(reason = "timer") {
   if (!configPath) return;
 
+  const generation = ++refreshGeneration;
   const startedAt = Date.now();
   currentState = {
     ...currentState,
@@ -301,7 +337,20 @@ async function refreshAll(reason = "timer") {
 
   try {
     const config = loadConfig(configPath);
-    const providers = applyLastSuccessCache(await refreshProviders(config));
+    const enabled = config.providers.filter((provider) => provider.enabled !== false);
+    const refreshedProviders = await refreshProviders(config, {
+        onProvider(snapshot, index) {
+          if (generation !== refreshGeneration) return;
+          const provider = applyLastSuccessProvider(snapshot, enabled[index]);
+          currentState = {
+            ...currentState,
+            providers: mergeProviderSnapshot(currentState.providers, provider, enabled),
+          };
+          sendSnapshot();
+        },
+      });
+    if (generation !== refreshGeneration) return snapshotPayload();
+    const providers = applyLastSuccessCache(refreshedProviders, config);
     const errorCount = providers.filter((provider) =>
       ["error", "expired", "missing"].includes(provider.status),
     ).length;
@@ -316,7 +365,9 @@ async function refreshAll(reason = "timer") {
       errorCount,
       providers,
     };
+    persistLastSuccessCache(enabled);
   } catch (error) {
+    if (generation !== refreshGeneration) return snapshotPayload();
     currentState = {
       ...currentState,
       loading: false,
@@ -328,32 +379,71 @@ async function refreshAll(reason = "timer") {
 
   updateTrayTooltip();
   sendSnapshot();
+  return snapshotPayload();
 }
 
-function applyLastSuccessCache(providers) {
-  return (providers || []).map((provider) => {
-    const key = provider.id || provider.name;
-    if (!key) return provider;
-    if (isSuccessfulProvider(provider)) {
-      lastSuccessfulProviders.set(key, cloneProvider(provider));
-      return provider;
-    }
+function applyLastSuccessCache(providers, config) {
+  const byId = new Map((config?.providers || []).map((provider) => [provider.id, provider]));
+  return (providers || []).map((provider) => applyLastSuccessProvider(provider, byId.get(provider.id)));
+}
 
-    const previous = lastSuccessfulProviders.get(key);
-    if (!previous || !hasDisplayData(previous)) return provider;
-    return {
-      ...provider,
-      tiers: previous.tiers || provider.tiers,
-      balance: previous.balance || provider.balance,
-      balances: previous.balances || provider.balances,
-      usage: previous.usage || provider.usage,
-      extraUsage: previous.extraUsage || provider.extraUsage,
-      lastSuccess: {
-        queriedAt: previous.queriedAt,
-        statusText: previous.statusText,
-      },
-    };
-  });
+function applyLastSuccessProvider(provider, configuredProvider) {
+  if (!configuredProvider) return provider;
+  const key = cacheProviderFingerprint(configuredProvider);
+  if (isSuccessfulProvider(provider)) {
+    lastSuccessfulProviders.set(key, { savedAt: Date.now(), provider: cloneProvider(provider) });
+    return provider;
+  }
+
+  const cached = lastSuccessfulProviders.get(key);
+  if (cached && Date.now() - Number(cached.savedAt || 0) > DEFAULT_TTL_MS) {
+    lastSuccessfulProviders.delete(key);
+    return provider;
+  }
+  const previous = cached?.provider;
+  if (!previous || !hasDisplayData(previous)) return provider;
+  return {
+    ...provider,
+    tiers: previous.tiers || provider.tiers,
+    balance: previous.balance || provider.balance,
+    balances: previous.balances || provider.balances,
+    usage: previous.usage || provider.usage,
+    extraUsage: previous.extraUsage || provider.extraUsage,
+    lastSuccess: {
+      queriedAt: previous.queriedAt || cached.savedAt,
+      statusText: previous.statusText,
+    },
+  };
+}
+
+function mergeProviderSnapshot(existing, provider, enabled) {
+  const snapshots = new Map((existing || []).map((item) => [item.id, item]));
+  snapshots.set(provider.id, provider);
+  return enabled.map((item) => snapshots.get(item.id)).filter(Boolean);
+}
+
+function persistLastSuccessCache(enabled) {
+  if (!providerCachePath) return;
+  const activeKeys = new Set((enabled || []).map(cacheProviderFingerprint));
+  try {
+    writeProviderCache(providerCachePath, lastSuccessfulProviders, activeKeys);
+  } catch (error) {
+    console.warn(`Unable to persist quota cache: ${error.message || error}`);
+  }
+}
+
+function cacheProviderFingerprint(provider) {
+  return providerFingerprint(provider, resolveProviderSecret(provider));
+}
+
+function resolveProviderSecret(provider = {}) {
+  if (provider.apiKey) return provider.apiKey;
+  const names = Array.isArray(provider.apiKeyEnv)
+    ? provider.apiKeyEnv
+    : provider.apiKeyEnv
+      ? [provider.apiKeyEnv]
+      : [];
+  return names.map((name) => process.env[name]).find(Boolean) || "";
 }
 
 function isSuccessfulProvider(provider) {
@@ -465,21 +555,49 @@ async function importAccountsFromFile(_event, filePath) {
 }
 
 function readImportJson(filePath) {
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) throw new Error("导入路径不是文件");
+  if (stat.size > MAX_IMPORT_FILE_BYTES) {
+    throw new Error(`导入文件过大，不能超过 ${Math.round(MAX_IMPORT_FILE_BYTES / 1024 / 1024)} MB`);
+  }
   const text = fs.readFileSync(filePath, "utf8");
   try {
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    validateImportPayload(parsed);
+    return parsed;
   } catch (error) {
+    if (error.message.includes("导入数据过大")) throw error;
     throw new Error(`JSON 解析失败：${error.message}`);
   }
 }
 
-async function previewImportedAccounts(_event, raw) {
+function parseImportRaw(raw) {
+  if (typeof raw === "string" && raw.length > MAX_IMPORT_TEXT_LENGTH) {
+    throw new Error(`粘贴内容过大，不能超过 ${Math.round(MAX_IMPORT_TEXT_LENGTH / 1024 / 1024)} MB`);
+  }
   let parsed;
   try {
     parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
   } catch (error) {
     throw new Error(`JSON 解析失败：${error.message}`);
   }
+  validateImportPayload(parsed);
+  return parsed;
+}
+
+function validateImportPayload(parsed) {
+  const candidates = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object"
+      ? [parsed.accounts, parsed.sessions, parsed.items, parsed.data].find(Array.isArray)
+      : null;
+  if (candidates && candidates.length > MAX_IMPORTED_ACCOUNTS) {
+    throw new Error(`导入数据过大，账号数量不能超过 ${MAX_IMPORTED_ACCOUNTS}`);
+  }
+}
+
+async function previewImportedAccounts(_event, raw) {
+  const parsed = parseImportRaw(raw);
   const current = readConfigFile(configPath);
   return {
     ...previewAccountsImport(current, parsed, "pasted-json"),
@@ -488,12 +606,7 @@ async function previewImportedAccounts(_event, raw) {
 }
 
 async function importAccountsFromRaw(_event, raw) {
-  let parsed;
-  try {
-    parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-  } catch (error) {
-    throw new Error(`JSON 解析失败：${error.message}`);
-  }
+  const parsed = parseImportRaw(raw);
   const current = readConfigFile(configPath);
   const imported = importAccountsIntoConfig(current, parsed, "pasted-json");
   if (imported.importedCount > 0 || imported.updatedCount > 0) {
@@ -603,7 +716,7 @@ async function downloadUpdate() {
     const downloadedPath = await downloadAsset(asset.url, (progress) => {
       updaterState = { ...updaterState, progress };
       sendUpdaterState();
-    });
+    }, asset);
     setUpdaterStatus("ready", { downloadedPath, progress: { percent: 100, downloadedBytes: asset.size || 0, totalBytes: asset.size || 0 } });
   } catch (error) {
     setUpdaterStatus("error", { error: error.message || String(error) });
@@ -682,7 +795,12 @@ function readConfigObject(parsed) {
 async function openReleaseUrl(_event, url) {
   try {
     const parsed = new URL(String(url || ""));
-    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.hostname.toLowerCase() !== "github.com" ||
+      parsed.pathname !== "/bubble0462/coding-plan-bar/releases/latest" &&
+      !parsed.pathname.startsWith("/bubble0462/coding-plan-bar/releases/tag/")
+    ) {
       throw new Error("不支持的链接地址");
     }
     return shell.openExternal(parsed.toString());
@@ -826,7 +944,7 @@ if (process.platform === "win32") {
   app.setAppUserModelId("com.bubble.coding-plan-bar");
 }
 
-const singleInstanceLock = app.requestSingleInstanceLock();
+const singleInstanceLock = process.argv.includes("--smoke-startup") || app.requestSingleInstanceLock();
 if (!singleInstanceLock) {
   app.quit();
 } else {

@@ -24,13 +24,25 @@ function normalizeProviderConfig(config) {
   return normalizeConfig(config);
 }
 
-async function refreshProviders(config) {
+async function refreshProviders(config, options = {}) {
   const enabled = config.providers.filter((provider) => provider.enabled !== false);
-  const [snapshots, localUsage] = await Promise.all([
-    Promise.all(enabled.map((provider) => refreshProvider(provider))),
-    collectLocalUsage(enabled).catch(() => []),
-  ]);
-  return snapshots.map((snapshot, index) => attachUsageToProvider(enabled[index], snapshot, localUsage, Date.now(), enabled));
+  const localUsagePromise = collectLocalUsage(enabled).catch(() => []);
+  const snapshots = new Array(enabled.length);
+  await Promise.all(
+    enabled.map(async (provider, index) => {
+      const [snapshot, localUsage] = await Promise.all([refreshProvider(provider), localUsagePromise]);
+      const attached = attachUsageToProvider(provider, snapshot, localUsage, Date.now(), enabled);
+      snapshots[index] = attached;
+      if (typeof options.onProvider === "function") {
+        try {
+          options.onProvider(attached, index, enabled);
+        } catch (_error) {
+          // Rendering callbacks must not turn a successful provider query into a failed refresh.
+        }
+      }
+    }),
+  );
+  return snapshots;
 }
 
 async function refreshProvider(provider) {
@@ -85,6 +97,7 @@ function normalizeSubscriptionProvider(provider, quota) {
     queriedAt: quota.queriedAt || Date.now(),
     tiers,
     extraUsage: quota.extraUsage || null,
+    diagnostics: quota.diagnostics || null,
   };
 }
 
@@ -459,16 +472,28 @@ function persistGrokToken(credentials, token) {
 
 function writeJsonFileAtomic(filePath, value) {
   const dir = path.dirname(filePath);
-  const tempPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.tmp`);
+  const tempPath = path.join(
+    dir,
+    `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+  );
   const content = `${JSON.stringify(value, null, 2)}\n`;
-  const fd = fs.openSync(tempPath, "w");
+  const fd = fs.openSync(tempPath, "wx");
   try {
     fs.writeFileSync(fd, content);
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
   }
-  fs.renameSync(tempPath, filePath);
+  try {
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch (_cleanupError) {
+      // Preserve the original write failure.
+    }
+    throw error;
+  }
 }
 
 async function queryCodexQuota(accessToken, accountId, tool = "codex") {
@@ -587,21 +612,40 @@ async function queryZhipuCoding(baseUrl, apiKey) {
       "Content-Type": "application/json",
       "Accept-Language": "en-US,en",
     },
+    timeoutMs: 8000,
+    retries: 2,
+    retryBaseDelayMs: 180,
   });
+  const diagnostics = {
+    endpoint: `${quotaBase}/api/monitor/usage/quota/limit`,
+    attempts: response.attempts || 1,
+    durationMs: response.durationMs || null,
+    httpStatus: response.status,
+  };
 
   if (response.status === 401 || response.status === 403) {
-    return subscriptionError("coding_plan", "expired", `Authentication failed (HTTP ${response.status})`);
+    return subscriptionError("coding_plan", "expired", `Authentication failed (HTTP ${response.status})`, response.status, diagnostics);
   }
   if (!response.ok) {
-    return subscriptionError("coding_plan", "valid", `API error (HTTP ${response.status}): ${response.text}`);
+    return subscriptionError(
+      "coding_plan",
+      "valid",
+      `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`,
+      response.status,
+      diagnostics,
+    );
   }
   if (response.json?.success === false) {
-    return subscriptionError("coding_plan", "valid", response.json?.msg || "API error");
+    return subscriptionError("coding_plan", "valid", response.json?.msg || "API error", response.status, diagnostics);
   }
 
   const data = response.json?.data;
-  if (!data) return subscriptionError("coding_plan", "valid", "响应缺少 data 字段");
-  return okSubscription("coding_plan", parseZhipuTokenTiers(data), data.level || null);
+  if (!data) return subscriptionError("coding_plan", "parse_error", "响应缺少 data 字段", response.status, diagnostics);
+  const tiers = parseZhipuTokenTiers(data);
+  if (!tiers.length) {
+    return subscriptionError("coding_plan", "parse_error", "响应中没有可识别的 GLM 额度档位", response.status, diagnostics);
+  }
+  return okSubscription("coding_plan", tiers, data.level || null, diagnostics);
 }
 
 async function queryMiniMaxCoding(apiKey, isCn) {
@@ -942,14 +986,16 @@ function parseZhipuTokenTiers(data) {
   for (const item of data.limits || []) {
     if (String(item.type || "").toLowerCase() !== "tokens_limit") continue;
 
+    const resetsAt = extractResetTime(item.nextResetTime);
     const entry = {
-      resetMs: typeof item.nextResetTime === "number" ? item.nextResetTime : null,
-      utilization: typeof item.percentage === "number" ? item.percentage : 0,
-      resetsAt: typeof item.nextResetTime === "number" ? millisToIso(item.nextResetTime) : null,
+      resetMs: resetsAt ? Date.parse(resetsAt) : null,
+      utilization: clamp(parseNumber(item.percentage, 0), 0, 100),
+      resetsAt,
     };
+    const unit = parseNumber(item.unit, null);
 
-    if (item.unit === 3 && !fiveHour) fiveHour = entry;
-    else if (item.unit === 6 && !weekly) weekly = entry;
+    if (unit === 3 && !fiveHour) fiveHour = entry;
+    else if (unit === 6 && !weekly) weekly = entry;
     else unclassified.push(entry);
   }
 
@@ -1003,8 +1049,41 @@ function zenMuxTier(name, value) {
 }
 
 async function fetchJson(url, options = {}) {
+  const {
+    timeoutMs = 10000,
+    retries = 0,
+    retryBaseDelayMs = 250,
+    ...requestOptions
+  } = options;
+  const startedAt = Date.now();
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
+    try {
+      const response = await fetchJsonOnce(url, requestOptions, timeoutMs);
+      response.attempts = attempt;
+      response.durationMs = Date.now() - startedAt;
+      if (!isRetryableStatus(response.status) || attempt > retries) return response;
+      await delay(retryDelayMs(response, attempt, retryBaseDelayMs));
+    } catch (error) {
+      lastError = error;
+      if (attempt > retries) break;
+      await delay(retryDelayMs(null, attempt, retryBaseDelayMs));
+    }
+  }
+
+  const attempts = retries + 1;
+  const elapsed = Date.now() - startedAt;
+  const reason = lastError?.name === "AbortError" ? "请求超时" : lastError?.message || "网络异常";
+  const error = new Error(`请求 ${safeRequestTarget(url)} 失败（尝试 ${attempts} 次，${elapsed}ms）：${reason}`);
+  error.cause = lastError;
+  error.attempts = attempts;
+  throw error;
+}
+
+async function fetchJsonOnce(url, options, timeoutMs) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 10000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
       ...options,
@@ -1017,10 +1096,46 @@ async function fetchJson(url, options = {}) {
     } catch (_error) {
       json = null;
     }
-    return { ok: response.ok, status: response.status, text, json };
+    return { ok: response.ok, status: response.status, text, json, headers: response.headers };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function isRetryableStatus(status) {
+  return [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
+}
+
+function retryDelayMs(response, attempt, baseDelay) {
+  const retryAfter = response?.headers?.get?.("retry-after");
+  const retryAfterSeconds = parseNumber(retryAfter, null);
+  if (retryAfterSeconds != null) return Math.min(5000, Math.max(0, retryAfterSeconds * 1000));
+  const exponential = Math.max(0, Number(baseDelay || 0)) * 2 ** Math.max(0, attempt - 1);
+  return Math.min(5000, exponential + Math.floor(Math.random() * Math.max(25, exponential * 0.25)));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeRequestTarget(value) {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.host}${parsed.pathname}`;
+  } catch (_error) {
+    return "远程接口";
+  }
+}
+
+function safeResponseExcerpt(value) {
+  return (
+    String(value || "")
+      .replace(/Bearer\s+[^\s"']+/gi, "Bearer [REDACTED]")
+      .replace(/\bsk-[a-z0-9_-]{8,}\b/gi, "sk-[REDACTED]")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 300) || "空响应"
+  );
 }
 
 function resolveApiKey(provider) {
@@ -1036,7 +1151,7 @@ function resolveApiKey(provider) {
   return null;
 }
 
-function subscriptionError(tool, status, message) {
+function subscriptionError(tool, status, message, httpStatus = null, diagnostics = null) {
   return {
     tool,
     credentialStatus: status || "valid",
@@ -1045,11 +1160,13 @@ function subscriptionError(tool, status, message) {
     tiers: [],
     extraUsage: null,
     error: message || null,
+    httpStatus,
+    diagnostics,
     queriedAt: Date.now(),
   };
 }
 
-function okSubscription(tool, tiers, credentialMessage) {
+function okSubscription(tool, tiers, credentialMessage, diagnostics = null) {
   return {
     tool,
     credentialStatus: "valid",
@@ -1058,6 +1175,7 @@ function okSubscription(tool, tiers, credentialMessage) {
     tiers,
     extraUsage: null,
     error: null,
+    diagnostics,
     queriedAt: Date.now(),
   };
 }
@@ -1101,7 +1219,11 @@ function windowSecondsToTierName(seconds) {
 }
 
 function extractResetTime(value) {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    const numeric = parseNumber(value, null);
+    if (numeric != null) return extractResetTime(numeric);
+    return Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
+  }
   if (typeof value === "number") return value < 1_000_000_000_000 ? new Date(value * 1000).toISOString() : millisToIso(value);
   return null;
 }
@@ -1159,4 +1281,5 @@ module.exports = {
   windowSecondsToTierName,
   writeJsonFileAtomic,
   queryGrokQuota,
+  queryZhipuCoding,
 };

@@ -8,10 +8,18 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const crypto = require("crypto");
 
 const REPO = "bubble0462/coding-plan-bar";
 const API_HOST = "api.github.com";
 const GITHUB_HOST = "github.com";
+const DOWNLOAD_HOSTS = new Set([
+  "github.com",
+  "objects.githubusercontent.com",
+  "release-assets.githubusercontent.com",
+  "github-releases.githubusercontent.com",
+]);
+const MAX_DOWNLOAD_REDIRECTS = 3;
 
 // Accepted Windows x64 NSIS installer asset name patterns.
 const ASSET_PATTERNS = [
@@ -89,7 +97,9 @@ function buildUpdateResult(currentVersion, release) {
   }
 
   const latestVersion = normalizeVersionLabel(release.tag_name);
-  const asset = findInstallerAsset(release);
+  const selectedAsset = findInstallerAsset(release);
+  const asset = selectedAsset && isAllowedDownloadUrl(selectedAsset.browser_download_url) ? selectedAsset : null;
+  const assetError = selectedAsset && !asset ? "安装包下载地址不受信任" : null;
   const hasUpdate = compareVersions(currentVersion, latestVersion) < 0;
 
   return {
@@ -101,12 +111,13 @@ function buildUpdateResult(currentVersion, release) {
     releaseNotes: release.body || null,
     asset: asset
       ? {
-          name: asset.name,
-          url: asset.browser_download_url,
-          size: asset.size,
-        }
-      : null,
-    error: null,
+           name: asset.name,
+           url: asset.browser_download_url,
+           size: asset.size,
+           digest: asset.digest || null,
+         }
+       : null,
+    error: assetError,
   };
 }
 
@@ -136,6 +147,11 @@ function fetchLatestReleaseFromApi({ token } = {}) {
       (res) => {
         // Follow a single redirect (GitHub occasionally redirects).
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          if (!isAllowedGitHubUrl(res.headers.location)) {
+            res.resume();
+            reject(new Error("GitHub 更新地址重定向到不受信任的主机"));
+            return;
+          }
           res.resume();
           https
             .get(res.headers.location, { headers }, (redirected) => collect(redirected, resolve, reject))
@@ -172,6 +188,10 @@ function fetchLatestReleaseFromRedirect() {
         const location = res.headers.location;
         res.resume();
         if (res.statusCode >= 300 && res.statusCode < 400 && location) {
+          if (!isAllowedGitHubUrl(location)) {
+            reject(new Error("GitHub 更新地址重定向到不受信任的主机"));
+            return;
+          }
           const tag = extractTagFromReleaseUrl(location);
           if (tag) {
             resolve(buildRedirectRelease(tag));
@@ -234,29 +254,73 @@ function collect(res, resolve, reject) {
  *
  * onProgress receives { percent, downloadedBytes, totalBytes }.
  */
-function downloadAsset(assetUrl, onProgress = () => {}) {
+function downloadAsset(assetUrl, onProgress = () => {}, metadata = {}) {
   return new Promise((resolve, reject) => {
+    let parsedUrl;
+    try {
+      parsedUrl = assertAllowedDownloadUrl(assetUrl);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
     const tempDir = path.join(os.tmpdir(), "coding-plan-bar-update");
     fs.mkdirSync(tempDir, { recursive: true });
-    const fileName = decodeURIComponent(assetUrl.split("/").pop() || "update.part");
+    let fileName;
+    try {
+      fileName = decodeURIComponent(metadata.name || path.basename(parsedUrl.pathname));
+    } catch (_error) {
+      reject(new Error("安装包文件名无法解析"));
+      return;
+    }
+    if (fileName !== path.basename(fileName) || /[\\/]/.test(fileName) || !ASSET_PATTERNS.some((pattern) => pattern.test(fileName))) {
+      reject(new Error("安装包文件名不符合 Windows x64 安装包规则"));
+      return;
+    }
+    const expectedSize = Number(metadata.size || 0);
+    const expectedDigest = normalizeSha256(metadata.digest);
+    if (metadata.digest && !expectedDigest) {
+      reject(new Error("安装包摘要格式无效"));
+      return;
+    }
     const finalPath = path.join(tempDir, fileName);
     const partPath = `${finalPath}.part`;
 
-    // If a previous complete download exists, reuse it instead of re-downloading.
-    if (fs.existsSync(finalPath)) {
-      resolve(finalPath);
-      return;
+    for (const stalePath of [finalPath, partPath]) {
+      try {
+        if (fs.existsSync(stalePath)) fs.unlinkSync(stalePath);
+      } catch (error) {
+        reject(new Error(`无法清理旧安装包：${error.message || error}`));
+        return;
+      }
     }
 
     const file = fs.createWriteStream(partPath);
     let received = 0;
     let total = 0;
+    let redirects = 0;
+    let currentRequest = null;
+    let settled = false;
 
     const handleResponse = (res) => {
       if (res.statusCode < 200 || res.statusCode >= 300) {
         if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          if (redirects >= MAX_DOWNLOAD_REDIRECTS) {
+            res.resume();
+            fail(new Error("安装包下载重定向次数过多"));
+            return;
+          }
+          let redirectUrl;
+          try {
+            redirectUrl = assertAllowedDownloadUrl(res.headers.location);
+          } catch (error) {
+            res.resume();
+            fail(error);
+            return;
+          }
+          redirects += 1;
           res.resume();
-          https.get(res.headers.location, handleResponse).on("error", fail);
+          startRequest(redirectUrl);
           return;
         }
         res.resume();
@@ -273,6 +337,9 @@ function downloadAsset(assetUrl, onProgress = () => {}) {
     };
 
     const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      currentRequest?.destroy();
       file.destroy();
       try {
         fs.unlinkSync(partPath);
@@ -282,27 +349,80 @@ function downloadAsset(assetUrl, onProgress = () => {}) {
       reject(error);
     };
 
+    function startRequest(url) {
+      currentRequest = https.get(url, handleResponse);
+      currentRequest.on("error", fail);
+      currentRequest.setTimeout(120000, () => currentRequest.destroy(new Error("下载超时")));
+    }
+
     file.on("finish", () => {
       file.close((closeError) => {
         if (closeError) {
           fail(closeError);
           return;
         }
-        // Sanity check: reject obviously empty or tiny downloads.
-        const stats = fs.statSync(partPath);
-        if (stats.size === 0) {
-          fail(new Error("下载的文件为空"));
-          return;
-        }
-        fs.renameSync(partPath, finalPath);
-        onProgress({ percent: 100, downloadedBytes: received, totalBytes: total });
-        resolve(finalPath);
+        verifyDownloadedFile(partPath, expectedSize, expectedDigest)
+          .then(() => {
+            if (settled) return;
+            fs.renameSync(partPath, finalPath);
+            settled = true;
+            onProgress({ percent: 100, downloadedBytes: received, totalBytes: total });
+            resolve(finalPath);
+          })
+          .catch(fail);
       });
     });
+    file.on("error", fail);
 
-    const req = https.get(assetUrl, handleResponse);
-    req.on("error", fail);
-    req.setTimeout(120000, () => req.destroy(new Error("下载超时")));
+    startRequest(parsedUrl.toString());
+  });
+}
+
+function isAllowedGitHubUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    return parsed.protocol === "https:" && ["api.github.com", "github.com"].includes(parsed.hostname.toLowerCase());
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isAllowedDownloadUrl(value) {
+  try {
+    const parsed = new URL(String(value || ""));
+    return parsed.protocol === "https:" && DOWNLOAD_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch (_error) {
+    return false;
+  }
+}
+
+function assertAllowedDownloadUrl(value) {
+  if (!isAllowedDownloadUrl(value)) throw new Error("安装包下载地址不受信任");
+  return new URL(String(value));
+}
+
+function normalizeSha256(value) {
+  const digest = String(value || "").trim().toLowerCase().replace(/^sha256:/, "");
+  return /^[a-f0-9]{64}$/.test(digest) ? digest : null;
+}
+
+function verifyDownloadedFile(filePath, expectedSize, expectedDigest) {
+  const stats = fs.statSync(filePath);
+  if (stats.size === 0) return Promise.reject(new Error("下载的文件为空"));
+  if (expectedSize > 0 && stats.size !== expectedSize) {
+    return Promise.reject(new Error(`安装包大小校验失败：期望 ${expectedSize}，实际 ${stats.size}`));
+  }
+  if (!expectedDigest) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => {
+      const actual = hash.digest("hex");
+      if (actual !== expectedDigest) reject(new Error("安装包 SHA256 校验失败"));
+      else resolve();
+    });
   });
 }
 

@@ -10,7 +10,14 @@ const {
   windowSecondsToTierName,
   writeJsonFileAtomic,
   queryGrokQuota,
+  queryZhipuCoding,
 } = require("../src/providers");
+const {
+  DEFAULT_TTL_MS,
+  providerFingerprint,
+  readProviderCache,
+  writeProviderCache,
+} = require("../src/provider-cache");
 const { providerTemplates, validateConfig, normalizeConfig } = require("../src/config-store");
 const { computePopupHeight } = require("../src/layout");
 const { normalizeModelId, findModelPricing, calculateCostUsd } = require("../src/model-pricing");
@@ -40,6 +47,32 @@ assert.deepStrictEqual(JSON.parse(fs.readFileSync(atomicPath, "utf8")), {
   account: { key: "new-access-token", refresh_token: "new-refresh-token" },
 });
 assert(!fs.readdirSync(tempDir).some((name) => name.endsWith(".tmp")));
+
+const cachePath = path.join(tempDir, "quota-cache.json");
+const cacheProvider = { id: "glm", kind: "coding-plan", baseUrl: "https://open.bigmodel.cn/" };
+const cacheKey = providerFingerprint(cacheProvider);
+writeProviderCache(
+  cachePath,
+  new Map([[cacheKey, { savedAt: Date.now(), provider: { id: "glm", status: "ok", tiers: [{ name: "five_hour" }] } }]]),
+  new Set([cacheKey]),
+);
+assert.strictEqual(readProviderCache(cachePath).get(cacheKey).provider.id, "glm");
+assert.notStrictEqual(
+  cacheKey,
+  providerFingerprint({ ...cacheProvider, baseUrl: "https://api.z.ai" }),
+);
+assert.notStrictEqual(
+  providerFingerprint({ ...cacheProvider, apiKey: "first-key" }),
+  providerFingerprint({ ...cacheProvider, apiKey: "second-key" }),
+);
+assert.notStrictEqual(
+  providerFingerprint(cacheProvider, "first-env-key"),
+  providerFingerprint(cacheProvider, "second-env-key"),
+);
+assert.strictEqual(
+  readProviderCache(cachePath, { now: Date.now() + DEFAULT_TTL_MS + 1 }).size,
+  0,
+);
 fs.rmSync(tempDir, { recursive: true, force: true });
 
 // ===== Local token usage and API-equivalent cost estimates =====
@@ -48,6 +81,20 @@ assert.strictEqual(findModelPricing("gpt-5.4").output, 15);
 assert.deepStrictEqual(
   (({ input, output, cacheRead }) => ({ input, output, cacheRead }))(findModelPricing("glm-5-turbo")),
   { input: 1.2, output: 4, cacheRead: 0.24 },
+);
+
+const zhipuStringTiers = parseZhipuTokenTiers({
+  limits: [
+    { type: "TOKENS_LIMIT", unit: "3", percentage: "12.5", nextResetTime: "2000000000" },
+    { type: "TOKENS_LIMIT", unit: "6", percentage: "44", nextResetTime: "2033-05-18T03:33:20.000Z" },
+  ],
+});
+assert.deepStrictEqual(
+  zhipuStringTiers.map((tier) => [tier.name, tier.utilization, Boolean(tier.resetsAt)]),
+  [
+    ["five_hour", 12.5, true],
+    ["weekly_limit", 44, true],
+  ],
 );
 assert.strictEqual(findModelPricing("glm-4.7-flash").output, 0);
 assert.strictEqual(findModelPricing("claude-mythos-5").output, 50);
@@ -289,24 +336,33 @@ assert.strictEqual(buildRedirectRelease("v0.3.7").assets[0].name, "Coding.Plan.B
 // buildUpdateResult flags a newer release and surfaces the asset.
 const available = buildUpdateResult("0.3.6", {
   tag_name: "v0.3.7",
-  html_url: "https://example.com/release",
+  html_url: "https://github.com/bubble0462/coding-plan-bar/releases/tag/v0.3.7",
   published_at: "2024-01-01T00:00:00Z",
   body: "fixes",
-  assets: [{ name: "Coding Plan Bar-Setup-0.3.7-x64.exe", browser_download_url: "https://example.com/exe", size: 100 }],
+  assets: [{ name: "Coding Plan Bar-Setup-0.3.7-x64.exe", browser_download_url: "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.7/Coding%20Plan%20Bar-Setup-0.3.7-x64.exe", size: 100, digest: "sha256:" + "a".repeat(64) }],
 });
 assert.strictEqual(available.hasUpdate, true);
 assert.strictEqual(available.latestVersion, "0.3.7");
-assert.strictEqual(available.asset.url, "https://example.com/exe");
+assert.strictEqual(
+  available.asset.url,
+  "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.7/Coding%20Plan%20Bar-Setup-0.3.7-x64.exe",
+);
 
 // Same current version means no update.
 const latest = buildUpdateResult("0.3.6", {
   tag_name: "0.3.6",
-  assets: [{ name: "Coding Plan Bar-Setup-0.3.6-x64.exe", browser_download_url: "https://example.com/exe", size: 100 }],
+  assets: [{ name: "Coding Plan Bar-Setup-0.3.6-x64.exe", browser_download_url: "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.6/Coding%20Plan%20Bar-Setup-0.3.6-x64.exe", size: 100 }],
 });
 assert.strictEqual(latest.hasUpdate, false);
 
 // Malformed release degrades gracefully instead of throwing.
 assert.strictEqual(buildUpdateResult("0.3.6", null).hasUpdate, false);
+const untrustedAsset = buildUpdateResult("0.3.6", {
+  tag_name: "v0.3.7",
+  assets: [{ name: "Coding Plan Bar-Setup-0.3.7-x64.exe", browser_download_url: "https://example.com/exe", size: 100 }],
+});
+assert.strictEqual(untrustedAsset.asset, null);
+assert.strictEqual(untrustedAsset.error, "安装包下载地址不受信任");
 
 async function runGrokRefreshSmoke() {
   const previousFetch = global.fetch;
@@ -392,6 +448,44 @@ async function runGrokRefreshSmoke() {
   }
 }
 
+async function runZhipuRequestSmoke() {
+  const previousFetch = global.fetch;
+  try {
+    let attempts = 0;
+    global.fetch = async (_url, options = {}) => {
+      attempts += 1;
+      assert.strictEqual(options.headers.Authorization, "glm-api-key");
+      if (attempts === 1) return jsonResponse(503, { message: "temporary" });
+      return jsonResponse(200, {
+        success: true,
+        data: {
+          level: "pro",
+          limits: [
+            { type: "TOKENS_LIMIT", unit: "3", percentage: "15", nextResetTime: "2000000000" },
+            { type: "TOKENS_LIMIT", unit: "6", percentage: "35", nextResetTime: "2033-05-18T03:33:20.000Z" },
+          ],
+        },
+      });
+    };
+    const recovered = await queryZhipuCoding("https://open.bigmodel.cn", "glm-api-key");
+    assert.strictEqual(recovered.success, true);
+    assert.strictEqual(recovered.diagnostics.attempts, 2);
+    assert.deepStrictEqual(recovered.tiers.map((tier) => tier.utilization), [15, 35]);
+
+    global.fetch = async () => jsonResponse(200, { success: true, data: { limits: [] } });
+    const empty = await queryZhipuCoding("https://open.bigmodel.cn", "glm-api-key");
+    assert.strictEqual(empty.success, false);
+    assert.strictEqual(empty.credentialStatus, "parse_error");
+
+    global.fetch = async () => jsonResponse(401, { message: "expired" });
+    const unauthorized = await queryZhipuCoding("https://open.bigmodel.cn", "glm-api-key");
+    assert.strictEqual(unauthorized.success, false);
+    assert.strictEqual(unauthorized.httpStatus, 401);
+  } finally {
+    global.fetch = previousFetch;
+  }
+}
+
 function jsonResponse(status, body) {
   return {
     ok: status >= 200 && status < 300,
@@ -400,7 +494,8 @@ function jsonResponse(status, body) {
   };
 }
 
-runGrokRefreshSmoke()
+runZhipuRequestSmoke()
+  .then(runGrokRefreshSmoke)
   .then(() => console.log("Smoke tests passed"))
   .catch((error) => {
     console.error(error);
