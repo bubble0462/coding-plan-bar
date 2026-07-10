@@ -15,6 +15,8 @@
 - 供应商不超过 3 个时自动适配窗口高度，超过 3 个时固定高度并滚动。
 - 图形化添加、编辑、启用或停用供应商，无需手动修改 JSON。
 - 从供应商左侧拖拽手柄调整顺序，保存后额度面板同步采用新顺序。
+- 额度面板卡片左侧也可直接拖拽排序，顺序会立即写回设置。
+- Grok/SuperGrok 支持 Grok Build CLI、Web Billing 回退、月度积分和按量付费状态。
 - 默认仅启用 Codex，其他供应商由用户按需添加。
 - 支持通用 `/v1/usage` 余额查询模板。
 - DeepSeek 人民币余额使用 `￥` 显示。
@@ -26,7 +28,7 @@
 前往 [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest) 下载最新的 Windows 安装包：
 
 ```text
-Coding Plan Bar-Setup-0.3.10-x64.exe
+Coding Plan Bar-Setup-0.3.19-x64.exe
 ```
 
 安装前请先退出正在运行的旧版本。安装向导支持选择安装目录，包括 D 盘。升级安装不会删除用户配置。
@@ -50,6 +52,7 @@ Coding Plan Bar-Setup-0.3.10-x64.exe
 - Codex 使用量读取 `%USERPROFILE%\.codex\sessions` 与 `archived_sessions` 中的本机会话 JSONL。
 - Claude 使用量读取 `%USERPROFILE%\.claude\projects` 中的本机会话 JSONL。
 - Kimi、GLM、MiniMax Coding Plan 会按日志里的模型 ID 自动归属；GLM 已覆盖 GLM-4.5/4.6/4.7、GLM-5/5-Turbo/5.1/5.2 等常用模型价格。
+- Codex 已覆盖 GPT-5.6 Sol、Terra、Luna 限量预览定价；缓存读取按输入价格的 10% 计算，缓存写入按 1.25 倍输入价格计算。
 - 请求数、Token 与成本分别按 5 小时和周额度的当前周期统计。缓存 Token 使用对应模型的缓存价格计算。
 - `估算 $` 是按公开标准 API 单价计算的等价成本，**不是订阅账户的实际扣款或账单**。模型无法识别或没有可靠公开价格时，仍显示 Token，金额显示 `$--`。
 - 兼容余额接口若返回 `usage.today`，余额卡会直接显示其中的请求数、Token 和实际消费，不再进行重复估算。
@@ -58,14 +61,16 @@ Coding Plan Bar-Setup-0.3.10-x64.exe
 
 1. 打开设置，点击左侧栏底部的「关于与更新」。
 2. 点击「检查更新」，应用会请求 GitHub Releases 获取最新版本。
-3. 发现新版本后，点击「下载更新」并在下载完成后点击「安装更新」，会启动下载好的安装程序。
+3. GitHub Release 返回有效 SHA256 时，可以点击「下载更新」并在下载完成后点击「安装更新」。
 4. 也可以点击「手动下载」打开 GitHub Release 页面自行下载。
+
+当 GitHub API 不可用或 Release 缺少 SHA256 时，应用只提示新版本并提供手动下载入口，不会下载或启动未校验的安装包。
 
 默认开启「启动时自动检查更新」：应用启动时只在后台检查一次，发现新版本会在导航项提示，**不会自动下载或安装**，需要你手动确认。可在「关于与更新」页关闭该开关，关闭后重启应用不会再主动请求更新。
 
 ## 支持的额度来源
 
-- 官方订阅：Codex、Claude。
+- 官方订阅：Codex、Claude、Grok/SuperGrok。
 - Coding Plan：Kimi For Coding、Zhipu GLM、MiniMax，以及兼容的 ZenMux 格式。
 - API 余额：DeepSeek、Kimi/Moonshot、OpenRouter、SiliconFlow。
 - 通用余额：依次尝试 `{baseUrl}/v1/usage`、`{baseUrl}/usage` 和完整 `baseUrl`。
@@ -100,16 +105,16 @@ npm run dist
 
 ## 安全说明
 
-- API Key 保存在当前 Windows 用户的配置目录中，不会上传到项目仓库。
+- API Key 和应用内导入的 OAuth token 使用 Electron safeStorage/Windows DPAPI 加密，只能由当前 Windows 用户解密，不会上传到项目仓库。
 - Token 统计只读取本机会话文件中的时间、模型和 usage 字段，不读取或上传对话正文。
 - 建议优先使用环境变量配置 API Key。
 - 部分额度接口并非公开稳定 API，供应商变更接口后可能需要更新适配。
 - 使用中转站时，请自行确认其可信度以及 API Key 的使用范围。
-- 更新功能只从本仓库 `bubble0462/coding-plan-bar` 的 GitHub Release 读取，只接受 Windows x64 的 NSIS 安装包；安装包先写入临时路径，下载完成且大小正常后才会被标记为可安装。
+- 更新功能只从本仓库 `bubble0462/coding-plan-bar` 的 GitHub Release 读取，只接受带 SHA256 的 Windows x64 NSIS 安装包；下载完成后会同时校验大小与 SHA256。
 
 ## 致谢
 
-项目设计和供应商适配思路参考了 [codexbar](https://github.com/iamzjt-front-end/codexbar) 与 [cc-switch](https://github.com/farion1231/cc-switch)。
+项目设计和供应商适配思路参考了 [codexbar](https://github.com/iamzjt-front-end/codexbar)、[CodexBar](https://github.com/steipete/CodexBar) 与 [cc-switch](https://github.com/farion1231/cc-switch)。
 
 ## License
 

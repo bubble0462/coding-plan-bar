@@ -31,7 +31,8 @@ function estimateProviderHeight(provider) {
 
   const tierCount = Math.max(1, Array.isArray(provider.tiers) ? provider.tiers.length : 0);
   const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
-  return 64 + tierCount * 46 + usageCount * 17 + Math.max(0, tierCount - 1) * 8 + messageHeight;
+  const billingHeight = provider.tool === "grok" && provider.extraUsage ? 26 : 0;
+  return 64 + tierCount * 46 + usageCount * 17 + Math.max(0, tierCount - 1) * 8 + billingHeight + messageHeight;
 }
 
 module.exports = {

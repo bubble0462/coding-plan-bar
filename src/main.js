@@ -7,11 +7,21 @@ const {
   dialog,
   nativeImage,
   screen,
+  safeStorage,
   shell,
 } = require("electron");
 const fs = require("fs");
 const path = require("path");
-const { readConfigFile, writeConfigFile, providerTemplates } = require("./config-store");
+const {
+  readConfigFile,
+  writeConfigFile,
+  providerTemplates,
+  configureSecretStorage,
+  migrateConfigSecrets,
+  normalizeStoredConfig,
+  configForRenderer,
+  mergeRendererConfig,
+} = require("./config-store");
 const { importAccountsIntoConfig, previewAccountsImport } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { loadConfig, refreshProviders } = require("./providers");
@@ -65,6 +75,7 @@ function ensureConfigFile() {
     fs.mkdirSync(userData, { recursive: true });
     fs.copyFileSync(examplePath, configPath);
   }
+  migrateConfigSecrets(configPath);
   lastSuccessfulProviders = readProviderCache(providerCachePath);
   currentState.configPath = configPath;
 }
@@ -539,7 +550,7 @@ async function importAccountsFromFile(_event, filePath) {
     scheduleRefresh();
     return {
       ...imported,
-      config: saved,
+      config: configForRenderer(saved),
       selectedId: imported.selectedId,
       configPath,
       filePath,
@@ -616,7 +627,7 @@ async function importAccountsFromRaw(_event, raw) {
     scheduleRefresh();
     return {
       ...imported,
-      config: saved,
+      config: configForRenderer(saved),
       selectedId: imported.selectedId,
       configPath,
       sourceType: "paste",
@@ -746,16 +757,16 @@ async function installUpdate() {
 }
 
 async function backupConfigFile() {
-  const current = readConfigFile(configPath);
+  const current = fs.readFileSync(configPath, "utf8");
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const result = await dialog.showSaveDialog(settingsWindow || undefined, {
-    title: "备份配置文件（包含敏感 token）",
+    title: "备份加密配置文件",
     defaultPath: path.join(app.getPath("documents"), `coding-plan-bar-config-${stamp}.json`),
     filters: [{ name: "JSON 文件", extensions: ["json"] }],
   });
   if (result.canceled || !result.filePath) return { canceled: true };
-  fs.writeFileSync(result.filePath, `${JSON.stringify(current, null, 2)}\n`, "utf8");
-  return { filePath: result.filePath, message: "配置已备份，请妥善保存这个包含密钥的文件" };
+  fs.writeFileSync(result.filePath, current, "utf8");
+  return { filePath: result.filePath, message: "配置已加密备份；凭据仅能由当前 Windows 用户解密" };
 }
 
 async function chooseRestoreConfigFile() {
@@ -784,12 +795,11 @@ async function confirmRestoreConfig(_event, token) {
   syncPopupProvidersToConfig(saved);
   await refreshAll("restore");
   scheduleRefresh();
-  return { config: saved, configPath, message: "配置已恢复并刷新额度" };
+  return { config: configForRenderer(saved), configPath, message: "配置已恢复并刷新额度" };
 }
 
 function readConfigObject(parsed) {
-  const { normalizeConfig } = require("./config-store");
-  return normalizeConfig(parsed);
+  return normalizeStoredConfig(parsed);
 }
 
 async function openReleaseUrl(_event, url) {
@@ -824,7 +834,7 @@ async function maybeAutoCheckOnStartup() {
 
 function getConfigForSettings() {
   return {
-    config: readConfigFile(configPath),
+    config: configForRenderer(readConfigFile(configPath)),
     configPath,
     templates: providerTemplates(),
     snapshot: snapshotPayload(),
@@ -832,27 +842,62 @@ function getConfigForSettings() {
 }
 
 async function saveConfigFromSettings(_event, config) {
-  const saved = writeConfigFile(configPath, config);
+  const current = readConfigFile(configPath);
+  const saved = writeConfigFile(configPath, mergeRendererConfig(config, current));
   syncPopupProvidersToConfig(saved);
   await refreshAll("config");
   scheduleRefresh();
-  return { config: saved, configPath };
+  return { config: configForRenderer(saved), configPath };
 }
 
 // Drop deleted/disabled providers from the popup immediately so its height
 // shrinks without waiting for the network refresh to finish.
 function syncPopupProvidersToConfig(config) {
   if (!popupWindow) return;
-  const enabledIds = new Set(
-    config.providers
-      .filter((provider) => provider.enabled !== false)
-      .map((provider) => provider.id),
-  );
-  const next = currentState.providers.filter((provider) => enabledIds.has(provider.id));
-  if (next.length === currentState.providers.length) return;
+  const enabled = config.providers.filter((provider) => provider.enabled !== false);
+  const snapshots = new Map(currentState.providers.map((provider) => [provider.id, provider]));
+  const next = enabled.map((provider) => snapshots.get(provider.id)).filter(Boolean);
+  const currentIds = currentState.providers.map((provider) => provider.id).join("|");
+  const nextIds = next.map((provider) => provider.id).join("|");
+  if (nextIds === currentIds) return;
   invalidateMeasuredPopupHeight();
   currentState = { ...currentState, providers: next };
   sendSnapshot();
+}
+
+function reorderPopupProviders(_event, providerIds) {
+  const requested = Array.isArray(providerIds) ? providerIds.map(String) : [];
+  const config = readConfigFile(configPath);
+  const enabled = config.providers.filter((provider) => provider.enabled !== false);
+  const enabledIds = enabled.map((provider) => provider.id);
+  if (
+    requested.length !== enabledIds.length ||
+    new Set(requested).size !== requested.length ||
+    requested.some((id) => !enabledIds.includes(id))
+  ) {
+    throw new Error("供应商顺序数据无效，请刷新后重试");
+  }
+
+  const ordered = requested.map((id) => enabled.find((provider) => provider.id === id));
+  let enabledIndex = 0;
+  config.providers = config.providers.map((provider) =>
+    provider.enabled === false ? provider : ordered[enabledIndex++],
+  );
+  const saved = writeConfigFile(configPath, config);
+  const snapshots = new Map(currentState.providers.map((provider) => [provider.id, provider]));
+  currentState = {
+    ...currentState,
+    providers: requested.map((id) => snapshots.get(id)).filter(Boolean),
+  };
+  invalidateMeasuredPopupHeight();
+  sendSnapshot();
+  if (settingsWindow && !settingsWindow.webContents.isDestroyed()) {
+    settingsWindow.webContents.send("config:changed", {
+      config: configForRenderer(saved),
+      configPath,
+    });
+  }
+  return { providerIds: requested };
 }
 
 function createTray() {
@@ -885,6 +930,7 @@ function createTray() {
 }
 
 async function startApp() {
+  configureSecretStorage(safeStorage);
   ensureConfigFile();
   Menu.setApplicationMenu(null);
 
@@ -927,6 +973,7 @@ async function startApp() {
     }
     resizePopupToHeight(height);
   });
+  ipcMain.handle("quota:reorder-providers", reorderPopupProviders);
   ipcMain.handle("quota:quit", () => app.quit());
 
   ipcMain.handle("updater:check", () => checkForUpdates({ silent: false }));

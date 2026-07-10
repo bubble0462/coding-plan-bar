@@ -7,6 +7,8 @@ const countArg = process.argv.find((arg) => arg.startsWith("--count="));
 const sequenceArg = process.argv.find((arg) => arg.startsWith("--sequence="));
 const debugLayout = process.argv.includes("--debug-layout");
 const balanceOnly = process.argv.includes("--balance-only");
+const reorderTest = process.argv.includes("--reorder");
+const grokOnly = process.argv.includes("--grok");
 const providerCount = countArg ? Number(countArg.split("=")[1]) : null;
 const providerSequence = sequenceArg
   ? sequenceArg
@@ -17,6 +19,10 @@ const providerSequence = sequenceArg
   : null;
 const outputSuffix = balanceOnly
   ? "-balance"
+  : grokOnly
+    ? "-grok"
+  : reorderTest
+    ? "-reorder"
   : providerSequence?.length
   ? `-${providerSequence.join("-to-")}`
   : Number.isFinite(providerCount)
@@ -29,6 +35,7 @@ app.setPath("userData", captureUserDataPath);
 const now = Date.now();
 const sampleProviders = [
   {
+    id: "codex",
     name: "Codex",
     kind: "official-subscription",
     kindLabel: "官方订阅",
@@ -53,6 +60,7 @@ const sampleProviders = [
     ],
   },
   {
+    id: "claude",
     name: "Claude",
     kind: "official-subscription",
     kindLabel: "官方订阅",
@@ -79,6 +87,7 @@ const sampleProviders = [
     ],
   },
   {
+    id: "glm",
     name: "GLM Coding Plan",
     kind: "coding-plan",
     kindLabel: "Coding Plan",
@@ -103,6 +112,7 @@ const sampleProviders = [
     ],
   },
   {
+    id: "kimi",
     name: "Kimi Coding",
     kind: "coding-plan",
     kindLabel: "Coding Plan",
@@ -127,6 +137,7 @@ const sampleProviders = [
     ],
   },
   {
+    id: "deepseek",
     name: "DeepSeek",
     kind: "balance",
     kindLabel: "API 余额",
@@ -153,11 +164,51 @@ const sampleProviders = [
       currency: "USD",
     },
   },
+  {
+    id: "grok",
+    name: "Grok Build",
+    kind: "official-subscription",
+    tool: "grok",
+    kindLabel: "官方订阅",
+    planLabel: "SuperGrok",
+    status: "ok",
+    statusText: "可用",
+    tiers: [
+      {
+        name: "grok_limit",
+        label: "周期限额",
+        utilization: 25,
+        resetsAt: new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        name: "grok_build",
+        label: "GrokBuild 使用",
+        utilization: 25,
+        resetsAt: new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        name: "grok_monthly_credits",
+        label: "月度积分",
+        utilization: 93.35,
+        usedValueUsd: 140.03,
+        maxValueUsd: 150,
+        resetsAt: new Date(now + 21 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    ],
+    extraUsage: {
+      isEnabled: false,
+      monthlyLimit: 30,
+      usedCredits: 0,
+      currency: "USD",
+    },
+  },
 ];
 
 function sampleSnapshotFor(count) {
   const providers = balanceOnly
     ? sampleProviders.slice(-1)
+    : grokOnly
+      ? sampleProviders.filter((provider) => provider.id === "grok")
     : Number.isFinite(count)
       ? sampleProviders.slice(0, count)
       : sampleProviders;
@@ -195,6 +246,12 @@ async function main() {
       captureWindow.setResizable(false);
     }
   });
+  ipcMain.handle("quota:reorder-providers", (_event, ids) => {
+    const order = new Map(ids.map((id, index) => [id, index]));
+    firstSnapshot.providers.sort((a, b) => order.get(a.id) - order.get(b.id));
+    captureWindow?.webContents.send("quota:snapshot", firstSnapshot);
+    return { providerIds: ids };
+  });
   ipcMain.handle("quota:quit", () => {});
   ipcMain.handle("config:get", () => ({}));
   ipcMain.handle("config:save", () => ({}));
@@ -228,6 +285,7 @@ async function main() {
     }
   `);
   const measuredHeights = [];
+  let reorderCompleted = false;
   for (const snapshot of snapshots) {
     const renderSnapshotScript = `
       var nextSnapshot = ${JSON.stringify(snapshot)};
@@ -253,6 +311,36 @@ async function main() {
       throw new Error(
         `Popup screenshot expected ${snapshot.providers.length} providers, rendered ${renderedProviderCount}`,
       );
+    }
+    if (reorderTest && !reorderCompleted) {
+      const triggered = await captureWindow.webContents.executeJavaScript(`
+        (() => {
+          const handles = document.querySelectorAll('[data-provider-drag]');
+          const target = document.querySelector('[data-provider-id="glm"]');
+          if (handles.length < 3 || !target) return false;
+          const transfer = new DataTransfer();
+          handles[0].dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer }));
+          target.dispatchEvent(new DragEvent('dragover', {
+            bubbles: true,
+            clientY: target.getBoundingClientRect().bottom - 1,
+            dataTransfer: transfer,
+          }));
+          target.dispatchEvent(new DragEvent('drop', {
+            bubbles: true,
+            clientY: target.getBoundingClientRect().bottom - 1,
+            dataTransfer: transfer,
+          }));
+          handles[0].dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: transfer }));
+          return true;
+        })()
+      `);
+      if (!triggered) throw new Error("Popup provider reorder controls were not rendered");
+      await wait(180);
+      const order = await captureWindow.webContents.executeJavaScript(
+        `Array.from(document.querySelectorAll('[data-provider-id]')).map((node) => node.dataset.providerId).join(',')`,
+      );
+      if (!order.startsWith("claude,glm,codex")) throw new Error(`Popup provider reorder failed: ${order}`);
+      reorderCompleted = true;
     }
     await wait(250);
     if (debugLayout) {
@@ -294,6 +382,14 @@ async function main() {
     throw new Error(`Popup width changed unexpectedly: ${finalWidth}`);
   }
   await wait(400);
+  if (reorderTest) {
+    const finalOrder = await captureWindow.webContents.executeJavaScript(
+      `Array.from(document.querySelectorAll('[data-provider-id]')).map((node) => node.dataset.providerId).join(',')`,
+    );
+    if (!finalOrder.startsWith("claude,glm,codex")) {
+      throw new Error(`Popup provider order was not persistent: ${finalOrder}`);
+    }
+  }
 
   const image = await captureWindow.capturePage();
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });

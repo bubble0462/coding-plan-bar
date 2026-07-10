@@ -10,7 +10,9 @@ const {
   windowSecondsToTierName,
   writeJsonFileAtomic,
   queryGrokQuota,
+  normalizeGrokBilling,
   queryZhipuCoding,
+  refreshProviders,
 } = require("../src/providers");
 const {
   DEFAULT_TTL_MS,
@@ -18,7 +20,17 @@ const {
   readProviderCache,
   writeProviderCache,
 } = require("../src/provider-cache");
-const { providerTemplates, validateConfig, normalizeConfig } = require("../src/config-store");
+const {
+  providerTemplates,
+  validateConfig,
+  normalizeConfig,
+  readConfigFile,
+  writeConfigFile,
+  configureSecretStorage,
+  configForRenderer,
+  mergeRendererConfig,
+} = require("../src/config-store");
+const { SECRET_MASK } = require("../src/secret-store");
 const { computePopupHeight } = require("../src/layout");
 const { normalizeModelId, findModelPricing, calculateCostUsd } = require("../src/model-pricing");
 const {
@@ -26,6 +38,7 @@ const {
   parseClaudeJsonl,
   aggregateTierUsage,
   matchesProvider,
+  matchingUsageEvents,
 } = require("../src/session-usage");
 const {
   parseVersion,
@@ -35,6 +48,7 @@ const {
   buildUpdateResult,
   extractTagFromReleaseUrl,
   buildRedirectRelease,
+  verifyDownloadedFile,
 } = require("../src/updater");
 
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
@@ -79,6 +93,12 @@ fs.rmSync(tempDir, { recursive: true, force: true });
 assert.strictEqual(normalizeModelId("openai/GPT-5.4-20260305"), "gpt-5.4");
 assert.strictEqual(findModelPricing("gpt-5.4").output, 15);
 assert.deepStrictEqual(
+  (({ input, output, cacheRead, cacheCreation, preview }) => ({ input, output, cacheRead, cacheCreation, preview }))(findModelPricing("gpt-5.6-sol")),
+  { input: 5, output: 30, cacheRead: 0.5, cacheCreation: 6.25, preview: true },
+);
+assert.strictEqual(findModelPricing("gpt-5.6-codex-terra-2026-07-01").output, 15);
+assert.strictEqual(findModelPricing("gpt-5.6-luna").cacheRead, 0.1);
+assert.deepStrictEqual(
   (({ input, output, cacheRead }) => ({ input, output, cacheRead }))(findModelPricing("glm-5-turbo")),
   { input: 1.2, output: 4, cacheRead: 0.24 },
 );
@@ -99,6 +119,7 @@ assert.deepStrictEqual(
 assert.strictEqual(findModelPricing("glm-4.7-flash").output, 0);
 assert.strictEqual(findModelPricing("claude-mythos-5").output, 50);
 assert.strictEqual(findModelPricing("claude-sonnet-5").input, 2);
+assert.strictEqual(findModelPricing("claude-sonnet-5", Date.parse("2026-09-01T00:00:00Z")), null);
 assert.deepStrictEqual(
   (({ input, output, cacheRead }) => ({ input, output, cacheRead }))(findModelPricing("deepseek-v4-pro")),
   { input: 0.435, output: 0.87, cacheRead: 0.003625 },
@@ -154,6 +175,21 @@ assert(matchesProvider(
   { kind: "balance", baseUrl: "https://api.deepseek.com" },
   { model: "deepseek-v4-flash" },
 ));
+
+const identifiedCodexEvent = { source: "codex", model: "gpt-5.6-sol", accountId: "acct-1" };
+const singleCodexProvider = { id: "codex", kind: "official-subscription", tool: "codex" };
+assert.deepStrictEqual(
+  matchingUsageEvents(singleCodexProvider, [identifiedCodexEvent], [singleCodexProvider]),
+  [identifiedCodexEvent],
+);
+assert.strictEqual(
+  matchingUsageEvents(
+    singleCodexProvider,
+    [identifiedCodexEvent],
+    [singleCodexProvider, { id: "codex-2", kind: "official-subscription", tool: "codex" }],
+  ),
+  null,
+);
 
 assert.deepStrictEqual(
   parseBalanceUsage({
@@ -354,6 +390,7 @@ const latest = buildUpdateResult("0.3.6", {
   assets: [{ name: "Coding Plan Bar-Setup-0.3.6-x64.exe", browser_download_url: "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.6/Coding%20Plan%20Bar-Setup-0.3.6-x64.exe", size: 100 }],
 });
 assert.strictEqual(latest.hasUpdate, false);
+assert.strictEqual(latest.asset, null);
 
 // Malformed release degrades gracefully instead of throwing.
 assert.strictEqual(buildUpdateResult("0.3.6", null).hasUpdate, false);
@@ -361,6 +398,13 @@ const untrustedAsset = buildUpdateResult("0.3.6", {
   tag_name: "v0.3.7",
   assets: [{ name: "Coding Plan Bar-Setup-0.3.7-x64.exe", browser_download_url: "https://example.com/exe", size: 100 }],
 });
+const unsignedAsset = buildUpdateResult("0.3.6", {
+  tag_name: "v0.3.7",
+  html_url: "https://github.com/bubble0462/coding-plan-bar/releases/tag/v0.3.7",
+  assets: [{ name: "Coding Plan Bar-Setup-0.3.7-x64.exe", browser_download_url: "https://github.com/bubble0462/coding-plan-bar/releases/download/v0.3.7/Coding%20Plan%20Bar-Setup-0.3.7-x64.exe", size: 100 }],
+});
+assert.strictEqual(unsignedAsset.asset, null);
+assert(unsignedAsset.error.includes("SHA256"));
 assert.strictEqual(untrustedAsset.asset, null);
 assert.strictEqual(untrustedAsset.error, "安装包下载地址不受信任");
 
@@ -410,7 +454,7 @@ async function runGrokRefreshSmoke() {
       authDocument,
       authEntryKey: "account",
       shouldRefresh: true,
-    });
+    }, { skipCli: true, skipWeb: true });
     assert.strictEqual(result.success, true);
     assert.strictEqual(result.tiers[0].utilization, 12);
     assert.strictEqual(calls.length, 2);
@@ -438,13 +482,156 @@ async function runGrokRefreshSmoke() {
       clientId: "grok-client-id",
       issuer: "https://auth.x.ai",
       shouldRefresh: false,
-    });
+    }, { skipCli: true, skipWeb: true });
     assert.strictEqual(retryResult.success, true);
     assert.strictEqual(retryResult.tiers[0].utilization, 9);
     assert.strictEqual(billingAttempts, 2);
   } finally {
     global.fetch = previousFetch;
     fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+async function runGrokSourceSmoke() {
+  const rpcResult = await queryGrokQuota(
+    { loginMethod: "SuperGrok", accountEmail: "user@example.com" },
+    {
+      rpcFetcher: async () => ({
+        billingCycle: {
+          billingPeriodStart: "2026-07-01T00:00:00Z",
+          billingPeriodEnd: "2026-08-01T00:00:00Z",
+        },
+        monthlyLimit: { val: 15000 },
+        onDemandCap: { val: 3000 },
+        on_demand_enabled: false,
+        usage: {
+          includedUsed: { val: 14003 },
+          onDemandUsed: { val: 0 },
+          totalUsed: { val: 14003 },
+        },
+      }),
+      webFetcher: async () => {
+        throw new Error("web fallback should not run");
+      },
+    },
+  );
+  assert.strictEqual(rpcResult.success, true);
+  assert.strictEqual(rpcResult.planLabel, "SuperGrok");
+  assert.strictEqual(rpcResult.diagnostics.source, "grok-cli");
+  assert.strictEqual(rpcResult.tiers[0].name, "grok_monthly_credits");
+  assert.strictEqual(rpcResult.tiers[0].usedValueUsd, 140.03);
+  assert.strictEqual(rpcResult.tiers[0].maxValueUsd, 150);
+  assert.strictEqual(rpcResult.extraUsage.isEnabled, false);
+
+  const webResult = await queryGrokQuota(
+    { accessToken: "valid", loginMethod: "SuperGrok" },
+    {
+      rpcFetcher: async () => {
+        throw new Error("method not found");
+      },
+      webFetcher: async () => ({
+        creditUsagePercent: 25,
+        billingPeriodEnd: "2026-07-15T07:20:00Z",
+      }),
+    },
+  );
+  assert.strictEqual(webResult.success, true);
+  assert.strictEqual(webResult.diagnostics.source, "grok-web");
+  assert.strictEqual(webResult.tiers[0].name, "grok_build");
+  assert.strictEqual(webResult.tiers[0].utilization, 25);
+
+  const normalized = normalizeGrokBilling(
+    {
+      weeklyUsagePercent: 25,
+      creditUsagePercent: 25,
+      monthlyLimit: { val: 15000 },
+      usage: { totalUsed: { val: 14003 } },
+      billingPeriodEnd: "2026-08-01T00:00:00Z",
+    },
+    { loginMethod: "SuperGrok" },
+    { source: "fixture", fallbacks: [] },
+  );
+  assert.deepStrictEqual(normalized.tiers.map((tier) => tier.name), [
+    "grok_limit",
+    "grok_build",
+    "grok_monthly_credits",
+  ]);
+}
+
+async function runIncrementalRefreshSmoke() {
+  let finishUsage;
+  const usageReady = new Promise((resolve) => {
+    finishUsage = resolve;
+  });
+  const phases = [];
+  const task = refreshProviders(
+    {
+      providers: [{ id: "manual", name: "Manual", kind: "manual", enabled: true, tiers: [] }],
+    },
+    {
+      refreshProvider: async () => ({
+        id: "manual",
+        name: "Manual",
+        kind: "manual",
+        status: "manual",
+        tiers: [],
+      }),
+      collectLocalUsage: () => usageReady,
+      onProvider: (_snapshot, _index, _enabled, metadata) => phases.push(metadata.phase),
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepStrictEqual(phases, ["quota"]);
+  finishUsage([]);
+  await task;
+  assert.deepStrictEqual(phases, ["quota", "usage"]);
+}
+
+async function runSecretStorageSmoke() {
+  const secretDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-secret-"));
+  const secretPath = path.join(secretDir, "config.json");
+  const fakeSafeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => Buffer.from(`protected:${value}`, "utf8"),
+    decryptString: (value) => value.toString("utf8").replace(/^protected:/, ""),
+  };
+  try {
+    configureSecretStorage(fakeSafeStorage);
+    writeConfigFile(secretPath, {
+      refreshIntervalSeconds: 300,
+      providers: [{
+        id: "proxy",
+        name: "Proxy",
+        kind: "balance",
+        baseUrl: "https://example.com",
+        apiKey: "super-secret-key",
+        enabled: true,
+      }],
+    });
+    const stored = fs.readFileSync(secretPath, "utf8");
+    assert(!stored.includes("super-secret-key"));
+    assert(stored.includes("apiKeyEncrypted"));
+    const revealed = readConfigFile(secretPath);
+    assert.strictEqual(revealed.providers[0].apiKey, "super-secret-key");
+    const rendererConfig = configForRenderer(revealed);
+    assert.strictEqual(rendererConfig.providers[0].apiKey, SECRET_MASK);
+    assert.strictEqual(
+      mergeRendererConfig(rendererConfig, revealed).providers[0].apiKey,
+      "super-secret-key",
+    );
+  } finally {
+    configureSecretStorage(null);
+    fs.rmSync(secretDir, { recursive: true, force: true });
+  }
+}
+
+async function runUpdaterIntegritySmoke() {
+  const file = path.join(os.tmpdir(), `coding-plan-bar-update-${process.pid}.exe`);
+  fs.writeFileSync(file, "installer");
+  try {
+    await assert.rejects(() => verifyDownloadedFile(file, 9, null), /SHA256/);
+  } finally {
+    fs.rmSync(file, { force: true });
   }
 }
 
@@ -496,6 +683,10 @@ function jsonResponse(status, body) {
 
 runZhipuRequestSmoke()
   .then(runGrokRefreshSmoke)
+  .then(runGrokSourceSmoke)
+  .then(runIncrementalRefreshSmoke)
+  .then(runSecretStorageSmoke)
+  .then(runUpdaterIntegritySmoke)
   .then(() => console.log("Smoke tests passed"))
   .catch((error) => {
     console.error(error);

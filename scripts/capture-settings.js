@@ -309,11 +309,11 @@ async function main() {
   if (showReorder) {
     window.showInactive();
     await window.webContents.insertCSS(`.drag-handle { opacity: 1 !important; }`);
-    const reordered = await window.webContents.executeJavaScript(`
+    const reorderResult = await window.webContents.executeJavaScript(`
       (() => {
         const handle = document.querySelector('.drag-handle[data-id="codex"]');
         const target = document.querySelector('.provider-item[data-id="deepseek"]');
-        if (!handle || !target) return false;
+        if (!handle || !target) return { missing: true };
         const dataTransfer = new DataTransfer();
         handle.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
         const rect = target.getBoundingClientRect();
@@ -330,10 +330,15 @@ async function main() {
           dataTransfer,
         }));
         const ids = [...document.querySelectorAll('.provider-item')].map((row) => row.dataset.id);
-        return ids.join(',') === 'deepseek,codex' && document.querySelector('.status')?.textContent.includes('保存后同步');
+        return {
+          ids: ids.join(','),
+          status: document.querySelector('.status')?.textContent || '',
+        };
       })()
     `);
-    if (!reordered) throw new Error("Provider drag reorder did not update the provider array and status");
+    if (reorderResult.ids !== "deepseek,codex" || !reorderResult.status.includes("保存后同步")) {
+      throw new Error(`Provider drag reorder did not update the provider array and status: ${JSON.stringify(reorderResult)}`);
+    }
     await wait(380);
   }
 

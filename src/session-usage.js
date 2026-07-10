@@ -287,20 +287,21 @@ function matchingUsageEvents(provider, events, allProviders = []) {
   const providerMatches = (events || []).filter((event) => matchesProvider(provider, event));
   if (!providerMatches.length) return [];
 
+  const sameFamilyProviders = (allProviders || []).filter(
+    (item) => supportsUsage(item) && providerFamilyKey(item) === providerFamilyKey(provider),
+  );
+  // A single configured account owns every matching event in its provider family,
+  // even when the local log has a richer identity than config.json.
+  if (sameFamilyProviders.length <= 1) return providerMatches;
+
   const ownMatches = providerMatches.filter((event) => matchesProviderIdentity(provider, event));
   if (ownMatches.length) return ownMatches;
 
   const providerIdentity = providerUsageIdentity(provider);
-  if (!providerIdentity) {
-    return providerMatches.filter((event) => !eventUsageIdentity(event));
-  }
-
-  const sameFamilyProviders = (allProviders || []).filter(
-    (item) => supportsUsage(item) && providerFamilyKey(item) === providerFamilyKey(provider),
-  );
-  const hasIdentifiedEventsForFamily = providerMatches.some((event) => eventUsageIdentity(event));
-  if (hasIdentifiedEventsForFamily) return null;
-  return sameFamilyProviders.length <= 1 ? providerMatches.filter((event) => !eventUsageIdentity(event)) : null;
+  // Multiple accounts without a usable identity are ambiguous. Returning null
+  // deliberately renders no estimate instead of duplicating or silently losing usage.
+  if (!providerIdentity) return null;
+  return null;
 }
 
 function matchesProviderIdentity(provider, event) {
@@ -423,5 +424,6 @@ module.exports = {
   aggregateTierUsage,
   aggregateWindowUsage,
   matchesProvider,
+  matchingUsageEvents,
   tierDurationMs,
 };

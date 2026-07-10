@@ -15,6 +15,8 @@ const ICONS = {
     '<svg class="icon icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></svg>',
   settings:
     '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
+  grip:
+    '<svg viewBox="0 0 16 20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="4" r="1.25"/><circle cx="11" cy="4" r="1.25"/><circle cx="5" cy="10" r="1.25"/><circle cx="11" cy="10" r="1.25"/><circle cx="5" cy="16" r="1.25"/><circle cx="11" cy="16" r="1.25"/></svg>',
 };
 
 let snapshot = {
@@ -29,6 +31,7 @@ let lastLayoutKey = "";
 let layoutReportQueued = false;
 let hasEntered = false;
 let prevSnapshotUpdatedAt = null;
+let draggedProviderId = null;
 
 window.codingPlanBar.onSnapshot((next) => {
   const nextLayoutKey = next.layoutKey || providerLayoutKey(next.providers);
@@ -100,7 +103,7 @@ function render(isDataRefresh = false) {
       </header>
 
       <section class="provider-list ${providers.length > 3 ? "is-scrollable" : "is-static"}">
-        ${providers.length ? providers.map((provider, index) => renderProvider(provider, index, fresh, refreshingClass)).join("") : renderEmpty()}
+        ${providers.length ? providers.map((provider, index) => renderProvider(provider, index, fresh, refreshingClass, providers.length > 1)).join("") : renderEmpty()}
       </section>
 
       ${snapshot.fatalError ? `<div class="fatal">${escapeHtml(snapshot.fatalError)}</div>` : ""}
@@ -123,6 +126,7 @@ function render(isDataRefresh = false) {
   root.querySelector('[data-action="quit"]')?.addEventListener("click", () => {
     window.codingPlanBar.quit();
   });
+  bindProviderReorder();
 
   // Restore scroll position now that the new list is in the DOM.
   const newList = root.querySelector(".provider-list");
@@ -148,8 +152,8 @@ function render(isDataRefresh = false) {
 
 let refreshHighlightTimer = null;
 
-function renderProvider(provider, index, fresh, refreshing) {
-  const classes = ["provider", `status-${provider.status}`, providerAlertClass(provider), fresh ? "is-fresh" : "", refreshing]
+function renderProvider(provider, index, fresh, refreshing, canReorder) {
+  const classes = ["provider", `status-${provider.status}`, providerAlertClass(provider), canReorder ? "is-reorderable" : "", fresh ? "is-fresh" : "", refreshing]
     .filter(Boolean)
     .join(" ");
   const enterStyle = fresh ? ` style="--enter-delay:${Math.min(index, 4) * 45}ms"` : "";
@@ -160,7 +164,8 @@ function renderProvider(provider, index, fresh, refreshing) {
       : renderProviderMessage(provider);
 
   return `
-    <article class="${classes}"${enterStyle}>
+    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}"${enterStyle}>
+      ${canReorder ? `<button class="provider-drag-handle" type="button" draggable="true" data-provider-drag="${escapeAttr(provider.id || "")}" title="拖动调整显示顺序" aria-label="调整 ${escapeAttr(provider.name || provider.id)} 的显示顺序">${ICONS.grip}</button>` : ""}
       <div class="provider-top">
         <div class="provider-title">
           <span class="status-dot"></span>
@@ -172,9 +177,93 @@ function renderProvider(provider, index, fresh, refreshing) {
         <span class="status-pill">${escapeHtml(STATUS_TEXT[provider.status] || provider.statusText || provider.status)}</span>
       </div>
       ${body}
+      ${renderGrokBilling(provider)}
       ${renderProviderNotice(provider)}
     </article>
   `;
+}
+
+function renderGrokBilling(provider) {
+  if (provider.tool !== "grok" || !provider.extraUsage) return "";
+  const extra = provider.extraUsage;
+  const hasAmount = extra.usedCredits != null || extra.monthlyLimit != null || extra.prepaidBalance != null;
+  const amount = hasAmount
+    ? [extra.usedCredits != null ? `已用 ${formatMoney(extra.usedCredits, extra.currency)}` : "", extra.monthlyLimit != null ? `上限 ${formatMoney(extra.monthlyLimit, extra.currency)}` : ""].filter(Boolean).join(" / ")
+    : "";
+  return `
+    <div class="grok-billing-row">
+      <span>按量付费</span>
+      <strong class="${extra.isEnabled ? "is-enabled" : ""}">${extra.isEnabled ? "已启用" : "未启用"}</strong>
+      ${amount ? `<span class="grok-billing-amount">${escapeHtml(amount)}</span>` : ""}
+    </div>
+  `;
+}
+
+function bindProviderReorder() {
+  const list = root.querySelector(".provider-list");
+  if (!list) return;
+  const rows = [...list.querySelectorAll(".provider[data-provider-id]")];
+  const clearDropState = () => {
+    rows.forEach((row) => row.classList.remove("is-dragging", "is-drop-before", "is-drop-after"));
+  };
+
+  rows.forEach((row) => {
+    const handle = row.querySelector("[data-provider-drag]");
+    if (!handle) return;
+    handle.addEventListener("dragstart", (event) => {
+      draggedProviderId = row.dataset.providerId;
+      row.classList.add("is-dragging");
+      event.dataTransfer?.setData("text/plain", draggedProviderId);
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      window.codingPlanBar.keepOpen();
+    });
+    handle.addEventListener("dragend", () => {
+      draggedProviderId = null;
+      clearDropState();
+    });
+    handle.addEventListener("keydown", (event) => {
+      if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      const sibling = event.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling;
+      if (!sibling?.matches?.(".provider[data-provider-id]")) return;
+      if (event.key === "ArrowUp") list.insertBefore(row, sibling);
+      else list.insertBefore(sibling, row);
+      persistProviderDomOrder(row.dataset.providerId);
+    });
+    row.addEventListener("dragover", (event) => {
+      if (!draggedProviderId || draggedProviderId === row.dataset.providerId) return;
+      event.preventDefault();
+      clearDropState();
+      const before = event.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+      row.classList.add(before ? "is-drop-before" : "is-drop-after");
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    });
+    row.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const source = list.querySelector(`[data-provider-id="${cssEscape(draggedProviderId)}"]`);
+      if (!source || source === row) return;
+      const before = event.clientY < row.getBoundingClientRect().top + row.getBoundingClientRect().height / 2;
+      list.insertBefore(source, before ? row : row.nextElementSibling);
+      clearDropState();
+      persistProviderDomOrder(source.dataset.providerId);
+      draggedProviderId = null;
+    });
+  });
+}
+
+function persistProviderDomOrder(focusId) {
+  const list = root.querySelector(".provider-list");
+  const ids = [...list.querySelectorAll(".provider[data-provider-id]")].map((row) => row.dataset.providerId);
+  window.codingPlanBar.reorderProviders(ids).catch(() => render(false));
+  lastReportedHeight = 0;
+  queueLayoutReport();
+  requestAnimationFrame(() => {
+    list.querySelector(`[data-provider-drag="${cssEscape(focusId)}"]`)?.focus();
+  });
+}
+
+function cssEscape(value) {
+  return window.CSS?.escape ? window.CSS.escape(String(value || "")) : String(value || "").replace(/["\\]/g, "\\$&");
 }
 
 function providerAlertClass(provider) {
@@ -388,6 +477,10 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/\u0060/g, "&#96;");
 }
 
 function clamp(value, min, max) {

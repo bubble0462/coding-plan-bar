@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "New immutable tag, for example v0.3.19"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Verify version
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ("v$version" -ne "${{ inputs.tag }}") {
+            throw "Requested tag ${{ inputs.tag }} does not match package version $version"
+          }
+      - run: npm run check
+      - run: npm run smoke
+      - run: npm run smoke:electron
+      - run: npm run dist
+      - name: Publish immutable release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (gh release view "${{ inputs.tag }}" 2>$null) {
+            throw "Release ${{ inputs.tag }} already exists"
+          }
+          if (git ls-remote --exit-code --tags origin "refs/tags/${{ inputs.tag }}") {
+            throw "Tag ${{ inputs.tag }} already exists"
+          }
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $asset = "release/Coding Plan Bar-Setup-$version-x64.exe"
+          $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset).Hash.ToLower()
+          @"
+          Coding Plan Bar ${{ inputs.tag }}
+
+          SHA256: $sha
+          "@ | Set-Content -Encoding utf8 release-notes.md
+          gh release create "${{ inputs.tag }}" $asset --target main --title "${{ inputs.tag }}" --notes-file release-notes.md

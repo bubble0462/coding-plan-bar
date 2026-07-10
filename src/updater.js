@@ -98,8 +98,17 @@ function buildUpdateResult(currentVersion, release) {
 
   const latestVersion = normalizeVersionLabel(release.tag_name);
   const selectedAsset = findInstallerAsset(release);
-  const asset = selectedAsset && isAllowedDownloadUrl(selectedAsset.browser_download_url) ? selectedAsset : null;
-  const assetError = selectedAsset && !asset ? "安装包下载地址不受信任" : null;
+  const allowedAsset = selectedAsset && isAllowedDownloadUrl(selectedAsset.browser_download_url) ? selectedAsset : null;
+  const digest = normalizeSha256(allowedAsset?.digest);
+  const hasKnownSize = Number(allowedAsset?.size) > 0;
+  const asset = allowedAsset && digest && hasKnownSize ? allowedAsset : null;
+  const assetError = selectedAsset && !allowedAsset
+    ? "安装包下载地址不受信任"
+    : allowedAsset && !digest
+      ? "安装包缺少 SHA256，已禁用应用内下载，请前往 GitHub Release 手动更新"
+      : allowedAsset && !hasKnownSize
+        ? "安装包大小未知，已禁用应用内下载，请前往 GitHub Release 手动更新"
+      : null;
   const hasUpdate = compareVersions(currentVersion, latestVersion) < 0;
 
   return {
@@ -114,7 +123,7 @@ function buildUpdateResult(currentVersion, release) {
            name: asset.name,
            url: asset.browser_download_url,
            size: asset.size,
-           digest: asset.digest || null,
+           digest,
          }
        : null,
     error: assetError,
@@ -283,6 +292,14 @@ function downloadAsset(assetUrl, onProgress = () => {}, metadata = {}) {
       reject(new Error("安装包摘要格式无效"));
       return;
     }
+    if (!expectedDigest) {
+      reject(new Error("安装包缺少 SHA256，已拒绝下载"));
+      return;
+    }
+    if (!(expectedSize > 0)) {
+      reject(new Error("安装包大小未知，已拒绝下载"));
+      return;
+    }
     const finalPath = path.join(tempDir, fileName);
     const partPath = `${finalPath}.part`;
 
@@ -412,7 +429,7 @@ function verifyDownloadedFile(filePath, expectedSize, expectedDigest) {
   if (expectedSize > 0 && stats.size !== expectedSize) {
     return Promise.reject(new Error(`安装包大小校验失败：期望 ${expectedSize}，实际 ${stats.size}`));
   }
-  if (!expectedDigest) return Promise.resolve();
+  if (!expectedDigest) return Promise.reject(new Error("安装包缺少 SHA256，已拒绝安装"));
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("sha256");
     const stream = fs.createReadStream(filePath);
@@ -437,4 +454,5 @@ module.exports = {
   extractTagFromReleaseUrl,
   buildRedirectRelease,
   downloadAsset,
+  verifyDownloadedFile,
 };

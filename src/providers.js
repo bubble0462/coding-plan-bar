@@ -4,6 +4,8 @@ const path = require("path");
 const { readConfigFile, normalizeConfig } = require("./config-store");
 const { classifyFailure } = require("./failure-classifier");
 const { collectLocalUsage, attachUsageToProvider } = require("./session-usage");
+const { fetchGrokBillingViaCli } = require("./grok-rpc");
+const { fetchGrokWebBilling } = require("./grok-web-billing");
 
 const TIER_LABELS = {
   five_hour: "5h",
@@ -14,6 +16,9 @@ const TIER_LABELS = {
   gemini_pro: "Gemini Pro",
   gemini_flash: "Gemini Flash",
   gemini_flash_lite: "Flash Lite",
+  grok_limit: "周期限额",
+  grok_build: "GrokBuild 使用",
+  grok_monthly_credits: "月度积分",
 };
 
 function loadConfig(configPath) {
@@ -26,23 +31,35 @@ function normalizeProviderConfig(config) {
 
 async function refreshProviders(config, options = {}) {
   const enabled = config.providers.filter((provider) => provider.enabled !== false);
-  const localUsagePromise = collectLocalUsage(enabled).catch(() => []);
+  const collectUsage = options.collectLocalUsage || collectLocalUsage;
+  const refreshOne = options.refreshProvider || refreshProvider;
+  const localUsagePromise = collectUsage(enabled).catch(() => []);
   const snapshots = new Array(enabled.length);
   await Promise.all(
     enabled.map(async (provider, index) => {
-      const [snapshot, localUsage] = await Promise.all([refreshProvider(provider), localUsagePromise]);
-      const attached = attachUsageToProvider(provider, snapshot, localUsage, Date.now(), enabled);
-      snapshots[index] = attached;
+      const snapshot = await refreshOne(provider);
+      snapshots[index] = snapshot;
       if (typeof options.onProvider === "function") {
         try {
-          options.onProvider(attached, index, enabled);
+          options.onProvider(snapshot, index, enabled, { phase: "quota" });
         } catch (_error) {
           // Rendering callbacks must not turn a successful provider query into a failed refresh.
         }
       }
     }),
   );
-  return snapshots;
+  const localUsage = await localUsagePromise;
+  return snapshots.map((snapshot, index) => {
+    const attached = attachUsageToProvider(enabled[index], snapshot, localUsage, Date.now(), enabled);
+    if (typeof options.onProvider === "function") {
+      try {
+        options.onProvider(attached, index, enabled, { phase: "usage" });
+      } catch (_error) {
+        // Usage enrichment is best-effort and must not fail the refresh.
+      }
+    }
+    return attached;
+  });
 }
 
 async function refreshProvider(provider) {
@@ -93,10 +110,11 @@ function normalizeSubscriptionProvider(provider, quota) {
     statusText: failure ? failure.label : statusText(status),
     message: quota.error || quota.credentialMessage || null,
     failure,
-    planLabel: quota.credentialMessage || null,
+    planLabel: quota.planLabel || quota.credentialMessage || null,
     queriedAt: quota.queriedAt || Date.now(),
     tiers,
     extraUsage: quota.extraUsage || null,
+    billingDetails: quota.billingDetails || null,
     diagnostics: quota.diagnostics || null,
   };
 }
@@ -199,9 +217,6 @@ async function queryOfficialSubscription(provider) {
 
   if (provider.tool === "grok") {
     const credentials = readGrokCredentials(provider);
-    if (credentials.status !== "valid" && !credentials.accessToken) {
-      return subscriptionError("grok", credentials.status, credentials.message);
-    }
     return queryGrokQuota(credentials);
   }
 
@@ -325,6 +340,8 @@ function readGrokCredentials(provider) {
       status: expired && !entry.refresh_token ? "expired" : "valid",
       shouldRefresh: expired,
       message: entry.email || null,
+      accountEmail: entry.email || null,
+      loginMethod: grokLoginMethod(entry, entryKey),
     };
   } catch (error) {
     return { accessToken: null, status: "parse_error", message: error.message };
@@ -344,7 +361,7 @@ async function queryClaudeQuota(accessToken) {
     return subscriptionError("claude", "expired", `Authentication failed (HTTP ${response.status})`);
   }
   if (!response.ok) {
-    return subscriptionError("claude", "valid", `API error (HTTP ${response.status}): ${response.text}`);
+    return subscriptionError("claude", "valid", `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`);
   }
 
   const known = ["five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"];
@@ -373,12 +390,43 @@ async function queryClaudeQuota(accessToken) {
   };
 }
 
-async function queryGrokQuota(credentials) {
+async function queryGrokQuota(credentials, options = {}) {
+  const diagnostics = { source: null, fallbacks: [] };
+  if (!options.skipCli) {
+    try {
+      const rpcBilling = await (options.rpcFetcher || fetchGrokBillingViaCli)();
+      diagnostics.source = "grok-cli";
+      return normalizeGrokBilling(rpcBilling, credentials, diagnostics);
+    } catch (error) {
+      diagnostics.fallbacks.push({ source: "grok-cli", error: safeResponseExcerpt(error.message) });
+    }
+  }
+
   let accessToken = credentials.accessToken;
   if (credentials.shouldRefresh) {
     const refreshed = await refreshGrokToken(credentials);
     if (refreshed.success) accessToken = refreshed.accessToken;
     else if (!accessToken) return subscriptionError("grok", "expired", refreshed.error);
+  }
+
+  if (accessToken && !options.skipWeb) {
+    try {
+      const webBilling = await (options.webFetcher || fetchGrokWebBilling)(accessToken);
+      diagnostics.source = "grok-web";
+      return normalizeGrokBilling(webBilling, credentials, diagnostics);
+    } catch (error) {
+      diagnostics.fallbacks.push({ source: "grok-web", error: safeResponseExcerpt(error.message) });
+    }
+  }
+
+  if (!accessToken) {
+    return subscriptionError(
+      "grok",
+      credentials.status || "not_found",
+      credentials.message || "未找到 Grok 登录授权，请安装 Grok Build CLI 并运行 grok login",
+      null,
+      diagnostics,
+    );
   }
 
   let response = await fetchGrokBilling(accessToken);
@@ -394,30 +442,18 @@ async function queryGrokQuota(credentials) {
     return subscriptionError("grok", "expired", `Authentication failed (HTTP ${response.status})`);
   }
   if (!response.ok) {
-    return subscriptionError("grok", "valid", `API error (HTTP ${response.status}): ${response.text}`);
+    return subscriptionError(
+      "grok",
+      "valid",
+      `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`,
+      response.status,
+      diagnostics,
+    );
   }
 
   const config = response.json?.config || response.json || {};
-  const utilization = firstNumber([config.creditUsagePercent, config.usagePercent, config.weeklyUsagePercent]);
-  if (utilization == null) {
-    return subscriptionError("grok", "parse_error", "Grok billing 响应缺少 creditUsagePercent");
-  }
-  return {
-    tool: "grok",
-    credentialStatus: "valid",
-    credentialMessage: credentials.message || null,
-    success: true,
-    tiers: [
-      {
-        name: "weekly_limit",
-        utilization,
-        resetsAt: config.currentPeriod?.end || config.billingPeriodEnd || null,
-      },
-    ],
-    extraUsage: parseGrokExtraUsage(config),
-    error: null,
-    queriedAt: Date.now(),
-  };
+  diagnostics.source = "grok-json";
+  return normalizeGrokBilling(config, credentials, diagnostics);
 }
 
 function fetchGrokBilling(accessToken) {
@@ -509,7 +545,7 @@ async function queryCodexQuota(accessToken, accountId, tool = "codex") {
     return subscriptionError(tool, "expired", `Authentication failed (HTTP ${response.status})`);
   }
   if (!response.ok) {
-    return subscriptionError(tool, "valid", `API error (HTTP ${response.status}): ${response.text}`);
+    return subscriptionError(tool, "valid", `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`);
   }
 
   const windows = [
@@ -572,7 +608,7 @@ async function queryKimiCoding(apiKey) {
     return subscriptionError("coding_plan", "expired", `Authentication failed (HTTP ${response.status})`);
   }
   if (!response.ok) {
-    return subscriptionError("coding_plan", "valid", `API error (HTTP ${response.status}): ${response.text}`);
+    return subscriptionError("coding_plan", "valid", `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`);
   }
 
   const tiers = [];
@@ -661,7 +697,7 @@ async function queryMiniMaxCoding(apiKey, isCn) {
     return subscriptionError("coding_plan", "expired", `Authentication failed (HTTP ${response.status})`);
   }
   if (!response.ok) {
-    return subscriptionError("coding_plan", "valid", `API error (HTTP ${response.status}): ${response.text}`);
+    return subscriptionError("coding_plan", "valid", `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`);
   }
 
   const baseResp = response.json?.base_resp;
@@ -687,7 +723,7 @@ async function queryZenMux(baseUrl, apiKey) {
     return subscriptionError("coding_plan", "expired", `Authentication failed (HTTP ${response.status})`);
   }
   if (!response.ok) {
-    return subscriptionError("coding_plan", "valid", `API error (HTTP ${response.status}): ${response.text}`);
+    return subscriptionError("coding_plan", "valid", `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`);
   }
   if (response.json?.success !== true) {
     return subscriptionError("coding_plan", "valid", response.json?.message || "API error");
@@ -737,7 +773,7 @@ async function queryDeepSeekBalance(apiKey) {
       Accept: "application/json",
     },
   });
-  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${response.text}` };
+  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}` };
 
   const isAvailable = response.json?.is_available !== false;
   const data = (response.json?.balance_infos || []).map((info) => ({
@@ -766,7 +802,7 @@ async function queryMoonshotBalance(baseUrl, apiKey) {
       Accept: "application/json",
     },
   });
-  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${response.text}` };
+  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}` };
 
   const data = response.json?.data || response.json || {};
   const available = parseNumber(data.available_balance ?? data.balance, 0);
@@ -795,7 +831,7 @@ async function queryOpenRouterBalance(apiKey) {
       Accept: "application/json",
     },
   });
-  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${response.text}` };
+  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}` };
   const data = response.json?.data || response.json || {};
   const total = parseNumber(data.total_credits, 0);
   const used = parseNumber(data.total_usage, 0);
@@ -824,7 +860,7 @@ async function querySiliconFlowBalance(apiKey, isCn) {
       Accept: "application/json",
     },
   });
-  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${response.text}` };
+  if (!response.ok) return { success: false, data: null, error: `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}` };
   const data = response.json?.data || {};
   const total = parseNumber(data.totalBalance, 0);
   return {
@@ -1051,16 +1087,20 @@ function zenMuxTier(name, value) {
 async function fetchJson(url, options = {}) {
   const {
     timeoutMs = 10000,
-    retries = 0,
     retryBaseDelayMs = 250,
+    maxResponseBytes = 2 * 1024 * 1024,
     ...requestOptions
   } = options;
+  const retries = Number.isFinite(Number(options.retries))
+    ? Math.max(0, Number(options.retries))
+    : isIdempotentMethod(requestOptions.method) ? 1 : 0;
+  delete requestOptions.retries;
   const startedAt = Date.now();
   let lastError = null;
 
   for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
     try {
-      const response = await fetchJsonOnce(url, requestOptions, timeoutMs);
+      const response = await fetchJsonOnce(url, requestOptions, timeoutMs, maxResponseBytes);
       response.attempts = attempt;
       response.durationMs = Date.now() - startedAt;
       if (!isRetryableStatus(response.status) || attempt > retries) return response;
@@ -1074,14 +1114,14 @@ async function fetchJson(url, options = {}) {
 
   const attempts = retries + 1;
   const elapsed = Date.now() - startedAt;
-  const reason = lastError?.name === "AbortError" ? "请求超时" : lastError?.message || "网络异常";
+  const reason = lastError?.name === "AbortError" ? "请求超时" : safeResponseExcerpt(lastError?.message || "网络异常");
   const error = new Error(`请求 ${safeRequestTarget(url)} 失败（尝试 ${attempts} 次，${elapsed}ms）：${reason}`);
   error.cause = lastError;
   error.attempts = attempts;
   throw error;
 }
 
-async function fetchJsonOnce(url, options, timeoutMs) {
+async function fetchJsonOnce(url, options, timeoutMs, maxResponseBytes) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -1089,7 +1129,7 @@ async function fetchJsonOnce(url, options, timeoutMs) {
       ...options,
       signal: controller.signal,
     });
-    const text = await response.text();
+    const text = await readResponseText(response, maxResponseBytes, controller);
     let json = null;
     try {
       json = text ? JSON.parse(text) : null;
@@ -1100,6 +1140,38 @@ async function fetchJsonOnce(url, options, timeoutMs) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function readResponseText(response, maxBytes, controller) {
+  const limit = Math.max(1024, Number(maxBytes) || 2 * 1024 * 1024);
+  const declared = Number(response.headers?.get?.("content-length") || 0);
+  if (declared > limit) {
+    controller.abort();
+    throw new Error(`响应体超过限制（${Math.ceil(limit / 1024)} KB）`);
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > limit) throw new Error(`响应体超过限制（${Math.ceil(limit / 1024)} KB）`);
+    return text;
+  }
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > limit) {
+      controller.abort();
+      throw new Error(`响应体超过限制（${Math.ceil(limit / 1024)} KB）`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function isIdempotentMethod(method) {
+  return ["GET", "HEAD"].includes(String(method || "GET").toUpperCase());
 }
 
 function isRetryableStatus(status) {
@@ -1132,6 +1204,8 @@ function safeResponseExcerpt(value) {
     String(value || "")
       .replace(/Bearer\s+[^\s"']+/gi, "Bearer [REDACTED]")
       .replace(/\bsk-[a-z0-9_-]{8,}\b/gi, "sk-[REDACTED]")
+      .replace(/\beyJ[a-zA-Z0-9._-]{20,}\b/g, "[REDACTED_TOKEN]")
+      .replace(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi, "[REDACTED_EMAIL]")
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 300) || "空响应"
@@ -1181,14 +1255,89 @@ function okSubscription(tool, tiers, credentialMessage, diagnostics = null) {
 }
 
 function parseGrokExtraUsage(config) {
+  const usage = config.usage || {};
+  const enabled = config.onDemandEnabled ?? config.on_demand_enabled ?? config.isUnifiedBillingUser;
   return {
-    isEnabled: Boolean(config.isUnifiedBillingUser),
-    monthlyLimit: firstNumber([config.onDemandCap?.val]),
-    usedCredits: firstNumber([config.onDemandUsed?.val]),
-    utilization: firstNumber([config.creditUsagePercent]),
-    currency: "credits",
-    prepaidBalance: firstNumber([config.prepaidBalance?.val]),
+    isEnabled: Boolean(enabled),
+    monthlyLimit: centsToUsd(firstNumber([config.onDemandCap?.val, config.on_demand_cap?.val])),
+    usedCredits: centsToUsd(firstNumber([usage.onDemandUsed?.val, config.onDemandUsed?.val])),
+    utilization: percentOf(
+      firstNumber([usage.onDemandUsed?.val, config.onDemandUsed?.val]),
+      firstNumber([config.onDemandCap?.val, config.on_demand_cap?.val]),
+    ),
+    currency: "USD",
+    prepaidBalance: centsToUsd(firstNumber([config.prepaidBalance?.val])),
   };
+}
+
+function normalizeGrokBilling(config, credentials = {}, diagnostics = null) {
+  const source = config?.config || config || {};
+  const usage = source.usage || {};
+  const periodStart = source.billingCycle?.billingPeriodStart || source.currentPeriod?.start || source.billingPeriodStart || null;
+  const periodEnd = source.billingCycle?.billingPeriodEnd || source.currentPeriod?.end || source.billingPeriodEnd || null;
+  const monthlyLimitCents = firstNumber([source.monthlyLimit?.val, source.monthly_limit?.val]);
+  const totalUsedCents = firstNumber([usage.totalUsed?.val, usage.total_used?.val, source.totalUsed?.val]);
+  const weeklyUtilization = firstNumber([source.limitUsagePercent, source.weeklyUsagePercent]);
+  const buildUtilization = firstNumber([source.creditUsagePercent, source.usagePercent]);
+  const monthlyUtilization = percentOf(totalUsedCents, monthlyLimitCents);
+  const tiers = [];
+
+  if (weeklyUtilization != null) {
+    tiers.push({ name: "grok_limit", utilization: weeklyUtilization, resetsAt: periodEnd });
+  }
+  if (buildUtilization != null) {
+    tiers.push({ name: "grok_build", utilization: buildUtilization, resetsAt: periodEnd });
+  }
+  if (monthlyUtilization != null) {
+    tiers.push({
+      name: "grok_monthly_credits",
+      utilization: monthlyUtilization,
+      resetsAt: periodEnd,
+      usedValueUsd: centsToUsd(totalUsedCents),
+      maxValueUsd: centsToUsd(monthlyLimitCents),
+    });
+  }
+  if (!tiers.length && source.creditUsagePercent != null) {
+    tiers.push({ name: "weekly_limit", utilization: source.creditUsagePercent, resetsAt: periodEnd });
+  }
+  if (!tiers.length) {
+    return subscriptionError("grok", "parse_error", "Grok billing 响应缺少可识别的额度字段", null, diagnostics);
+  }
+
+  const loginMethod = credentials.loginMethod || source.planName || source.plan || "Grok Build";
+  return {
+    tool: "grok",
+    credentialStatus: "valid",
+    credentialMessage: null,
+    planLabel: loginMethod,
+    success: true,
+    tiers,
+    extraUsage: parseGrokExtraUsage(source),
+    billingDetails: {
+      source: diagnostics?.source || source.source || "grok",
+      periodStart,
+      periodEnd,
+      accountEmail: credentials.accountEmail || credentials.message || null,
+    },
+    diagnostics,
+    error: null,
+    queriedAt: Date.now(),
+  };
+}
+
+function grokLoginMethod(entry, entryKey) {
+  const raw = String(entry?.auth_mode || "").trim();
+  if (/supergrok|oauth|oidc/i.test(raw) || /auth\.x\.ai/i.test(String(entryKey || ""))) return "SuperGrok";
+  return raw || "Grok Build";
+}
+
+function centsToUsd(value) {
+  return value == null ? null : Number(value) / 100;
+}
+
+function percentOf(used, limit) {
+  if (used == null || limit == null || Number(limit) <= 0) return null;
+  return clamp((Number(used) / Number(limit)) * 100, 0, 100);
 }
 
 function firstNumber(values) {
@@ -1281,5 +1430,6 @@ module.exports = {
   windowSecondsToTierName,
   writeJsonFileAtomic,
   queryGrokQuota,
+  normalizeGrokBilling,
   queryZhipuCoding,
 };

@@ -93,6 +93,21 @@ window.codingPlanBar.onSnapshot((next) => {
   }
 });
 
+if (typeof window.codingPlanBar.onConfigChanged === "function") {
+  window.codingPlanBar.onConfigChanged((payload) => {
+    if (!payload?.config || state.dirty) return;
+    const selectedId = state.selectedId;
+    state.config = sanitizeConfig(cloneConfig(payload.config));
+    state.configPath = payload.configPath || state.configPath;
+    state.selectedId = state.config.providers.some((provider) => provider.id === selectedId)
+      ? selectedId
+      : state.config.providers[0]?.id || null;
+    state.status = "供应商顺序已同步";
+    state.statusTone = "success";
+    render();
+  });
+}
+
 window.codingPlanBar.onUpdaterState((next) => {
   const statusChanged = next.status !== lastUpdaterStatus;
   lastUpdaterStatus = next.status;
@@ -283,38 +298,9 @@ function renderAccountFilter(value, label) {
 
 function renderProviderList() {
   if (!state.config.providers.length) return renderEmptyList();
-  const groups = providerGroups();
-  const count = groups.reduce((total, group) => total + group.providers.length, 0);
-  if (!count) return `<div class="empty"><p class="hint">没有匹配的账号或供应商。</p></div>`;
-  return groups
-    .map(
-      (group) => `
-        <div class="provider-group">
-          <div class="provider-group-title">
-            <span>${escapeHtml(group.label)}</span>
-            <em>${group.providers.length}</em>
-          </div>
-          ${group.providers.map(renderProviderItem).join("")}
-        </div>
-      `,
-    )
-    .join("");
-}
-
-function providerGroups() {
-  const groups = [
-    { key: "accounts", label: "官方账号", providers: [] },
-    { key: "sub2api", label: "sub2api 独立额度", providers: [] },
-    { key: "balance", label: "余额接口", providers: [] },
-    { key: "other", label: "其他供应商", providers: [] },
-  ];
-  for (const provider of filteredProviders()) {
-    if (provider.kind === "official-subscription" && provider.importedFrom === "sub2api") groups[1].providers.push(provider);
-    else if (provider.kind === "official-subscription" || provider.kind === "coding-plan") groups[0].providers.push(provider);
-    else if (provider.kind === "balance") groups[2].providers.push(provider);
-    else groups[3].providers.push(provider);
-  }
-  return groups.filter((group) => group.providers.length);
+  const providers = filteredProviders();
+  if (!providers.length) return `<div class="empty"><p class="hint">没有匹配的账号或供应商。</p></div>`;
+  return providers.map(renderProviderItem).join("");
 }
 
 function filteredProviders() {
@@ -456,8 +442,12 @@ function renderUpdatePage() {
     statusLine = "下载完成，可以安装。";
     primary = `<button class="btn primary" data-action="install-update">安装更新</button>`;
   } else if (u.status === "available") {
-    statusLine = `发现新版本 ${escapeHtml(latestVersion)}。`;
-    primary = `<button class="btn primary" data-action="download-update">下载更新</button>`;
+    statusLine = result.error
+      ? `发现新版本 ${escapeHtml(latestVersion)}。${escapeHtml(result.error)}`
+      : `发现新版本 ${escapeHtml(latestVersion)}。`;
+    primary = asset
+      ? `<button class="btn primary" data-action="download-update">下载更新</button>`
+      : `<button class="btn primary" data-action="open-release" data-url="${escapeAttr(result.releaseUrl || "")}">手动下载</button>`;
   } else if (u.status === "latest") {
     statusLine = "当前已是最新版本。";
   } else if (u.status === "error") {
@@ -664,7 +654,7 @@ function renderBackupPage() {
     <div class="form backup-page">
       <div class="security-card is-danger">
         <strong>隐私提醒</strong>
-        <p>导入文件、config.json 和备份文件都可能包含明文 token/API Key。不要分享到聊天、Issue 或公共仓库。</p>
+        <p>导入源文件可能包含明文 token/API Key；config.json 与应用备份使用当前 Windows 用户的 DPAPI 加密。仍不要分享到聊天、Issue 或公共仓库。</p>
       </div>
       <label class="security-toggle">
         <input type="checkbox" data-field="suppressBackupWarning" ${state.config.privacy?.suppressBackupWarning ? "checked" : ""} />
@@ -886,7 +876,7 @@ function accountSourceLabel(provider) {
 
 function identityHelpText(provider) {
   if (provider.importedFrom === "sub2api") return "按 sub2api 导出的独立额度记录保留，不会因为 Gmail 主邮箱或 accountId 相同而合并。";
-  if (provider.kind === "official-subscription") return "官方账号 token 只保存在本机 config.json，预览与历史记录不会显示 token 原文。";
+  if (provider.kind === "official-subscription") return "官方账号 token 使用 Windows DPAPI 加密保存在本机 config.json，预览与历史记录不会显示原文。";
   return "普通供应商使用 Base URL 与 API Key/环境变量查询余额。";
 }
 
@@ -899,7 +889,7 @@ function renderOfficialNotice(provider) {
       <div class="notice-box import-notice">
         <strong>已导入 OpenAI OAuth 账号</strong>
         <span>${escapeHtml(email)}${provider.planType ? ` · ${escapeHtml(provider.planType)}` : ""}</span>
-        <span>过期时间：${escapeHtml(expires)}。导入的 token 会保存在本机 config.json，请不要分享配置文件。</span>
+        <span>过期时间：${escapeHtml(expires)}。导入的 token 会经 Windows DPAPI 加密后保存在本机 config.json。</span>
       </div>
     `;
   }

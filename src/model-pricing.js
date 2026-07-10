@@ -1,6 +1,12 @@
 // Estimated standard API prices in USD per 1M tokens.
-// Updated 2026-07-05. Unknown models deliberately remain unpriced.
+// Updated 2026-07-10. Unknown or expired prices deliberately remain unpriced.
+const PRICING_UPDATED_AT = "2026-07-10";
 const MODEL_PRICING = [
+  // GPT-5.6 limited preview pricing:
+  // https://openai.com/index/previewing-gpt-5-6-sol/
+  [/^gpt-5\.6-(?:codex-)?sol(?:-|$)/, price(5, 30, 0.5, 6.25, { source: "openai", preview: true })],
+  [/^gpt-5\.6-(?:codex-)?terra(?:-|$)/, price(2.5, 15, 0.25, 3.125, { source: "openai", preview: true })],
+  [/^gpt-5\.6-(?:codex-)?luna(?:-|$)/, price(1, 6, 0.1, 1.25, { source: "openai", preview: true })],
   [/^gpt-5\.5(?:-|$)/, price(5, 30, 0.5)],
   [/^gpt-5\.4-pro(?:-|$)/, price(30, 180)],
   [/^gpt-5\.4-mini(?:-|$)/, price(0.75, 4.5, 0.075)],
@@ -15,7 +21,7 @@ const MODEL_PRICING = [
   [/^claude-(?:fable-5|mythos-5)(?:-|$)/, price(10, 50, 1, 12.5)],
   [/^claude-opus-4-(?:8|7|6|5)(?:-|$)/, price(5, 25, 0.5, 6.25)],
   // Introductory Sonnet 5 pricing is valid through 2026-08-31.
-  [/^claude-sonnet-5(?:-|$)/, price(2, 10, 0.2, 2.5)],
+  [/^claude-sonnet-5(?:-|$)/, price(2, 10, 0.2, 2.5, { validUntil: "2026-08-31" })],
   [/^claude-sonnet-4-(?:6|5)(?:-|$)/, price(3, 15, 0.3, 3.75)],
   [/^claude-haiku-4-5(?:-|$)/, price(1, 5, 0.1, 1.25)],
   [/^claude-opus-4(?:-1)?(?:-|$)/, price(15, 75, 1.5, 18.75)],
@@ -53,8 +59,8 @@ const MODEL_PRICING = [
   [/^minimax-m2(?:-|$)/, price(0.27, 0.95, 0.03)],
 ];
 
-function price(input, output, cacheRead = input, cacheCreation = input) {
-  return { input, output, cacheRead, cacheCreation };
+function price(input, output, cacheRead = input, cacheCreation = input, metadata = {}) {
+  return { input, output, cacheRead, cacheCreation, updatedAt: PRICING_UPDATED_AT, ...metadata };
 }
 
 function normalizeModelId(raw) {
@@ -67,10 +73,16 @@ function normalizeModelId(raw) {
   return model;
 }
 
-function findModelPricing(model) {
+function findModelPricing(model, now = Date.now()) {
   const normalized = normalizeModelId(model);
   const match = MODEL_PRICING.find(([pattern]) => pattern.test(normalized));
-  return match ? { model: normalized, ...match[1] } : null;
+  if (!match) return null;
+  const pricing = { model: normalized, ...match[1] };
+  if (pricing.validUntil) {
+    const validThrough = Date.parse(`${pricing.validUntil}T23:59:59.999Z`);
+    if (Number.isFinite(validThrough) && Number(now) > validThrough) return null;
+  }
+  return pricing;
 }
 
 function calculateCostUsd(usage) {
@@ -98,6 +110,7 @@ function finiteTokenCount(value) {
 
 module.exports = {
   MODEL_PRICING,
+  PRICING_UPDATED_AT,
   normalizeModelId,
   findModelPricing,
   calculateCostUsd,

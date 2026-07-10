@@ -1,9 +1,24 @@
 const fs = require("fs");
 const path = require("path");
+const {
+  createSecretCodec,
+  protectConfigSecrets,
+  revealConfigSecrets,
+  redactConfigSecrets,
+  mergeMaskedSecrets,
+  hasPlaintextSecrets,
+} = require("./secret-store");
+
+let secretCodec = null;
+
+function configureSecretStorage(safeStorage) {
+  secretCodec = createSecretCodec(safeStorage);
+  return Boolean(secretCodec);
+}
 
 function readConfigFile(configPath) {
   const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  return normalizeConfig(parsed);
+  return normalizeConfig(revealConfigSecrets(parsed, secretCodec));
 }
 
 function normalizeConfig(config) {
@@ -101,9 +116,30 @@ function writeConfigFile(configPath, config) {
   validateConfig(normalized);
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const tempPath = `${configPath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+  const stored = protectConfigSecrets(normalized, secretCodec);
+  fs.writeFileSync(tempPath, `${JSON.stringify(stored, null, 2)}\n`, "utf8");
   fs.renameSync(tempPath, configPath);
   return normalized;
+}
+
+function migrateConfigSecrets(configPath) {
+  if (!secretCodec || !fs.existsSync(configPath)) return false;
+  const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  if (!hasPlaintextSecrets(raw)) return false;
+  writeConfigFile(configPath, normalizeConfig(revealConfigSecrets(raw, secretCodec)));
+  return true;
+}
+
+function normalizeStoredConfig(config) {
+  return normalizeConfig(revealConfigSecrets(config, secretCodec));
+}
+
+function configForRenderer(config) {
+  return redactConfigSecrets(config);
+}
+
+function mergeRendererConfig(config, current) {
+  return mergeMaskedSecrets(config, current);
 }
 
 function validateConfig(config) {
@@ -163,7 +199,7 @@ function providerTemplates() {
       label: "Grok 官方订阅",
       short: "Gk",
       category: "官方订阅",
-      description: "读取本机 Grok Build 登录授权，只显示周额度。",
+      description: "读取本机 Grok Build 登录授权，显示周期额度、月度积分和按量付费状态。",
       homepage: "https://grok.com/build",
       provider: {
         id: "grok",
@@ -308,4 +344,9 @@ module.exports = {
   normalizeConfig,
   validateConfig,
   providerTemplates,
+  configureSecretStorage,
+  migrateConfigSecrets,
+  normalizeStoredConfig,
+  configForRenderer,
+  mergeRendererConfig,
 };

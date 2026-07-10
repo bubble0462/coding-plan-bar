@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
     ipcRenderer.on("quota:snapshot", listener);
     return () => ipcRenderer.removeListener("quota:snapshot", listener);
   },
+  onConfigChanged(callback) {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("config:changed", listener);
+    return () => ipcRenderer.removeListener("config:changed", listener);
+  },
   refresh() {
     return ipcRenderer.invoke("quota:refresh");
   },
@@ -23,6 +28,9 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   },
   resize(height, layoutKey) {
     return ipcRenderer.invoke("quota:resize", height, layoutKey);
+  },
+  reorderProviders(providerIds) {
+    return ipcRenderer.invoke("quota:reorder-providers", providerIds);
   },
   quit() {
     return ipcRenderer.invoke("quota:quit");
