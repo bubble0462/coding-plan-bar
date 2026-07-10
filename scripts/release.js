@@ -16,14 +16,24 @@ function displayCommand(command, args) {
 }
 
 function run(command, args, options = {}) {
-  const executable = process.platform === "win32" && ["npm", "npx"].includes(command) ? `${command}.cmd` : command;
+  const useWindowsCommandShell = process.platform === "win32" && ["npm", "npx"].includes(command);
+  const executable = useWindowsCommandShell ? process.env.ComSpec || "cmd.exe" : command;
+  const childArgs = useWindowsCommandShell
+    ? ["/d", "/s", "/c", [`${command}.cmd`, ...args].map(quoteCmdArgument).join(" ")]
+    : args;
   console.log(`> ${displayCommand(command, args)}`);
-  return execFileSync(executable, args, {
+  return execFileSync(executable, childArgs, {
     cwd: root,
     stdio: options.capture ? "pipe" : "inherit",
     encoding: "utf8",
     windowsHide: true,
   });
+}
+
+function quoteCmdArgument(value) {
+  const text = String(value);
+  if (!/[\s"&|<>^]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function succeeds(command, args) {
