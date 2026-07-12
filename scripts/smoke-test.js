@@ -12,6 +12,7 @@ const {
   queryGrokQuota,
   normalizeGrokBilling,
   queryZhipuCoding,
+  readCodexCredentials,
   refreshProviders,
 } = require("../src/providers");
 const {
@@ -61,6 +62,19 @@ assert.deepStrictEqual(JSON.parse(fs.readFileSync(atomicPath, "utf8")), {
   account: { key: "new-access-token", refresh_token: "new-refresh-token" },
 });
 assert(!fs.readdirSync(tempDir).some((name) => name.endsWith(".tmp")));
+
+const staleCodexAuthPath = path.join(tempDir, "codex-auth.json");
+writeJsonFileAtomic(staleCodexAuthPath, {
+  auth_mode: "chatgpt",
+  last_refresh: "2020-01-01T00:00:00.000Z",
+  tokens: {
+    access_token: "codex-access-token",
+    account_id: "account-id",
+  },
+});
+const codexCredentials = readCodexCredentials({ authPath: staleCodexAuthPath });
+assert.strictEqual(codexCredentials.status, "valid");
+assert.strictEqual(codexCredentials.message, null);
 
 const cachePath = path.join(tempDir, "quota-cache.json");
 const cacheProvider = { id: "glm", kind: "coding-plan", baseUrl: "https://open.bigmodel.cn/" };

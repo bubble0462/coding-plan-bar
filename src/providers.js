@@ -203,7 +203,11 @@ async function queryOfficialSubscription(provider) {
       return subscriptionError("codex", credentials.status, credentials.message);
     }
     const result = await queryCodexQuota(credentials.accessToken, credentials.accountId, "codex");
-    if (result.success && credentials.message) result.credentialMessage = credentials.message;
+    // A successful quota response is authoritative. Do not surface a stale local
+    // expiry hint after the token has been accepted by the Codex API.
+    if (result.success && credentials.status === "valid" && credentials.message) {
+      result.credentialMessage = credentials.message;
+    }
     return result;
   }
 
@@ -259,12 +263,13 @@ function readCodexCredentials(provider) {
         message: "缺少 Codex access_token",
       };
     }
-    const stale = auth.last_refresh ? isOlderThanDays(auth.last_refresh, 8) : false;
     return {
       accessToken,
       accountId: auth.tokens?.account_id || null,
-      status: stale ? "expired" : "valid",
-      message: stale ? "Codex token 可能已过期" : null,
+      // Codex's last_refresh is not the access token expiry time. The usage
+      // endpoint response, including HTTP 401/403, is the source of truth.
+      status: "valid",
+      message: null,
     };
   } catch (error) {
     return { accessToken: null, accountId: null, status: "parse_error", message: error.message };
@@ -1397,12 +1402,6 @@ function isExpired(value) {
   return Number.isFinite(timestampMs) && timestampMs < Date.now();
 }
 
-function isOlderThanDays(value, days) {
-  const timestampMs = Date.parse(value);
-  if (!Number.isFinite(timestampMs)) return false;
-  return Date.now() - timestampMs > days * 24 * 60 * 60 * 1000;
-}
-
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -1429,6 +1428,7 @@ module.exports = {
   parseBalanceUsage,
   windowSecondsToTierName,
   writeJsonFileAtomic,
+  readCodexCredentials,
   queryGrokQuota,
   normalizeGrokBilling,
   queryZhipuCoding,
