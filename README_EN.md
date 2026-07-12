@@ -41,6 +41,17 @@ Quit any running older version before installing. The installer supports a custo
 4. Select Add, choose a provider, and enter the required API key or endpoint.
 5. Select Save and refresh quotas.
 
+### Settings Toolbar
+
+The four shortcut buttons beside "Accounts & Providers" have different purposes:
+
+- **Latest**: finds the newest sub2api-format JSON file in Downloads and prepares its accounts for import.
+- **Paste**: accepts sub2api JSON copied to the clipboard, so it can be previewed and imported without saving a file first.
+- **Import**: opens a file picker for a sub2api-format JSON file, then previews the accounts before importing them.
+- **Add**: opens the provider template picker for creating and configuring a provider. It is the only one of the four buttons that adds a provider; it does not import sub2api account files.
+
+In short, **Latest**, **Paste**, and **Import** are account-JSON tools, while **Add** is the provider-configuration tool. Imported accounts appear in the provider list and can be enabled, disabled, reordered, and refreshed independently. The preview shows only the necessary account summary and never exposes the raw OAuth token or API key.
+
 User configuration is stored at:
 
 ```text
