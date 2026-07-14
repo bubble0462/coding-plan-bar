@@ -26,6 +26,14 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   leavePopup() {
     return ipcRenderer.invoke("quota:leave-popup");
   },
+  onPopupVisibility(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("quota:visibility", listener);
+    return () => ipcRenderer.removeListener("quota:visibility", listener);
+  },
+  popupVisibilityComplete(visible) {
+    return ipcRenderer.invoke("quota:visibility-complete", Boolean(visible));
+  },
   resize(height, layoutKey) {
     return ipcRenderer.invoke("quota:resize", height, layoutKey);
   },

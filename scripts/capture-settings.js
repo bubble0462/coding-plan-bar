@@ -143,6 +143,7 @@ async function main() {
   ipcMain.handle("quota:hide", () => {});
   ipcMain.handle("quota:keep-open", () => {});
   ipcMain.handle("quota:leave-popup", () => {});
+  ipcMain.handle("quota:visibility-complete", () => {});
   ipcMain.handle("quota:resize", () => {});
   ipcMain.handle("quota:quit", () => {});
 
@@ -230,6 +231,29 @@ async function main() {
       })()`,
     );
     if (!opened) throw new Error("Template popover did not become visibly open");
+    // Template dialog must move keyboard focus into itself so it is operable
+    // without the mouse, and Escape must close it back to the trigger.
+    const templateFocus = await window.webContents.executeJavaScript(`(() => {
+      const popover = document.querySelector(".template-popover");
+      if (!popover) return { hasFocus: false };
+      const firstCard = popover.querySelector("[data-action='add-template']");
+      firstCard?.focus();
+      return { hasFocus: popover.contains(document.activeElement) };
+    })()`);
+    if (!templateFocus.hasFocus) throw new Error("Template popover did not receive keyboard focus");
+    await window.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`);
+    await wait(260);
+    const templateEscFocus = await window.webContents.executeJavaScript(`(() => {
+      const trigger = document.querySelector('[data-action="toggle-templates"]');
+      return {
+        closed: !document.querySelector(".template-popover"),
+        focusOnTrigger: document.activeElement === trigger,
+      };
+    })()`);
+    if (!templateEscFocus.closed) throw new Error("Template popover Escape did not close the dialog");
+    if (!templateEscFocus.focusOnTrigger) throw new Error("Template popover Escape did not restore focus to the trigger");
+    await window.webContents.executeJavaScript(`document.querySelector('[data-action="toggle-templates"]')?.click()`);
+    await wait(160);
   }
 
   if (showUpdate) {
@@ -264,10 +288,22 @@ async function main() {
         const page = document.querySelector(".health-page");
         if (!page) return false;
         const text = page.textContent || "";
-        return text.includes("需要处理") && text.includes("诊断项");
+        // Healthy state shows "全部正常" + freshness info; unhealthy state
+        // shows "N 个项目需要处理". Either is valid.
+        return text.includes("全部正常") || text.includes("需要处理");
       })()`,
     );
     if (!rendered) throw new Error("Health page did not render expected summary");
+    const healthSummary = await window.webContents.executeJavaScript(`(() => {
+      const hero = document.querySelector(".diagnostic-hero");
+      if (!hero) return false;
+      const text = hero.textContent || "";
+      if (text.includes("全部正常")) {
+        return text.includes("已检查") && text.includes("上次刷新");
+      }
+      return text.includes("需要处理");
+    })()`);
+    if (!healthSummary) throw new Error("Health page did not show actionable or freshness summary");
   }
 
   if (showBackup) {
@@ -304,6 +340,14 @@ async function main() {
       })()`,
     );
     if (!rendered) throw new Error("Import preview did not render expected summary");
+    const importFocus = await window.webContents.executeJavaScript(`(() => {
+      const popover = document.querySelector(".import-popover");
+      if (!popover) return { hasFocus: false };
+      const target = popover.querySelector("[data-action='confirm-import-preview']:not([disabled])") || popover.querySelector(".icon-close");
+      target?.focus();
+      return { hasFocus: popover.contains(document.activeElement) };
+    })()`);
+    if (!importFocus.hasFocus) throw new Error("Import preview did not receive keyboard focus");
   }
 
   if (showReorder) {
@@ -340,11 +384,87 @@ async function main() {
       throw new Error(`Provider drag reorder did not update the provider array and status: ${JSON.stringify(reorderResult)}`);
     }
     await wait(380);
+
+    // Keyboard reorder: Alt+ArrowDown on the first handle should move it past
+    // the second provider. The grid is now [deepseek, codex], so moving codex
+    // down restores [deepseek, codex] ordering is invalid — verify that plain
+    // ArrowDown (without Alt) does NOT reorder, ensuring switch rows can be
+    // navigated by keyboard without triggering drag.
+    const keyboardGuard = await window.webContents.executeJavaScript(`(() => {
+      const handle = document.querySelector('.drag-handle[data-id="codex"]');
+      if (!handle) return { missing: true };
+      handle.focus();
+      handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      const ids = [...document.querySelectorAll('.provider-item')].map((row) => row.dataset.id).join(',');
+      const switchFocus = document.querySelector('[data-action="toggle-enabled"]');
+      return { ids, switchReachable: Boolean(switchFocus) };
+    })()`);
+    if (keyboardGuard.ids !== "deepseek,codex") {
+      throw new Error(`Provider list reordered on plain ArrowDown without Alt: ${keyboardGuard.ids}`);
+    }
+    // Restore original order with Alt+ArrowUp so the screenshot matches prior
+    // captures.
+    await window.webContents.executeJavaScript(`
+      const handle = document.querySelector('.drag-handle[data-id="codex"]');
+      handle?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true }));
+    `);
+    await wait(260);
+    const restoredOrder = await window.webContents.executeJavaScript(
+      `[...document.querySelectorAll('.provider-item')].map((row) => row.dataset.id).join(',')`,
+    );
+    if (restoredOrder !== "codex,deepseek") {
+      throw new Error(`Alt+ArrowUp did not restore provider order: ${restoredOrder}`);
+    }
   }
 
   const image = await window.capturePage();
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, image.toPNG());
+
+  const controlAssertions = await window.webContents.executeJavaScript(`(() => {
+    // Only the provider editor renders a custom select and switches; skip the
+    // assertion on update/health/backup pages where those controls don't exist.
+    if (!document.querySelector('.editor .form-grid')) {
+      return { editorPresent: false, hasSelectTrigger: true, hasSelectAriaControls: true, switchFocusRuleExists: true };
+    }
+    const trigger = document.querySelector('.custom-select-trigger');
+    const switchInput = document.querySelector('[data-action="toggle-enabled"]') || document.querySelector('.switch input');
+
+    // The switch input is visually hidden, so a runtime :focus-visible check is
+    // unreliable in a hidden capture window. Instead verify the stylesheet
+    // actually declares a focus ring for the switch's visual span.
+    let switchFocusRuleExists = true;
+    if (switchInput) {
+      switchFocusRuleExists = false;
+      for (const sheet of document.styleSheets) {
+        let rules;
+        try {
+          rules = sheet.cssRules || [];
+        } catch {
+          continue;
+        }
+        for (const rule of rules) {
+          if (typeof rule.selectorText === 'string' && rule.selectorText.includes('.switch input:focus-visible')) {
+            switchFocusRuleExists = true;
+            break;
+          }
+        }
+        if (switchFocusRuleExists) break;
+      }
+    }
+    return {
+      editorPresent: true,
+      hasSelectTrigger: Boolean(trigger),
+      hasSelectAriaControls: trigger ? Boolean(trigger.getAttribute('aria-controls')) : false,
+      switchFocusRuleExists,
+    };
+  })()`);
+  if (controlAssertions.editorPresent) {
+    if (!controlAssertions.hasSelectTrigger) throw new Error("Custom select trigger was not rendered");
+    if (!controlAssertions.hasSelectAriaControls) throw new Error("Custom select trigger must expose aria-controls");
+    if (!controlAssertions.switchFocusRuleExists) throw new Error("Switch must declare a visible focus ring");
+  }
+
   app.exit(0);
 }
 

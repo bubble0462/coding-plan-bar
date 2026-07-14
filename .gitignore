@@ -9,3 +9,4 @@ config.local.json
 
 # Local AI planning artifacts
 .ai/
+.zcode/

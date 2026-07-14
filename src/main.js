@@ -24,6 +24,7 @@ const {
 } = require("./config-store");
 const { importAccountsIntoConfig, previewAccountsImport } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
+const { calculatePopupPlacement } = require("./popup-placement");
 const { loadConfig, refreshProviders } = require("./providers");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
@@ -51,6 +52,8 @@ let pendingRefreshReason = null;
 let isPopupHovered = false;
 let measuredPopupHeight = 0;
 let measuredPopupKey = "";
+let popupPlacement = { placement: "above", pointerOffset: 0, pointerVisible: true };
+let awaitingPopupExit = false;
 let currentState = {
   loading: false,
   configPath: null,
@@ -134,7 +137,7 @@ function createSettingsWindow() {
 }
 
 function positionPopup() {
-  if (!tray || !popupWindow) return;
+  if (!tray || !popupWindow) return null;
 
   const trayBounds = tray.getBounds();
   const windowBounds = popupWindow.getBounds();
@@ -142,48 +145,53 @@ function positionPopup() {
     x: trayBounds.x,
     y: trayBounds.y,
   });
-  const workArea = display.workArea;
-
-  let x = Math.round(trayBounds.x + trayBounds.width / 2 - windowBounds.width + 42);
-  let y = Math.round(trayBounds.y - windowBounds.height - 10);
-
-  if (y < workArea.y) {
-    y = Math.round(trayBounds.y + trayBounds.height + 10);
-  }
-  x = Math.max(workArea.x + 8, Math.min(x, workArea.x + workArea.width - windowBounds.width - 8));
-  y = Math.max(workArea.y + 8, Math.min(y, workArea.y + workArea.height - windowBounds.height - 8));
-
-  popupWindow.setPosition(x, y, false);
+  const nextPlacement = calculatePopupPlacement({
+    trayBounds,
+    windowBounds,
+    workArea: display.workArea,
+  });
+  popupPlacement = {
+    placement: nextPlacement.placement,
+    pointerOffset: nextPlacement.pointerOffset,
+    pointerVisible: nextPlacement.pointerVisible,
+  };
+  popupWindow.setPosition(nextPlacement.x, nextPlacement.y, false);
+  return popupPlacement;
 }
 
 function showPopup() {
   if (!popupWindow) createPopupWindow();
   cancelHide();
+  awaitingPopupExit = false;
   resizePopupForState();
   positionPopup();
 
   const wasVisible = popupWindow.isVisible();
-  if (!wasVisible) {
-    popupWindow.setOpacity(0);
-  }
-
   popupWindow.show();
   popupWindow.moveTop();
   sendSnapshot();
 
-  if (!wasVisible) {
-    scheduleReveal();
+  if (!wasVisible && !popupWindow.webContents.isDestroyed()) {
+    popupWindow.webContents.send("quota:visibility", { visible: true });
   }
 }
 
 function hidePopup() {
-  if (popupWindow && popupWindow.isVisible()) {
-    isPopupHovered = false;
-    cancelHide();
-    cancelReveal();
-    popupWindow.setOpacity(1);
-    popupWindow.hide();
+  if (!popupWindow || !popupWindow.isVisible()) return;
+  isPopupHovered = false;
+  cancelHide();
+  cancelReveal();
+  awaitingPopupExit = false;
+  popupWindow.hide();
+}
+
+function requestPopupHide() {
+  if (!popupWindow || !popupWindow.isVisible() || awaitingPopupExit) return;
+  awaitingPopupExit = true;
+  if (!popupWindow.webContents.isDestroyed()) {
+    popupWindow.webContents.send("quota:visibility", { visible: false });
   }
+  hideTimer = setTimeout(hidePopup, 280);
 }
 
 function scheduleHide(delay = 500) {
@@ -193,7 +201,7 @@ function scheduleHide(delay = 500) {
       cancelHide();
       return;
     }
-    hidePopup();
+    requestPopupHide();
   }, delay);
 }
 
@@ -255,6 +263,7 @@ function snapshotPayload() {
   return {
     ...currentState,
     layoutKey: providerLayoutKey(currentState.providers),
+    popupPlacement,
   };
 }
 
@@ -963,6 +972,9 @@ async function startApp() {
   ipcMain.handle("quota:hide", hidePopup);
   ipcMain.handle("quota:keep-open", keepPopupOpen);
   ipcMain.handle("quota:leave-popup", leavePopup);
+  ipcMain.handle("quota:visibility-complete", (_event, visible) => {
+    if (!visible) hidePopup();
+  });
   ipcMain.handle("quota:resize", (_event, height, layoutKey) => {
     const numeric = Math.round(Number(height));
     const currentLayoutKey = providerLayoutKey(currentState.providers);

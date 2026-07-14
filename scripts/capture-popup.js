@@ -238,6 +238,7 @@ async function main() {
   ipcMain.handle("quota:hide", () => {});
   ipcMain.handle("quota:keep-open", () => {});
   ipcMain.handle("quota:leave-popup", () => {});
+  ipcMain.handle("quota:visibility-complete", () => {});
   ipcMain.handle("quota:resize", (_event, height) => {
     if (captureWindow && !captureWindow.isDestroyed()) {
       if (debugLayout) console.log(`resize:${height}`);
@@ -277,6 +278,8 @@ async function main() {
   await captureWindow.loadFile(path.join(__dirname, "..", "src", "renderer", "index.html"));
   await captureWindow.webContents.insertCSS(`
     #app.is-entering .panel-shell,
+    .panel-shell.is-entering,
+    .panel-shell.is-leaving,
     .provider,
     .provider.is-fresh {
       animation: none !important;
@@ -294,8 +297,10 @@ async function main() {
         lastReportedHeight = 0;
         lastLayoutKey = nextLayoutKey;
       }
+      prevSnapshotUpdatedAt = nextSnapshot.updatedAt;
+      hasEntered = true;
       snapshot = nextSnapshot;
-      render();
+      render(false);
       reportLayoutHeight();
     `;
     let renderedProviderCount = -1;
@@ -394,6 +399,27 @@ async function main() {
   const image = await captureWindow.capturePage();
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, image.toPNG());
+
+  const assertions = await captureWindow.webContents.executeJavaScript(`(() => {
+    const refresh = document.querySelector('[data-action="refresh"]');
+    const list = document.querySelector('.provider-list');
+    const cards = [...document.querySelectorAll('.provider[data-provider-id]')];
+    const firstCardId = cards[0]?.dataset.providerId || null;
+    return {
+      refreshHasBusy: refresh ? refresh.getAttribute('aria-busy') : 'missing',
+      listScrollable: list ? list.classList.contains('is-scrollable') : false,
+      cardCount: cards.length,
+      firstCardId,
+      cardIdsStable: cards.every((card) => Boolean(card.dataset.providerId)),
+      pointerClass: document.querySelector('.pointer')?.className || 'missing',
+    };
+  })()`);
+  if (assertions.refreshHasBusy === 'missing') throw new Error('Popup refresh control was not rendered');
+  if (assertions.cardCount !== firstSnapshot.providers.length) {
+    throw new Error(`Popup card count assertion failed: ${assertions.cardCount}`);
+  }
+  if (!assertions.cardIdsStable) throw new Error('Popup provider cards must keep stable data-provider-id');
+
   app.exit(0);
 }
 

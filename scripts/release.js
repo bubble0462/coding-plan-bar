@@ -73,10 +73,12 @@ function main() {
   const notes = [
     `Coding Plan Bar ${tag}`,
     "",
-    "- Grok CLI RPC / Web Billing fallback and detailed quota display",
-    "- Popup drag ordering with persistent provider order",
-    "- Usage attribution, encrypted secrets, hardened HTTP and updater integrity",
-    "- GPT-5.6 Sol, Terra, and Luna preview pricing",
+    "- Popup rewrites to incremental DOM updates: stable provider cards, smooth progress transitions, aria-busy refresh control",
+    "- Tray popup placement: pointer flips above/below the tray, content-driven scroll for tall cards",
+    "- Settings dialogs: focus trap, Escape close, focus restore; custom select keyboard navigation",
+    "- Provider row: de-nested select/drag/switch interactions; Alt+Arrow reorder only",
+    "- Dirty-aware bottom bar; health page freshness summary",
+    "- Motion consolidation: removed ambient drift, glare, streaks, breathe/ping; kept loading, value-change, FLIP, save confirmation",
     "",
     `SHA256: ${sha}`,
   ].join("\n");

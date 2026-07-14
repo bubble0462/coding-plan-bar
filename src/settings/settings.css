@@ -2496,6 +2496,132 @@ button {
   line-height: 1.45;
 }
 
+/* ===== Accessibility and restrained interaction overrides ===== */
+.provider-item {
+  grid-template-columns: minmax(0, 1fr) 20px 34px;
+  gap: 7px;
+  cursor: default;
+}
+
+.provider-select {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.provider-select:focus-visible,
+.nav-item:focus-visible,
+.account-filter:focus-visible,
+.segment:focus-visible,
+.icon-close:focus-visible,
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.provider-item:focus-within {
+  border-color: #b9d4ff;
+}
+
+.provider-item:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.provider-select:hover .provider-name strong,
+.provider-select:focus-visible .provider-name strong {
+  color: var(--blue);
+}
+
+.provider-list.has-bar .provider-item.is-selected {
+  border-color: transparent;
+}
+
+.switch input:focus-visible + span {
+  box-shadow: var(--ring);
+}
+
+.switch.is-just-toggled span::after,
+.switch.is-just-toggled input:checked + span::after {
+  animation: none;
+}
+
+.btn.primary::before,
+.nav-dot.has-update,
+.nav-dot.has-alert {
+  animation: none;
+}
+
+.template-popover {
+  animation: cpb-template-dialog-in 220ms var(--ease-out) both;
+}
+
+.paste-popover,
+.import-popover {
+  animation: cpb-overlay-dialog-in 220ms var(--ease-out) both;
+}
+
+.template-card {
+  animation: none;
+}
+
+.template-backdrop.is-leaving,
+.import-backdrop.is-leaving {
+  animation-duration: 180ms;
+}
+
+.template-popover.is-leaving {
+  animation: cpb-template-dialog-out 180ms var(--ease-out) both;
+}
+
+.import-popover.is-leaving {
+  animation: cpb-overlay-dialog-out 180ms var(--ease-out) both;
+}
+
+@keyframes cpb-template-dialog-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 5px)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes cpb-template-dialog-out {
+  to {
+    opacity: 0;
+    transform: translate(-50%, calc(-50% + 4px)) scale(0.98);
+  }
+}
+
+@keyframes cpb-overlay-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes cpb-overlay-dialog-out {
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -2503,5 +2629,6 @@ button {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

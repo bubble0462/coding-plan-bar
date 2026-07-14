@@ -1,6 +1,6 @@
 {
   "name": "coding-plan-bar",
-  "version": "0.3.19",
+  "version": "0.3.20",
   "productName": "Coding Plan Bar",
   "description": "Windows tray quota monitor for Codex and optional coding-plan providers.",
   "main": "src/main.js",
@@ -21,7 +21,7 @@
     "screenshot:settings:health": "electron scripts/capture-settings.js --health",
     "screenshot:settings:backup": "electron scripts/capture-settings.js --backup",
     "release:github": "node scripts/release.js",
-    "check": "node --check src/main.js && node --check src/account-importer.js && node --check src/config-store.js && node --check src/failure-classifier.js && node --check src/grok-rpc.js && node --check src/grok-web-billing.js && node --check src/layout.js && node --check src/model-pricing.js && node --check src/preload.js && node --check src/provider-cache.js && node --check src/providers.js && node --check src/secret-store.js && node --check src/session-usage.js && node --check src/updater.js && node --check src/renderer/renderer.js && node --check src/settings/settings.js && node --check scripts/capture-popup.js && node --check scripts/capture-settings.js && node --check scripts/release.js",
+    "check": "node --check src/main.js && node --check src/account-importer.js && node --check src/config-store.js && node --check src/failure-classifier.js && node --check src/grok-rpc.js && node --check src/grok-web-billing.js && node --check src/layout.js && node --check src/model-pricing.js && node --check src/popup-placement.js && node --check src/preload.js && node --check src/provider-cache.js && node --check src/providers.js && node --check src/secret-store.js && node --check src/session-usage.js && node --check src/updater.js && node --check src/renderer/renderer.js && node --check src/settings/settings.js && node --check scripts/capture-popup.js && node --check scripts/capture-settings.js && node --check scripts/release.js",
     "smoke": "node scripts/smoke-test.js"
   },
   "keywords": [

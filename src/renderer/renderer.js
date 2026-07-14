@@ -30,8 +30,11 @@ let lastReportedHeight = 0;
 let lastLayoutKey = "";
 let layoutReportQueued = false;
 let hasEntered = false;
+let hasRenderedShell = false;
 let prevSnapshotUpdatedAt = null;
+let renderedProviderSignatures = new Map();
 let draggedProviderId = null;
+let refreshHighlightTimer = null;
 
 window.codingPlanBar.onSnapshot((next) => {
   const nextLayoutKey = next.layoutKey || providerLayoutKey(next.providers);
@@ -44,6 +47,26 @@ window.codingPlanBar.onSnapshot((next) => {
   snapshot = next;
   render(isDataRefresh);
 });
+
+if (typeof window.codingPlanBar.onPopupVisibility === "function") {
+  window.codingPlanBar.onPopupVisibility(({ visible }) => {
+    ensurePopupShell();
+    const shell = root.querySelector(".panel-shell");
+    if (!shell) return;
+    shell.classList.remove("is-entering", "is-leaving");
+    if (visible) {
+      void shell.offsetWidth;
+      shell.classList.add("is-entering");
+      return;
+    }
+    shell.classList.add("is-leaving");
+    window.setTimeout(() => {
+      if (shell.classList.contains("is-leaving")) {
+        window.codingPlanBar.popupVisibilityComplete(false);
+      }
+    }, prefersReducedMotion() ? 0 : 160);
+  });
+}
 
 // Light tick: only refreshes the "刚刚更新 / X 分钟前" text without rebuilding
 // the DOM, so scroll position and the entrance animation are not disturbed.
@@ -82,79 +105,225 @@ function render(isDataRefresh = false) {
   const providers = snapshot.providers || [];
   const fresh = providers.length > 0 && !hasEntered;
   if (fresh) hasEntered = true;
-  const refreshingClass = isDataRefresh ? "is-refreshing" : "";
+  ensurePopupShell();
 
-  // Preserve scroll position across full re-renders so the list doesn't snap
-  // back to the top when data refreshes while the user is scrolled down.
-  const prevList = root.querySelector(".provider-list");
-  const savedScroll = prevList ? prevList.scrollTop : 0;
+  const shell = root.querySelector(".panel-shell");
+  const list = root.querySelector(".provider-list");
+  if (!shell || !list) return;
 
+  shell.classList.toggle("is-loading", Boolean(snapshot.loading));
+  shell.classList.toggle("density-compact", snapshot.panelDensity === "compact");
+  shell.classList.toggle("density-comfortable", snapshot.panelDensity !== "compact");
+
+  const status = root.querySelector("[data-role='refresh-status']");
+  if (status) status.textContent = snapshot.loading ? "正在刷新..." : formatUpdated(snapshot.updatedAt);
+  const refresh = root.querySelector("[data-action='refresh']");
+  if (refresh) {
+    refresh.disabled = Boolean(snapshot.loading);
+    refresh.classList.toggle("is-spinning", Boolean(snapshot.loading));
+    refresh.setAttribute("aria-busy", snapshot.loading ? "true" : "false");
+  }
+
+  const attention = providers.filter((provider) => providerAlertClass(provider));
+  const attentionButton = root.querySelector("[data-action='focus-attention']");
+  if (attentionButton) {
+    const hasAttention = attention.length > 0;
+    attentionButton.hidden = !hasAttention;
+    attentionButton.textContent = hasAttention
+      ? `${attention.length} 个账户需要处理`
+      : "";
+  }
+
+  patchProviderList(list, providers, { fresh, isDataRefresh });
+  // Use provider count as a fast default, but after the first layout pass
+  // upgrade to scrollable when content overflows the window — a single tall
+  // card (e.g. Grok with three tiers) can exceed the work area even with
+  // fewer than four providers.
+  list.classList.toggle("is-scrollable", providers.length > 3);
+  list.classList.toggle("is-static", providers.length <= 3);
+  requestAnimationFrame(() => {
+    const stillStatic = list.classList.contains("is-static");
+    if (!stillStatic) return;
+    const shell = root.querySelector(".panel-shell");
+    if (!shell) return;
+    const rootStyle = getComputedStyle(root);
+    const fullHeight = measureStaticLayoutHeight(shell, rootStyle);
+    if (fullHeight > window.innerHeight + 1) {
+      list.classList.replace("is-static", "is-scrollable");
+      queueLayoutReport();
+    }
+  });
+
+  const fatal = root.querySelector("[data-role='fatal']");
+  if (fatal) {
+    fatal.hidden = !snapshot.fatalError;
+    fatal.textContent = snapshot.fatalError || "";
+  }
+  const interval = root.querySelector("[data-role='refresh-interval']");
+  if (interval) interval.textContent = `自动 ${Math.round((snapshot.refreshIntervalSeconds || 300) / 60)} 分钟`;
+  const freshness = root.querySelector("[data-role='freshness']");
+  if (freshness) freshness.textContent = snapshot.loading ? "更新中" : formatUpdated(snapshot.updatedAt);
+
+  const pointer = root.querySelector(".pointer");
+  if (pointer) {
+    const placement = snapshot.popupPlacement || {};
+    const side = placement.placement || "above";
+    pointer.className = `pointer pointer-${side}`;
+    pointer.hidden = placement.pointerVisible === false;
+    if (Number.isFinite(placement.pointerOffset)) {
+      pointer.style.setProperty("--pointer-offset", `${placement.pointerOffset}px`);
+    }
+  }
+
+  announcePopupStatus(providers);
+  queueLayoutReport();
+}
+
+function ensurePopupShell() {
+  if (hasRenderedShell) return;
   root.innerHTML = `
-    <section class="panel-shell ${snapshot.loading ? "is-loading" : ""} density-${snapshot.panelDensity === "compact" ? "compact" : "comfortable"}">
+    <section class="panel-shell density-comfortable">
       <header class="header">
         <div>
           <h1>Coding Plan Bar</h1>
-          <p>${snapshot.loading ? "正在刷新..." : formatUpdated(snapshot.updatedAt)}</p>
+          <p data-role="refresh-status">正在刷新...</p>
+          <button class="header-summary" type="button" data-action="focus-attention" hidden></button>
         </div>
         <div class="header-actions">
-          <button class="icon-button ${snapshot.loading ? "is-spinning" : ""}" data-action="refresh" title="刷新" aria-label="刷新">${ICONS.refresh}</button>
+          <button class="icon-button" data-action="refresh" title="刷新" aria-label="刷新" aria-busy="true">${ICONS.refresh}</button>
           <button class="icon-button" data-action="config" title="设置" aria-label="设置">${ICONS.settings}</button>
         </div>
       </header>
 
-      <section class="provider-list ${providers.length > 3 ? "is-scrollable" : "is-static"}">
-        ${providers.length ? providers.map((provider, index) => renderProvider(provider, index, fresh, refreshingClass, providers.length > 1)).join("") : renderEmpty()}
-      </section>
-
-      ${snapshot.fatalError ? `<div class="fatal">${escapeHtml(snapshot.fatalError)}</div>` : ""}
+      <div class="sr-only" data-role="live-status" aria-live="polite" aria-atomic="true"></div>
+      <section class="provider-list is-static"></section>
+      <div class="fatal" data-role="fatal" hidden></div>
 
       <footer class="footer">
-        <span>自动 ${Math.round((snapshot.refreshIntervalSeconds || 300) / 60)} 分钟</span>
-        <span>${snapshot.elapsedMs ? `${snapshot.elapsedMs}ms` : "空闲"}</span>
+        <span data-role="refresh-interval"></span>
+        <span data-role="freshness"></span>
         <button class="footer-button" data-action="quit">退出</button>
       </footer>
-      <div class="pointer" aria-hidden="true"></div>
+      <div class="pointer pointer-above" aria-hidden="true"></div>
     </section>
   `;
-
-  root.querySelector('[data-action="refresh"]')?.addEventListener("click", () => {
-    window.codingPlanBar.refresh();
-  });
-  root.querySelector('[data-action="config"]')?.addEventListener("click", () => {
-    window.codingPlanBar.openConfig();
-  });
-  root.querySelector('[data-action="quit"]')?.addEventListener("click", () => {
-    window.codingPlanBar.quit();
-  });
-  bindProviderReorder();
-
-  // Restore scroll position now that the new list is in the DOM.
-  const newList = root.querySelector(".provider-list");
-  if (newList && savedScroll) newList.scrollTop = savedScroll;
-
-  // Clear the refresh highlight shortly after it plays so a subsequent
-  // snapshot can retrigger it cleanly.
-  if (isDataRefresh) {
-    const title = root.querySelector(".header h1");
-    const list = root.querySelector(".provider-list");
-    title?.classList.add("is-just-refreshed");
-    list?.classList.add("is-refreshing-list");
-    window.clearTimeout(refreshHighlightTimer);
-    refreshHighlightTimer = window.setTimeout(() => {
-      root.querySelectorAll(".provider.is-refreshing").forEach((el) => el.classList.remove("is-refreshing"));
-      title?.classList.remove("is-just-refreshed");
-      list?.classList.remove("is-refreshing-list");
-    }, 750);
-  }
-
-  queueLayoutReport();
+  hasRenderedShell = true;
+  root.querySelector("[data-action='refresh']")?.addEventListener("click", () => window.codingPlanBar.refresh());
+  root.querySelector("[data-action='config']")?.addEventListener("click", () => window.codingPlanBar.openConfig());
+  root.querySelector("[data-action='quit']")?.addEventListener("click", () => window.codingPlanBar.quit());
+  root.querySelector("[data-action='focus-attention']")?.addEventListener("click", focusFirstAttentionProvider);
 }
 
-let refreshHighlightTimer = null;
+function patchProviderList(list, providers, { fresh, isDataRefresh }) {
+  const priorScrollTop = list.scrollTop;
+  const expectedIds = new Set(providers.map((provider) => String(provider.id || "")));
+  list.querySelectorAll(".provider[data-provider-id]").forEach((card) => {
+    if (!expectedIds.has(card.dataset.providerId)) {
+      renderedProviderSignatures.delete(card.dataset.providerId);
+      card.remove();
+    }
+  });
 
-function renderProvider(provider, index, fresh, refreshing, canReorder) {
-  const classes = ["provider", `status-${provider.status}`, providerAlertClass(provider), canReorder ? "is-reorderable" : "", fresh ? "is-fresh" : "", refreshing]
-    .filter(Boolean)
+  if (!providers.length) {
+    renderedProviderSignatures.clear();
+    list.innerHTML = renderEmpty();
+    list.scrollTop = priorScrollTop;
+    return;
+  }
+
+  list.querySelector(".empty-state")?.remove();
+  const canReorder = providers.length > 1;
+  for (const [index, provider] of providers.entries()) {
+    const id = String(provider.id || "");
+    const signature = providerDisplaySignature(provider);
+    const priorSignature = renderedProviderSignatures.get(id);
+    const changed = Boolean(priorSignature && priorSignature !== signature && !snapshot.loading);
+    let card = list.querySelector(`.provider[data-provider-id="${cssEscape(id)}"]`);
+    if (!card) {
+      card = providerCardFromMarkup(renderProvider(provider, index, fresh, changed || isDataRefresh, canReorder));
+    } else if (priorSignature !== signature || card.dataset.canReorder !== String(canReorder)) {
+      const next = providerCardFromMarkup(renderProvider(provider, index, false, changed, canReorder));
+      card.replaceWith(next);
+      card = next;
+      if (changed) flashChangedCard(card);
+    }
+    renderedProviderSignatures.set(id, signature);
+    list.append(card);
+  }
+  list.scrollTop = priorScrollTop;
+  bindProviderReorder();
+}
+
+function providerCardFromMarkup(markup) {
+  const template = document.createElement("template");
+  template.innerHTML = markup.trim();
+  return template.content.firstElementChild;
+}
+
+function providerDisplaySignature(provider) {
+  return JSON.stringify({
+    status: provider.status,
+    statusText: provider.statusText,
+    planLabel: provider.planLabel,
+    message: provider.message,
+    failure: provider.failure && { label: provider.failure.label, action: provider.failure.action },
+    lastSuccess: provider.lastSuccess && provider.lastSuccess.queriedAt,
+    balance: provider.balance,
+    usage: provider.usage,
+    tiers: provider.tiers,
+    extraUsage: provider.extraUsage,
+  });
+}
+
+function flashChangedCard(card) {
+  card.classList.remove("is-changed");
+  void card.offsetWidth;
+  card.classList.add("is-changed");
+  window.clearTimeout(refreshHighlightTimer);
+  refreshHighlightTimer = window.setTimeout(() => {
+    root.querySelectorAll(".provider.is-changed").forEach((node) => node.classList.remove("is-changed"));
+  }, 520);
+}
+
+let lastAnnouncement = "";
+function announcePopupStatus(providers) {
+  const live = root.querySelector("[data-role='live-status']");
+  if (!live) return;
+  const attention = providers.filter((provider) => providerAlertClass(provider));
+  const message = snapshot.loading
+    ? "正在刷新额度"
+    : snapshot.fatalError
+      ? `刷新失败：${snapshot.fatalError}`
+      : attention.length
+        ? `刷新完成，${attention.length} 个账户需要处理`
+        : `刷新完成，已检查 ${providers.length} 个账户`;
+  if (message === lastAnnouncement) return;
+  lastAnnouncement = message;
+  live.textContent = message;
+}
+
+function focusFirstAttentionProvider() {
+  const card = root.querySelector(".provider.is-attention, .provider.is-watch");
+  if (!card) return;
+  card.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
+  card.classList.add("is-focus-target");
+  card.querySelector("[data-provider-drag]")?.focus();
+  window.setTimeout(() => card.classList.remove("is-focus-target"), prefersReducedMotion() ? 0 : 520);
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+function renderProvider(provider, index, fresh, changed, canReorder) {
+  const classes = [
+    "provider",
+    `status-${provider.status}`,
+    providerAlertClass(provider),
+    canReorder ? "is-reorderable" : "",
+    fresh ? "is-fresh" : "",
+    changed ? "is-changed" : "",
+  ]    .filter(Boolean)
     .join(" ");
   const enterStyle = fresh ? ` style="--enter-delay:${Math.min(index, 4) * 45}ms"` : "";
   const body = provider.balance
@@ -164,8 +333,8 @@ function renderProvider(provider, index, fresh, refreshing, canReorder) {
       : renderProviderMessage(provider);
 
   return `
-    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}"${enterStyle}>
-      ${canReorder ? `<button class="provider-drag-handle" type="button" draggable="true" data-provider-drag="${escapeAttr(provider.id || "")}" title="拖动调整显示顺序" aria-label="调整 ${escapeAttr(provider.name || provider.id)} 的显示顺序">${ICONS.grip}</button>` : ""}
+    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}" data-can-reorder="${canReorder}"${enterStyle}>
+      ${canReorder ? `<button class="provider-drag-handle" type="button" draggable="true" data-provider-drag="${escapeAttr(provider.id || "")}" title="Alt + 上下方向键调整显示顺序" aria-label="调整 ${escapeAttr(provider.name || provider.id)} 的显示顺序。按 Alt 加上方向键或下方向键移动。">${ICONS.grip}</button>` : ""}
       <div class="provider-top">
         <div class="provider-title">
           <span class="status-dot"></span>
@@ -208,6 +377,8 @@ function bindProviderReorder() {
   };
 
   rows.forEach((row) => {
+    if (row.dataset.reorderBound === "true") return;
+    row.dataset.reorderBound = "true";
     const handle = row.querySelector("[data-provider-drag]");
     if (!handle) return;
     handle.addEventListener("dragstart", (event) => {
@@ -379,9 +550,7 @@ function renderBalance(provider) {
         <span class="balance-label">${escapeHtml(balance.planName || "余额")}</span>
         <strong>${amount}</strong>
       </div>
-      <div class="balance-meter">
-        <div class="balance-mark"></div>
-      </div>
+      <div class="balance-meter" aria-hidden="true"></div>
       ${extra ? `<p>${escapeHtml(extra)}</p>` : ""}
     </div>
   `;
@@ -503,10 +672,13 @@ function reportLayoutHeight() {
 
   const providerCount = (snapshot.providers || []).length;
   const rootStyle = getComputedStyle(root);
-  const desiredHeight =
-    providerCount <= 3
-      ? measureStaticLayoutHeight(shell, rootStyle)
-      : measureScrollableLayoutHeight(shell, providerList, rootStyle);
+  // Prefer the list's actual class (set by the content-overflow check) over
+  // the raw count, so a single tall card that was upgraded to scrollable
+  // reports a bounded height instead of its full natural height.
+  const isScrollable = providerList.classList.contains("is-scrollable") || providerCount > 3;
+  const desiredHeight = isScrollable
+    ? measureScrollableLayoutHeight(shell, providerList, rootStyle)
+    : measureStaticLayoutHeight(shell, rootStyle);
 
   if (Math.abs(desiredHeight - lastReportedHeight) > 1) {
     lastReportedHeight = desiredHeight;

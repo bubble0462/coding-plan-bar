@@ -55,14 +55,67 @@ let state = {
 let templatesCloseTimer = null;
 let importPreviewCloseTimer = null;
 let dropdownCloseTimer = null;
+let dialogOrigin = null;
 let hasRenderedSettingsShell = false;
 let providerDrag = { sourceId: null, targetId: null, position: null };
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+function motionDelay(milliseconds) {
+  return prefersReducedMotion() ? 0 : milliseconds;
+}
+
+function rememberDialogOrigin(element) {
+  dialogOrigin = {
+    action: element?.dataset?.action || "",
+    field: element?.dataset?.field || "",
+  };
+}
+
+function restoreDialogFocus() {
+  const origin = dialogOrigin;
+  dialogOrigin = null;
+  if (!origin?.action) return;
+  requestAnimationFrame(() => {
+    const action = cssEscape(origin.action);
+    const field = origin.field ? `[data-field="${cssEscape(origin.field)}"]` : "";
+    root.querySelector(`[data-action="${action}"]${field}`)?.focus();
+  });
+}
+
+function activeDialog() {
+  return root.querySelector(".template-popover:not(.is-leaving), .paste-popover, .import-popover:not(.is-leaving)");
+}
+
+function focusDialog(dialog, selector) {
+  requestAnimationFrame(() => {
+    const target = dialog?.querySelector(selector) || dialog?.querySelector("button:not([disabled]), input:not([disabled]), textarea:not([disabled])");
+    target?.focus();
+  });
+}
+
+function trapDialogFocus(event, dialog) {
+  const controls = [...dialog.querySelectorAll("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")]
+    .filter((element) => !element.closest("[hidden]"));
+  if (!controls.length) return;
+  const first = controls[0];
+  const last = controls.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
 
 window.addEventListener("click", (event) => {
   // Only re-render when we actually need to close an open provider picker.
   // Re-rendering on every click destroys <select> dropdowns and input focus.
   if (state.openDropdown && !event.target.closest(".custom-select")) {
-    closeDropdown();
+    closeDropdown({ restoreFocus: false });
     return;
   }
   if (state.importPreview && !state.importPreviewClosing) {
@@ -75,6 +128,33 @@ window.addEventListener("click", (event) => {
     return;
   }
   closeTemplates();
+});
+
+document.addEventListener("keydown", (event) => {
+  const dialog = activeDialog();
+  if (event.key === "Escape") {
+    if (state.openDropdown) {
+      event.preventDefault();
+      closeDropdown({ restoreFocus: true });
+      return;
+    }
+    if (state.importPreview && !state.importPreviewClosing) {
+      event.preventDefault();
+      closeImportPreview();
+      return;
+    }
+    if (state.pasteOpen) {
+      event.preventDefault();
+      closePasteImport();
+      return;
+    }
+    if (state.showTemplates && !state.templatesClosing) {
+      event.preventDefault();
+      closeTemplates();
+    }
+    return;
+  }
+  if (event.key === "Tab" && dialog) trapDialogFocus(event, dialog);
 });
 
 load();
@@ -112,13 +192,12 @@ window.codingPlanBar.onUpdaterState((next) => {
   const statusChanged = next.status !== lastUpdaterStatus;
   lastUpdaterStatus = next.status;
   state.updater = next;
-  // On the update view we always re-render (progress ticks, status changes).
-  // On the provider view we only re-render when the availability badge flips,
-  // to avoid disturbing an in-progress form edit.
+  // The update view needs progress renders. Other views only patch the
+  // navigation badge so composing text in the provider editor is never lost.
   if (state.view === "update") {
     render();
-  } else if (statusChanged) {
-    render();
+  } else if (statusChanged && root.childElementCount) {
+    refreshUpdaterNavigation();
   }
 });
 // Best-effort initial state pull; guarded so environments without the updater
@@ -128,7 +207,10 @@ if (typeof window.codingPlanBar.getUpdaterState === "function") {
     .getUpdaterState()
     .then((initial) => {
       state.updater = initial;
-      if (root.childElementCount) render();
+      if (root.childElementCount) {
+        if (state.view === "update") render();
+        else refreshUpdaterNavigation();
+      }
     })
     .catch(() => {});
 }
@@ -154,6 +236,19 @@ async function load() {
     state.statusTone = "error";
   }
   render();
+}
+
+function refreshUpdaterNavigation() {
+  const button = root.querySelector("[data-action='show-update']");
+  if (!button) return;
+  const available = state.updater.status === "available";
+  button.querySelector(".nav-dot")?.classList.toggle("has-update", available);
+  const badge = button.querySelector(".nav-badge");
+  if (available && !badge) {
+    button.insertAdjacentHTML("beforeend", '<span class="nav-badge">新版本</span>');
+  } else if (!available) {
+    badge?.remove();
+  }
 }
 
 function render() {
@@ -224,8 +319,13 @@ function render() {
       <footer class="bottom-bar">
         <span class="status ${state.statusIsError ? "is-error" : ""} ${state.statusTone ? `is-${state.statusTone}` : ""}">${escapeHtml(state.status)}</span>
         <div class="bottom-actions">
-          <button class="btn" data-action="reset">撤销未保存修改</button>
-          <button class="btn primary" data-action="save">保存并刷新额度</button>
+          ${state.view === "health" ? `<button class="btn" data-action="refresh-quota">立即刷新</button>` : ""}
+          ${state.view === "backup" ? `<button class="btn" data-action="backup-config">备份 config.json</button>` : ""}
+          ${state.view === "update" ? `<button class="btn" data-action="check-update">检查更新</button>` : ""}
+          ${state.dirty ? `
+            <button class="btn" data-action="reset">撤销未保存修改</button>
+            <button class="btn primary" data-action="save">保存并刷新额度</button>
+          ` : ""}
         </div>
       </footer>
 
@@ -280,7 +380,7 @@ function renderAccountTools() {
         <span>搜索</span>
         <input data-action="account-search" value="${escapeAttr(state.accountQuery || "")}" placeholder="邮箱 / accountId / 名称" />
       </label>
-      <div class="account-filters" role="tablist" aria-label="账号筛选">
+      <div class="account-filters" role="group" aria-label="账号筛选">
         ${renderAccountFilter("all", "全部")}
         ${renderAccountFilter("accounts", "官方")}
         ${renderAccountFilter("sub2api", "sub2api")}
@@ -293,7 +393,7 @@ function renderAccountTools() {
 }
 
 function renderAccountFilter(value, label) {
-  return `<button class="account-filter ${state.accountFilter === value ? "is-active" : ""}" data-action="account-filter" data-filter="${escapeAttr(value)}" role="tab" aria-selected="${state.accountFilter === value ? "true" : "false"}">${escapeHtml(label)}</button>`;
+  return `<button class="account-filter ${state.accountFilter === value ? "is-active" : ""}" data-action="account-filter" data-filter="${escapeAttr(value)}" aria-pressed="${state.accountFilter === value ? "true" : "false"}">${escapeHtml(label)}</button>`;
 }
 
 function renderProviderList() {
@@ -371,18 +471,20 @@ function renderProviderItem(provider) {
   const badge = providerBadge(provider);
   const attention = providerNeedsAttention(provider) ? "is-attention" : "";
   return `
-    <div class="provider-item ${selected} ${attention}" data-action="select-provider" data-id="${escapeAttr(provider.id)}" role="button" tabindex="0">
-      <button class="drag-handle" type="button" draggable="true" data-action="drag-provider" data-id="${escapeAttr(provider.id)}" title="拖动调整顺序" aria-label="拖动 ${escapeAttr(provider.name || provider.id)} 调整顺序">
+    <div class="provider-item ${selected} ${attention}" data-id="${escapeAttr(provider.id)}">
+      <button class="provider-select" type="button" data-action="select-provider" data-id="${escapeAttr(provider.id)}" aria-pressed="${provider.id === state.selectedId ? "true" : "false"}" aria-label="选择 ${escapeAttr(provider.name || provider.id)}">
+        <span class="dot ${provider.enabled === false ? "is-off" : badge.tone === "danger" ? "is-danger" : badge.tone === "warn" ? "is-warn" : ""}"></span>
+        <span class="provider-name">
+          <strong>${escapeHtml(provider.name || provider.id)}</strong>
+          <span>${escapeHtml(detail)}</span>
+        </span>
+        <span class="provider-badge is-${escapeAttr(badge.tone)}">${escapeHtml(badge.label)}</span>
+      </button>
+      <button class="drag-handle" type="button" draggable="true" data-action="drag-provider" data-id="${escapeAttr(provider.id)}" title="Alt + 上下方向键调整顺序" aria-label="调整 ${escapeAttr(provider.name || provider.id)} 的显示顺序。按 Alt 加上方向键或下方向键移动。">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
       </button>
-      <span class="dot ${provider.enabled === false ? "is-off" : badge.tone === "danger" ? "is-danger" : badge.tone === "warn" ? "is-warn" : ""}"></span>
-      <span class="provider-name">
-        <strong>${escapeHtml(provider.name || provider.id)}</strong>
-        <span>${escapeHtml(detail)}</span>
-      </span>
-      <span class="provider-badge is-${escapeAttr(badge.tone)}">${escapeHtml(badge.label)}</span>
       <label class="switch" title="启用">
-        <input type="checkbox" data-action="toggle-enabled" data-id="${escapeAttr(provider.id)}" ${provider.enabled !== false ? "checked" : ""} />
+        <input type="checkbox" data-action="toggle-enabled" data-id="${escapeAttr(provider.id)}" aria-label="启用 ${escapeAttr(provider.name || provider.id)}" ${provider.enabled !== false ? "checked" : ""} />
         <span></span>
       </label>
     </div>
@@ -530,6 +632,11 @@ function renderUpdatePage() {
 
 function renderHealthPage() {
   const rows = healthRows();
+  const enabledCount = state.config.providers.filter((provider) => provider.enabled !== false).length;
+  const updatedAt = state.snapshot.updatedAt ? new Date(state.snapshot.updatedAt).toLocaleString("zh-CN") : "尚未刷新";
+  const nextRefresh = state.snapshot.refreshIntervalSeconds
+    ? formatDuration(Number(state.snapshot.refreshIntervalSeconds) * 1000)
+    : "5 分钟";
   return `
     <div class="editor-head">
       <div class="section-title">
@@ -540,11 +647,15 @@ function renderHealthPage() {
     </div>
     <div class="form health-page">
       <div class="diagnostic-hero">
-        <strong>${rows.length ? `${rows.length} 个项目需要处理` : "暂无需要处理的项目"}</strong>
-        <span>${rows.length ? "点击左侧账号可以查看身份信息和本地配置摘要。" : "当前没有失败、即将过期或额度偏高的账号。"}</span>
+        <strong>${rows.length ? `${rows.length} 个项目需要处理` : "全部正常"}</strong>
+        <span>${
+          rows.length
+            ? "点击左侧账号可以查看身份信息和本地配置摘要。"
+            : `已检查 ${enabledCount} 个启用的供应商 · 上次刷新：${escapeHtml(updatedAt)} · 下次自动刷新：约 ${escapeHtml(nextRefresh)} 后`
+        }</span>
       </div>
       <div class="health-list">
-        ${rows.map(renderHealthRow).join("") || `<div class="empty"><p class="hint">没有诊断项。</p></div>`}
+        ${rows.map(renderHealthRow).join("") || `<div class="empty"><p class="hint">当前没有失败、即将过期或额度偏高的账号。</p></div>`}
       </div>
     </div>
   `;
@@ -760,7 +871,7 @@ function renderEditor(provider) {
       <div class="row-actions">
         <span class="provider-badge is-${escapeAttr(badge.tone)}">${escapeHtml(badge.label)}</span>
         <label class="switch" title="启用">
-          <input type="checkbox" data-field="enabled" ${provider.enabled !== false ? "checked" : ""} />
+          <input type="checkbox" data-field="enabled" aria-label="启用 ${escapeAttr(provider.name || provider.id)}" ${provider.enabled !== false ? "checked" : ""} />
           <span></span>
         </label>
         <button class="btn danger" data-action="delete-provider">删除</button>
@@ -770,33 +881,33 @@ function renderEditor(provider) {
       ${renderAccountDetailCard(provider)}
       <div class="form-grid">
         <div class="field">
-          <label>供应商 ID</label>
-          <input data-field="id" value="${escapeAttr(provider.id)}" />
+          <label id="provider-id-label">供应商 ID</label>
+          <input data-field="id" aria-labelledby="provider-id-label" value="${escapeAttr(provider.id)}" />
           <p class="hint">用于配置识别，只能包含字母、数字、下划线和短横线。</p>
         </div>
         <div class="field">
-          <label>显示名称</label>
-          <input data-field="name" value="${escapeAttr(provider.name)}" />
+          <label id="provider-name-label">显示名称</label>
+          <input data-field="name" aria-labelledby="provider-name-label" value="${escapeAttr(provider.name)}" />
         </div>
         <div class="field">
-          <label>供应商类型</label>
+          <label id="provider-kind-label">供应商类型</label>
           ${renderCustomSelect("kind", provider.kind, [
             ["official-subscription", "官方订阅"],
             ["coding-plan", "Coding Plan 额度"],
             ["balance", "余额查询"],
             ["manual", "手动额度"],
-          ])}
+          ], "provider-kind-label")}
         </div>
         ${
           provider.kind === "official-subscription"
             ? `
               <div class="field">
-                <label>官方工具</label>
+                <label id="provider-tool-label">官方工具</label>
                 ${renderCustomSelect("tool", provider.tool || "codex", [
                   ["codex", "Codex"],
                   ["claude", "Claude"],
                   ["grok", "Grok"],
-                ])}
+                ], "provider-tool-label")}
               </div>
             `
             : ""
@@ -805,17 +916,17 @@ function renderEditor(provider) {
           showEndpointFields
             ? `
               <div class="field full">
-                <label>请求地址 / Base URL</label>
-                <input data-field="baseUrl" value="${escapeAttr(provider.baseUrl || "")}" placeholder="例如：https://api.deepseek.com" />
+                <label id="provider-base-url-label">请求地址 / Base URL</label>
+                <input data-field="baseUrl" aria-labelledby="provider-base-url-label" value="${escapeAttr(provider.baseUrl || "")}" placeholder="例如：https://api.deepseek.com" />
                 <p class="hint">Coding Plan 和余额查询需要填写官方接口地址。</p>
               </div>
               <div class="field">
-                <label>API Key</label>
-                <input data-field="apiKey" type="password" value="${escapeAttr(provider.apiKey || "")}" placeholder="可留空，优先建议使用环境变量" />
+                <label id="provider-api-key-label">API Key</label>
+                <input data-field="apiKey" aria-labelledby="provider-api-key-label" type="password" value="${escapeAttr(provider.apiKey || "")}" placeholder="可留空，优先建议使用环境变量" />
               </div>
               <div class="field">
-                <label>API Key 环境变量</label>
-                <input data-field="apiKeyEnv" value="${escapeAttr(apiKeyEnvToText(provider.apiKeyEnv))}" placeholder="例如：DEEPSEEK_API_KEY" />
+                <label id="provider-api-key-env-label">API Key 环境变量</label>
+                <input data-field="apiKeyEnv" aria-labelledby="provider-api-key-env-label" value="${escapeAttr(apiKeyEnvToText(provider.apiKeyEnv))}" placeholder="例如：DEEPSEEK_API_KEY" />
                 <p class="hint">多个环境变量用英文逗号分隔。</p>
               </div>
             `
@@ -939,21 +1050,22 @@ function renderTemplateCard(template, index) {
   `;
 }
 
-function renderCustomSelect(field, value, options) {
+function renderCustomSelect(field, value, options, labelId = "") {
   const open = state.openDropdown === field;
   const closing = state.closingDropdown === field;
   const selected = options.find(([optionValue]) => optionValue === value) || options[0];
+  const listId = `provider-${field}-options`;
   return `
     <div class="custom-select ${open ? "is-open" : ""} ${closing ? "is-closing" : ""}" data-field="${escapeAttr(field)}" data-open="${open ? "true" : "false"}">
-      <button class="custom-select-trigger" type="button" data-action="toggle-dropdown" data-field="${escapeAttr(field)}" aria-haspopup="listbox" aria-expanded="${open ? "true" : "false"}">
+      <button class="custom-select-trigger" type="button" data-action="toggle-dropdown" data-field="${escapeAttr(field)}" aria-haspopup="listbox" aria-controls="${listId}" aria-labelledby="${escapeAttr(labelId)}" aria-expanded="${open ? "true" : "false"}">
         <span>${escapeHtml(selected?.[1] || value || "请选择")}</span>
         <svg class="select-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
       </button>
-      <div class="custom-select-options" role="listbox">
+      <div id="${listId}" class="custom-select-options" role="listbox" aria-label="${escapeAttr(selected?.[1] || field)}">
         ${options
           .map(
             ([optionValue, label]) => `
-              <button class="custom-select-option ${optionValue === value ? "is-selected" : ""}" type="button" role="option" aria-selected="${optionValue === value ? "true" : "false"}" data-action="select-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(optionValue)}">
+              <button id="${listId}-${escapeAttr(optionValue)}" class="custom-select-option ${optionValue === value ? "is-selected" : ""}" type="button" role="option" aria-selected="${optionValue === value ? "true" : "false"}" data-action="select-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(optionValue)}">
                 ${escapeHtml(label)}
               </button>
             `,
@@ -1102,17 +1214,8 @@ function renderImportPreviewItem(item) {
 }
 
 function bindEvents() {
-  root.querySelectorAll("[data-action='select-provider']").forEach((row) => {
-    row.addEventListener("click", (event) => {
-      if (event.target.closest(".switch, .drag-handle")) return;
-      selectProviderFromList(row.dataset.id);
-    });
-    row.addEventListener("keydown", (event) => {
-      if (event.target.closest(".drag-handle")) return;
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      selectProviderFromList(row.dataset.id);
-    });
+  root.querySelectorAll("[data-action='select-provider']").forEach((button) => {
+    button.addEventListener("click", () => selectProviderFromList(button.dataset.id));
   });
 
   bindProviderReorder();
@@ -1133,9 +1236,9 @@ function bindEvents() {
     openTemplates(event.currentTarget);
   });
 
-  root.querySelector("[data-action='import-accounts']")?.addEventListener("click", chooseImportAccounts);
-  root.querySelector("[data-action='latest-import']")?.addEventListener("click", chooseLatestImportAccounts);
-  root.querySelector("[data-action='paste-import']")?.addEventListener("click", openPasteImport);
+  root.querySelector("[data-action='import-accounts']")?.addEventListener("click", (event) => chooseImportAccounts(event.currentTarget));
+  root.querySelector("[data-action='latest-import']")?.addEventListener("click", (event) => chooseLatestImportAccounts(event.currentTarget));
+  root.querySelector("[data-action='paste-import']")?.addEventListener("click", (event) => openPasteImport(event.currentTarget));
   root.querySelector("[data-action='account-search']")?.addEventListener("input", (event) => {
     state.accountQuery = event.target.value;
     state.view = "providers";
@@ -1199,19 +1302,20 @@ function bindProviderEditorEvents(scope = root) {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       if (state.openDropdown === button.dataset.field) {
-        closeDropdown();
+        closeDropdown({ restoreFocus: true });
         return;
       }
       openDropdown(button.dataset.field);
     });
+    button.addEventListener("keydown", (event) => handleDropdownTriggerKeydown(event, button));
   });
 
   scope.querySelectorAll("[data-action='select-option']").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
-      updateSelectedField(button.dataset.field, button.dataset.value, false);
-      closeDropdown({ renderAfterClose: true });
+      selectDropdownOption(button);
     });
+    button.addEventListener("keydown", (event) => handleDropdownOptionKeydown(event, button));
   });
 
   scope.querySelectorAll("input[data-field]").forEach((field) => {
@@ -1243,7 +1347,7 @@ function bindProviderReorder() {
       event.stopPropagation();
     });
     handle.addEventListener("keydown", (event) => {
-      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+      if (!event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
       event.preventDefault();
       event.stopPropagation();
       moveProviderByOffset(handle.dataset.id, event.key === "ArrowUp" ? -1 : 1);
@@ -1497,17 +1601,8 @@ function bindProviderListEvents() {
       if (providerDrag.sourceId) event.preventDefault();
     });
   }
-  root.querySelectorAll("[data-action='select-provider']").forEach((row) => {
-    row.addEventListener("click", (event) => {
-      if (event.target.closest(".switch, .drag-handle")) return;
-      selectProviderFromList(row.dataset.id);
-    });
-    row.addEventListener("keydown", (event) => {
-      if (event.target.closest(".drag-handle")) return;
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      selectProviderFromList(row.dataset.id);
-    });
+  root.querySelectorAll("[data-action='select-provider']").forEach((button) => {
+    button.addEventListener("click", () => selectProviderFromList(button.dataset.id));
   });
   root.querySelectorAll("[data-action='toggle-enabled']").forEach((input) => {
     input.addEventListener("change", () => {
@@ -1568,8 +1663,10 @@ function refreshSelectedAccountDetail(id) {
 }
 
 function updateProviderSelection(id) {
-  root.querySelectorAll(".provider-item").forEach((row) => {
-    row.classList.toggle("is-selected", row.dataset.id === id);
+  root.querySelectorAll("[data-action='select-provider']").forEach((button) => {
+    const selected = button.dataset.id === id;
+    button.closest(".provider-item")?.classList.toggle("is-selected", selected);
+    button.setAttribute("aria-pressed", selected ? "true" : "false");
   });
   positionSelectionBar();
 }
@@ -1594,6 +1691,7 @@ function addTemplate(templateId) {
   state.config.providers.push(provider);
   state.selectedId = provider.id;
   dismissTemplates();
+  dialogOrigin = null;
   markDirty();
   render();
   flipList(firstPositions);
@@ -1622,7 +1720,8 @@ function deleteSelectedProvider() {
   }
 }
 
-async function chooseImportAccounts() {
+async function chooseImportAccounts(originElement) {
+  rememberDialogOrigin(originElement);
   try {
     state.status = "请选择 sessions.json 或 sub2api 导出的 JSON 文件...";
     state.statusIsError = false;
@@ -1642,6 +1741,7 @@ async function chooseImportAccounts() {
     state.statusIsError = false;
     state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
     render();
+    focusDialog(root.querySelector(".import-popover"), "[data-action='confirm-import-preview']:not([disabled])");
   } catch (error) {
     state.status = error.message || String(error);
     state.statusIsError = true;
@@ -1650,7 +1750,8 @@ async function chooseImportAccounts() {
   }
 }
 
-async function chooseLatestImportAccounts() {
+async function chooseLatestImportAccounts(originElement) {
+  rememberDialogOrigin(originElement);
   try {
     state.status = "正在查找 Downloads 中最新的 sub2api JSON...";
     state.statusIsError = false;
@@ -1670,6 +1771,7 @@ async function chooseLatestImportAccounts() {
     state.statusIsError = false;
     state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
     render();
+    focusDialog(root.querySelector(".import-popover"), "[data-action='confirm-import-preview']:not([disabled])");
   } catch (error) {
     state.status = error.message || String(error);
     state.statusIsError = true;
@@ -1678,17 +1780,20 @@ async function chooseLatestImportAccounts() {
   }
 }
 
-function openPasteImport() {
+function openPasteImport(originElement) {
+  rememberDialogOrigin(originElement);
   state.pasteOpen = true;
   state.importRaw = "";
   dismissDropdown();
   render();
+  focusDialog(root.querySelector(".paste-popover"), ".paste-json");
 }
 
 function closePasteImport() {
   state.pasteOpen = false;
   state.importRaw = "";
   render();
+  restoreDialogFocus();
 }
 
 async function previewPasteImport() {
@@ -1702,6 +1807,7 @@ async function previewPasteImport() {
     state.statusIsError = false;
     state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
     render();
+    focusDialog(root.querySelector(".import-popover"), "[data-action='confirm-import-preview']:not([disabled])");
   } catch (error) {
     state.status = error.message || String(error);
     state.statusIsError = true;
@@ -1724,6 +1830,7 @@ async function confirmImportAccounts() {
     state.importPreview = null;
     state.importRaw = "";
     state.importPreviewClosing = false;
+    dialogOrigin = null;
     state.config = sanitizeConfig(cloneConfig(result.config));
     state.configPath = result.configPath || state.configPath;
     state.selectedId = result.selectedId || result.affectedIds?.[0] || state.selectedId || state.config.providers[0]?.id || null;
@@ -1817,7 +1924,8 @@ function closeImportPreview() {
     state.importPreview = null;
     state.importPreviewClosing = false;
     render();
-  }, 180);
+    restoreDialogFocus();
+  }, motionDelay(180));
 }
 
 function captureProviderListScroll() {
@@ -1904,6 +2012,7 @@ function openTemplates(originElement) {
   if (state.showTemplates && !state.templatesClosing) return;
   window.clearTimeout(templatesCloseTimer);
   templatesCloseTimer = null;
+  rememberDialogOrigin(originElement);
   state.templateOrigin = elementCenter(originElement) || state.templateOrigin;
   state.showTemplates = true;
   state.templatesClosing = false;
@@ -1911,6 +2020,7 @@ function openTemplates(originElement) {
   root.querySelector(".template-backdrop")?.remove();
   root.querySelector(".settings-shell")?.insertAdjacentHTML("beforeend", renderTemplatePopover());
   bindTemplateEvents();
+  focusDialog(root.querySelector(".template-popover"), "[data-action='add-template']");
 }
 
 function closeTemplates() {
@@ -1923,16 +2033,17 @@ function closeTemplates() {
   popover?.classList.add("is-leaving");
   templatesCloseTimer = window.setTimeout(() => {
     backdrop?.remove();
-    dismissTemplates();
-  }, 210);
+    dismissTemplates({ restoreFocus: true });
+  }, motionDelay(210));
 }
 
-function dismissTemplates() {
+function dismissTemplates({ restoreFocus = false } = {}) {
   window.clearTimeout(templatesCloseTimer);
   templatesCloseTimer = null;
   root.querySelector(".template-backdrop")?.remove();
   state.showTemplates = false;
   state.templatesClosing = false;
+  if (restoreFocus) restoreDialogFocus();
 }
 
 function bindTemplateEvents() {
@@ -1960,26 +2071,36 @@ function openDropdown(field) {
   if (!select) return;
   select.classList.remove("is-closing");
   select.classList.add("is-open");
-  select.querySelector(".custom-select-trigger")?.setAttribute("aria-expanded", "true");
+  const trigger = select.querySelector(".custom-select-trigger");
+  trigger?.setAttribute("aria-expanded", "true");
   state.openDropdown = field;
   state.closingDropdown = null;
+  const selected = select.querySelector(".custom-select-option.is-selected") || select.querySelector(".custom-select-option");
+  selected?.focus();
 }
 
 function closeDropdown(options = {}) {
   if (!state.openDropdown) return;
   window.clearTimeout(dropdownCloseTimer);
-  const { renderAfterClose = false } = options;
+  const { renderAfterClose = false, restoreFocus = false } = options;
   const field = state.openDropdown;
   const select = root.querySelector(`.custom-select[data-field="${cssEscape(field)}"]`);
+  const trigger = select?.querySelector(".custom-select-trigger");
   select?.classList.remove("is-open");
   select?.classList.add("is-closing");
-  select?.querySelector(".custom-select-trigger")?.setAttribute("aria-expanded", "false");
+  trigger?.setAttribute("aria-expanded", "false");
   state.openDropdown = null;
   state.closingDropdown = field;
+  if (restoreFocus) trigger?.focus();
   dropdownCloseTimer = window.setTimeout(() => {
     dismissDropdown();
-    if (renderAfterClose) render();
-  }, 190);
+    if (renderAfterClose) {
+      render();
+      if (restoreFocus) {
+        root.querySelector(`.custom-select[data-field="${cssEscape(field)}"] .custom-select-trigger`)?.focus();
+      }
+    }
+  }, motionDelay(190));
 }
 
 function dismissDropdown() {
@@ -1991,6 +2112,48 @@ function dismissDropdown() {
   });
   state.openDropdown = null;
   state.closingDropdown = null;
+}
+
+function selectDropdownOption(button) {
+  updateSelectedField(button.dataset.field, button.dataset.value, false);
+  closeDropdown({ renderAfterClose: true, restoreFocus: true });
+}
+
+function handleDropdownTriggerKeydown(event, trigger) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  if (state.openDropdown !== trigger.dataset.field) openDropdown(trigger.dataset.field);
+  const options = dropdownOptions(trigger.dataset.field);
+  if (!options.length) return;
+  const target = event.key === "ArrowUp" || event.key === "End" ? options.at(-1) : options[0];
+  target?.focus();
+}
+
+function handleDropdownOptionKeydown(event, option) {
+  const options = dropdownOptions(option.dataset.field);
+  const index = options.indexOf(option);
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeDropdown({ restoreFocus: true });
+    return;
+  }
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    selectDropdownOption(option);
+    return;
+  }
+  let target = null;
+  if (event.key === "ArrowDown") target = options[index + 1] || options[0];
+  if (event.key === "ArrowUp") target = options[index - 1] || options.at(-1);
+  if (event.key === "Home") target = options[0];
+  if (event.key === "End") target = options.at(-1);
+  if (!target) return;
+  event.preventDefault();
+  target.focus();
+}
+
+function dropdownOptions(field) {
+  return [...root.querySelectorAll(`.custom-select[data-field="${cssEscape(field)}"] .custom-select-option`)];
 }
 
 function elementCenter(element) {

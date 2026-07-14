@@ -71,8 +71,8 @@ button {
   opacity: 0.7;
 }
 
-/* Ambient aurora glow: low-presence blobs that only drift on hover so the
-   quota numbers stay the visual focus. */
+/* Ambient aurora glow: static, low-presence decoration so the quota numbers
+   stay the visual focus. */
 .panel-shell::before {
   background-image:
     radial-gradient(circle at 20% -8%, rgba(59, 130, 246, 0.07), transparent 40%),
@@ -81,11 +81,10 @@ button {
     linear-gradient(90deg, rgba(15, 23, 42, 0.025) 1px, transparent 1px);
   background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px;
   background-position: 0% 0%, 0% 0%, 0 0, 0 0;
-  transition: background-position 900ms var(--ease-soft);
 }
 
 #app[data-hover="true"] .panel-shell::before {
-  background-position: 5% 4%, -4% -5%, 0 0, 0 0;
+  background-position: 0% 0%, 0% 0%, 0 0, 0 0;
 }
 
 .panel-shell::after {
@@ -150,25 +149,6 @@ button {
   color: #0f172a;
 }
 
-/* On a successful refresh, a single subtle sheen sweeps the title once. */
-.header h1.is-just-refreshed {
-  background: linear-gradient(90deg, #0f172a 0%, #1e3a8a 50%, #0f172a 100%);
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: cpb-title-sheen 700ms var(--ease-out) both;
-}
-
-@keyframes cpb-title-sheen {
-  from {
-    background-position: 100% 0;
-  }
-  to {
-    background-position: 0% 0;
-  }
-}
-
 .header p {
   margin: 4px 0 0;
   overflow: hidden;
@@ -197,26 +177,6 @@ button {
   font-weight: 600;
   cursor: pointer;
   overflow: hidden;
-}
-
-/* Glare sweep across buttons on hover (glare-hover inspired). */
-.icon-button::after,
-.footer-button::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(120deg, transparent 30%, rgba(37, 99, 235, 0.16) 50%, transparent 70%);
-  transform: translateX(-130%);
-  transition: transform 480ms var(--ease-out);
-  pointer-events: none;
-}
-
-.icon-button:hover::after,
-.footer-button:hover::after {
-  transform: translateX(130%);
 }
 
 .icon-button {
@@ -443,9 +403,9 @@ button {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08), transparent 42%);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.04), transparent 42%);
   opacity: 0;
-  transition: opacity 220ms var(--ease-out);
+  transition: opacity 200ms var(--ease-out);
 }
 
 .provider:hover::before {
@@ -715,18 +675,22 @@ button {
   height: 7px;
   overflow: hidden;
   border-radius: 6px;
-  background: linear-gradient(90deg, #ef4444 0%, #f59e0b 38%, #16a34a 100%);
+  background: linear-gradient(90deg, #16a34a 0%, #f59e0b 60%, #ef4444 100%);
+  opacity: 0.4;
 }
 
+
 .balance-mark {
-  position: absolute;
-  top: -2px;
-  right: 16%;
-  width: 3px;
-  height: 11px;
-  border-radius: 3px;
-  background: #ffffff;
-  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.2);
+  display: none;
+}
+
+.balance-meter {
+  position: relative;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #16a34a 0%, #f59e0b 60%, #ef4444 100%);
+  opacity: 0.4;
 }
 
 .balance-box p,
@@ -805,15 +769,75 @@ button {
 
 .pointer {
   position: absolute;
-  right: 22px;
-  bottom: -7px;
+  left: var(--pointer-offset, 22px);
   width: 14px;
   height: 14px;
   transform: rotate(45deg);
-  border-right: 1px solid rgba(148, 163, 184, 0.55);
-  border-bottom: 1px solid rgba(148, 163, 184, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.55);
   background: #edf3fb;
-  box-shadow: 3px 3px 10px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 6px rgba(15, 23, 42, 0.08);
+}
+
+.pointer[hidden] {
+  display: none;
+}
+
+.pointer-above {
+  bottom: -7px;
+  border-top-color: transparent;
+  border-left-color: transparent;
+}
+
+.pointer-below {
+  top: -7px;
+  border-bottom-color: transparent;
+  border-right-color: transparent;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.header-summary {
+  margin-top: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--amber);
+  padding: 2px 0;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.header-summary[hidden] {
+  display: none;
+}
+
+.header-summary:hover {
+  text-decoration: underline;
+}
+
+.provider.is-focus-target {
+  outline: 2px solid rgba(37, 99, 235, 0.55);
+  outline-offset: 2px;
+}
+
+.provider.is-changed {
+  box-shadow: inset 3px 0 0 #2563eb, 0 6px 18px rgba(37, 99, 235, 0.1);
+}
+
+.provider.is-changed .progress-bar {
+  transition: width 260ms var(--ease-out);
 }
 
 /* ===== Interactions & motion ===== */
@@ -839,13 +863,9 @@ button {
   transform: scale(0.92);
 }
 
-/* Refresh icon: gentle wind-up on hover, full spin while loading. */
-.icon-button .icon-refresh {
-  transition: transform 420ms var(--ease-spring);
-}
-
+/* Refresh icon spins only while actively loading. */
 .icon-button:not(.is-spinning):hover .icon-refresh {
-  transform: rotate(-90deg);
+  transform: none;
 }
 
 .icon-button.is-spinning {
@@ -858,18 +878,14 @@ button {
   animation: cpb-spin 0.9s linear infinite;
 }
 
+.icon-button:disabled,
+.icon-button[aria-busy="true"] {
+  cursor: progress;
+}
+
 @keyframes cpb-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes cpb-track-sheen {
-  from {
-    transform: translateX(-120%);
-  }
-  to {
-    transform: translateX(120%);
   }
 }
 
@@ -882,21 +898,20 @@ button {
   }
 }
 
-/* Provider cards: calmer, layered shadow on hover. */
 .provider {
   transition:
-    transform 220ms var(--ease-out),
-    border-color 220ms var(--ease-out),
-    box-shadow 220ms var(--ease-out),
-    background-color 220ms var(--ease-out);
+    transform 180ms var(--ease-out),
+    border-color 180ms var(--ease-out),
+    box-shadow 180ms var(--ease-out),
+    background-color 180ms var(--ease-out);
 }
 
 .provider:hover {
-  transform: translateY(-2px) scale(1.004);
+  transform: none;
   border-color: #bcd3f4;
   box-shadow:
-    0 10px 24px rgba(15, 23, 42, 0.09),
-    0 2px 6px rgba(15, 23, 42, 0.05);
+    0 8px 20px rgba(15, 23, 42, 0.07),
+    0 1px 4px rgba(15, 23, 42, 0.04);
   background: #ffffff;
 }
 
@@ -915,7 +930,6 @@ button {
 
 .density-compact .provider-title p,
 .density-compact .tier-usage,
-.density-compact .message,
 .density-compact .empty-row {
   display: none;
 }
@@ -929,93 +943,20 @@ button {
   font-size: 9px;
 }
 
-/* Animated light streak along the top edge on hover (star-border inspired). */
-.provider::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 60%;
-  height: 1.5px;
-  background: linear-gradient(90deg, transparent, rgba(37, 99, 235, 0.7), transparent);
-  transform: translateX(-120%);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 220ms var(--ease-out);
-}
-
-.provider:hover::after {
-  opacity: 1;
-  animation: cpb-streak 900ms var(--ease-out);
-}
-
-@keyframes cpb-streak {
-  from {
-    transform: translateX(-120%);
-  }
-  to {
-    transform: translateX(200%);
-  }
-}
-
 .status-pill,
-.status-dot,
-.balance-mark {
+.status-dot {
   transition:
-    background-color 260ms var(--ease-out),
-    box-shadow 260ms var(--ease-out),
-    transform 200ms var(--ease-out);
+    background-color 200ms var(--ease-out),
+    box-shadow 200ms var(--ease-out);
 }
 
 .provider:hover .status-pill {
-  transform: translateY(-1px);
+  transform: none;
 }
 
-.provider:hover .balance-mark {
-  transform: scaleY(1.12);
-}
-
-/* Attention indicators: a slow breathe for warnings, a ping for errors. */
+/* Attention is communicated by color, label and card border, not motion. */
 .status-dot {
   position: relative;
-}
-
-.status-warn .status-dot {
-  animation: cpb-breathe 2.6s ease-in-out infinite;
-}
-
-.status-error .status-dot::after,
-.status-danger .status-dot::after,
-.status-expired .status-dot::after,
-.status-missing .status-dot::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 2px solid var(--red);
-  animation: cpb-ping 1.9s var(--ease-out) infinite;
-}
-
-@keyframes cpb-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-  }
-  50% {
-    transform: scale(1.16);
-  }
-}
-
-@keyframes cpb-ping {
-  0% {
-    transform: scale(0.55);
-    opacity: 0.65;
-  }
-  80%,
-  100% {
-    transform: scale(1.9);
-    opacity: 0;
-  }
 }
 
 /* Soft fade mask on scrollable provider lists. */
@@ -1036,11 +977,6 @@ button {
   animation-delay: calc(var(--enter-delay, 0ms) + 90ms);
 }
 
-.provider.is-fresh .balance-mark {
-  animation: cpb-mark-in 280ms var(--ease-out) both;
-  animation-delay: calc(var(--enter-delay, 0ms) + 120ms);
-}
-
 /* Status pill settles in with the card on first load. */
 .provider.is-fresh .status-pill {
   animation: cpb-pill-pop 200ms var(--ease-out) both;
@@ -1050,7 +986,7 @@ button {
 @keyframes cpb-pill-pop {
   from {
     opacity: 0.5;
-    transform: scale(0.85);
+    transform: scale(0.9);
   }
   to {
     opacity: 1;
@@ -1061,23 +997,6 @@ button {
 .empty-state,
 .fatal {
   animation: cpb-rise 300ms var(--ease-out) both;
-}
-
-/* Empty state gently floats after settling in, signalling it's interactive. */
-.empty-state {
-  animation:
-    cpb-rise 300ms var(--ease-out) both,
-    cpb-float 4s var(--ease-soft) 320ms infinite;
-}
-
-@keyframes cpb-float {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-3px);
-  }
 }
 
 @keyframes cpb-card-in {
@@ -1091,72 +1010,34 @@ button {
   }
 }
 
-/* Data refresh: progress bar smoothly fills and pulses a highlight. */
+/* Real value changes animate the bar width; everything else stays still. */
 .progress-bar {
-  transition: width 600ms var(--ease-out);
+  transition: width 320ms var(--ease-out);
 }
 
-.provider.is-refreshing .progress-bar {
-  animation: cpb-bar-pulse 700ms var(--ease-out);
+.panel-shell.is-entering {
+  animation: cpb-popup-enter 180ms var(--ease-out) both;
 }
 
-.provider.is-refreshing .balance-meter {
-  animation: cpb-meter-glow 700ms var(--ease-out);
+.panel-shell.is-leaving {
+  animation: cpb-popup-leave 160ms var(--ease-out) both;
 }
 
-@keyframes cpb-bar-pulse {
-  0% {
-    filter: brightness(1);
+@keyframes cpb-popup-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
   }
-  35% {
-    filter: brightness(1.35) saturate(1.2);
-  }
-  100% {
-    filter: brightness(1);
-  }
-}
-
-@keyframes cpb-meter-glow {
-  0%,
-  100% {
-    box-shadow: none;
-  }
-  40% {
-    box-shadow: 0 0 10px rgba(37, 99, 235, 0.45);
-  }
-}
-
-/* Numeric values softly tick up on refresh (decorative shimmer). */
-.provider.is-refreshing .tier-line strong,
-.provider.is-refreshing .tier-usage strong,
-.provider.is-refreshing .balance-box strong {
-  animation: cpb-tick 520ms var(--ease-out);
-}
-
-@keyframes cpb-tick {
-  0% {
-    opacity: 0.4;
-    transform: translateY(2px);
-  }
-  100% {
+  to {
     opacity: 1;
     transform: translateY(0);
   }
 }
 
-/* View settle: a barely-there brighten only on a genuine data refresh,
-   not on every render. Base .provider-list carries no animation so frequent
-   repaints don't read as flicker. */
-.provider-list.is-refreshing-list {
-  animation: cpb-view-in 140ms var(--ease-out) both;
-}
-
-@keyframes cpb-view-in {
-  from {
-    opacity: 0.6;
-  }
+@keyframes cpb-popup-leave {
   to {
-    opacity: 1;
+    opacity: 0;
+    transform: translateY(3px);
   }
 }
 
@@ -1166,17 +1047,6 @@ button {
   }
   to {
     clip-path: inset(0 0 0 0);
-  }
-}
-
-@keyframes cpb-mark-in {
-  from {
-    transform: translateY(8px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
   }
 }
 
