@@ -32,6 +32,8 @@ const {
   mergeRendererConfig,
 } = require("../src/config-store");
 const { SECRET_MASK } = require("../src/secret-store");
+const { classifyFailure } = require("../src/failure-classifier");
+const { parseGrokWebBilling } = require("../src/grok-web-billing");
 const { computePopupHeight } = require("../src/layout");
 const { normalizeModelId, findModelPricing, calculateCostUsd } = require("../src/model-pricing");
 const {
@@ -54,6 +56,7 @@ const {
 
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
 assert.strictEqual(windowSecondsToTierName(604800), "seven_day");
+assert.strictEqual(classifyFailure("Grok billing 响应缺少可识别的额度字段").kind, "parse_error");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-"));
 const atomicPath = path.join(tempDir, "auth.json");
@@ -507,6 +510,15 @@ async function runGrokRefreshSmoke() {
 }
 
 async function runGrokSourceSmoke() {
+  const omittedZeroFixture = Buffer.from(
+    "00000000480a4612001a00220c08fcccd2d2061080ddcad4022a0c08fcc1f7d2061080ddcad402421e0802120c08fcccd2d2061080ddcad4021a0c08fcc1f7d2061080ddcad402580162006801800000000f677270632d7374617475733a300d0a",
+    "hex",
+  );
+  const omittedZero = parseGrokWebBilling(omittedZeroFixture, Date.parse("2026-07-15T00:00:00Z"));
+  assert.strictEqual(omittedZero.creditUsagePercent, 0);
+  assert.strictEqual(omittedZero.usagePercentOmitted, true);
+  assert.strictEqual(omittedZero.billingPeriodEnd, "2026-07-20T08:49:00.000Z");
+
   const rpcResult = await queryGrokQuota(
     { loginMethod: "SuperGrok", accountEmail: "user@example.com" },
     {
@@ -570,6 +582,21 @@ async function runGrokSourceSmoke() {
     "grok_build",
     "grok_monthly_credits",
   ]);
+
+  const zeroFromJson = normalizeGrokBilling(
+    {
+      currentPeriod: {
+        type: "USAGE_PERIOD_TYPE_WEEKLY",
+        start: "2026-07-13T08:49:00Z",
+        end: "2099-07-20T08:49:00Z",
+      },
+    },
+    { loginMethod: "SuperGrok" },
+    { source: "grok-json", fallbacks: [] },
+  );
+  assert.strictEqual(zeroFromJson.success, true);
+  assert.strictEqual(zeroFromJson.tiers[0].name, "grok_build");
+  assert.strictEqual(zeroFromJson.tiers[0].utilization, 0);
 }
 
 async function runIncrementalRefreshSmoke() {

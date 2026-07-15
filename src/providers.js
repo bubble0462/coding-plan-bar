@@ -1305,6 +1305,11 @@ function normalizeGrokBilling(config, credentials = {}, diagnostics = null) {
   if (!tiers.length && source.creditUsagePercent != null) {
     tiers.push({ name: "weekly_limit", utilization: source.creditUsagePercent, resetsAt: periodEnd });
   }
+  const periodEndMs = Date.parse(periodEnd || "");
+  if (!tiers.length && source.currentPeriod && Number.isFinite(periodEndMs) && periodEndMs > Date.now()) {
+    // The current Grok API omits creditUsagePercent when it is zero.
+    tiers.push({ name: "grok_build", utilization: 0, resetsAt: periodEnd });
+  }
   if (!tiers.length) {
     return subscriptionError("grok", "parse_error", "Grok billing 响应缺少可识别的额度字段", null, diagnostics);
   }

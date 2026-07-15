@@ -37,7 +37,12 @@ function classifyFailure(message, status) {
       action: "检查代理、网络或接口地址是否能访问。",
     };
   }
-  if (text.includes("json") || text.includes("parse") || text.includes("解析")) {
+  if (
+    text.includes("json")
+    || text.includes("parse")
+    || text.includes("解析")
+    || (text.includes("响应") && text.includes("字段"))
+  ) {
     return {
       kind: "parse_error",
       label: "响应异常",

@@ -56,17 +56,37 @@ function parseGrokWebBilling(data, now = Date.now()) {
   const percent = scan.fixed32
     .filter((field) => field.path.at(-1) === 1 && Number.isFinite(field.value) && field.value >= 0 && field.value <= 100)
     .sort((a, b) => a.path.length - b.path.length || a.order - b.order)[0]?.value;
-  const resetsAtMs = scan.varints
+  const resetFields = scan.varints
     .filter((field) => field.value >= 1_700_000_000 && field.value <= 2_100_000_000)
-    .map((field) => Number(field.value) * 1000)
-    .filter((value) => value > Number(now))
-    .sort((a, b) => a - b)[0] || null;
-  if (percent == null) throw new Error("Grok Web Billing 响应缺少使用率");
+    .map((field) => ({ path: field.path, value: Number(field.value) * 1000 }))
+    .filter((field) => field.value > Number(now));
+  const resetsAtMs = resetFields
+    .filter((field) => samePath(field.path, [1, 5, 1]))
+    .map((field) => field.value)
+    .sort((a, b) => a - b)[0]
+    || resetFields.map((field) => field.value).sort((a, b) => a - b)[0]
+    || null;
+  const hasUsagePeriod = scan.varints.some((field) =>
+    pathStartsWith(field.path, [1, 6])
+      || (samePath(field.path, [1, 8, 1]) && (field.value === 1 || field.value === 2)));
+  // proto3 omits scalar fields set to their zero value. A valid current period
+  // with a reset time and no fixed32 fields therefore means 0% used.
+  const noUsageYet = percent == null && scan.fixed32.length === 0 && resetsAtMs != null && hasUsagePeriod;
+  if (percent == null && !noUsageYet) throw new Error("Grok Web Billing 响应缺少使用率");
   return {
-    creditUsagePercent: Number(percent),
+    creditUsagePercent: Number(percent ?? 0),
     billingPeriodEnd: resetsAtMs ? new Date(resetsAtMs).toISOString() : null,
+    usagePercentOmitted: noUsageYet,
     source: "grok-web",
   };
+}
+
+function samePath(actual, expected) {
+  return actual.length === expected.length && expected.every((value, index) => actual[index] === value);
+}
+
+function pathStartsWith(actual, prefix) {
+  return actual.length >= prefix.length && prefix.every((value, index) => actual[index] === value);
 }
 
 function grpcDataFrames(data) {
