@@ -405,6 +405,29 @@ async function main() {
     const list = document.querySelector('.provider-list');
     const cards = [...document.querySelectorAll('.provider[data-provider-id]')];
     const firstCardId = cards[0]?.dataset.providerId || null;
+    const attentionSummary = document.querySelector('[data-action="focus-attention"]');
+    const hasAttentionSummary = Boolean(attentionSummary && !attentionSummary.hidden);
+    attentionSummary?.click();
+    const focusedCard = document.activeElement?.matches?.('.provider[data-needs-attention="true"]')
+      ? document.activeElement
+      : null;
+    const quotaRiskCard = providerCardFromMarkup(renderProvider({
+      id: 'quota-risk-fixture',
+      name: 'Quota Risk Fixture',
+      kind: 'official-subscription',
+      status: 'danger',
+      statusText: '接近上限',
+      tiers: [{ name: 'monthly', label: '月额度', utilization: 93 }],
+    }, 0, false, false, false));
+    const serviceErrorCard = providerCardFromMarkup(renderProvider({
+      id: 'service-error-fixture',
+      name: 'Service Error Fixture',
+      kind: 'official-subscription',
+      status: 'error',
+      statusText: '查询失败',
+      failure: { label: '查询失败', action: '检查网络设置' },
+      tiers: [],
+    }, 0, false, false, false));
     return {
       refreshHasBusy: refresh ? refresh.getAttribute('aria-busy') : 'missing',
       listScrollable: list ? list.classList.contains('is-scrollable') : false,
@@ -412,6 +435,19 @@ async function main() {
       firstCardId,
       cardIdsStable: cards.every((card) => Boolean(card.dataset.providerId)),
       pointerClass: document.querySelector('.pointer')?.className || 'missing',
+      hasAttentionSummary,
+      attentionFocusId: focusedCard?.dataset.providerId || null,
+      attentionFocusLabel: focusedCard?.getAttribute('aria-label') || '',
+      quotaRiskSeparated: Boolean(
+        quotaRiskCard?.classList.contains('is-quota-danger') &&
+        !quotaRiskCard.classList.contains('is-service-attention') &&
+        quotaRiskCard.querySelector('.status-pill')?.textContent === '可用' &&
+        quotaRiskCard.querySelector('.tier.is-quota-danger .tier-risk-label')?.textContent === '接近上限'
+      ),
+      serviceErrorSeparated: Boolean(
+        serviceErrorCard?.classList.contains('is-service-attention') &&
+        !serviceErrorCard.classList.contains('is-quota-danger')
+      ),
     };
   })()`);
   if (assertions.refreshHasBusy === 'missing') throw new Error('Popup refresh control was not rendered');
@@ -419,6 +455,15 @@ async function main() {
     throw new Error(`Popup card count assertion failed: ${assertions.cardCount}`);
   }
   if (!assertions.cardIdsStable) throw new Error('Popup provider cards must keep stable data-provider-id');
+  if (assertions.hasAttentionSummary && (!assertions.attentionFocusId || !assertions.attentionFocusLabel)) {
+    throw new Error(`Popup attention summary did not focus an accessible provider card: ${JSON.stringify(assertions)}`);
+  }
+  if (!assertions.quotaRiskSeparated) {
+    throw new Error('Popup quota risk must not present a healthy service as a service error');
+  }
+  if (!assertions.serviceErrorSeparated) {
+    throw new Error('Popup service error must retain a distinct card-level warning');
+  }
 
   app.exit(0);
 }

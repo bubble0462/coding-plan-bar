@@ -315,6 +315,8 @@ async function main() {
       const hero = document.querySelector(".diagnostic-hero");
       if (!hero) return false;
       const text = hero.textContent || "";
+      const refreshActions = document.querySelectorAll('[data-action="refresh-quota"]');
+      if (refreshActions.length !== 1) return false;
       if (text.includes("全部正常")) {
         return text.includes("已检查") && text.includes("上次刷新");
       }
@@ -350,9 +352,15 @@ async function main() {
     await wait(220);
     const sourceRendered = await window.webContents.executeJavaScript(`(() => {
       const popover = document.querySelector(".paste-popover");
-      if (!popover) return false;
+      const latest = document.querySelector('[data-action="latest-import"]');
+      if (!popover || !latest) return false;
       const text = popover.textContent || "";
-      return text.includes("将 JSON 文件拖到这里") && text.includes("选择文件") && text.includes("粘贴内容");
+      return text.includes("将 JSON 文件拖到这里") &&
+        text.includes("选择文件") &&
+        text.includes("粘贴内容") &&
+        latest.textContent.includes("最新文件") &&
+        latest.title.includes("Downloads") &&
+        latest.title.includes("sub2api");
     })()`);
     if (!sourceRendered) throw new Error("Unified import source dialog did not render expected controls");
   }
@@ -406,9 +414,23 @@ async function main() {
       if (!popover) return { hasFocus: false };
       const target = popover.querySelector("[data-action='confirm-import-preview']:not([disabled])") || popover.querySelector(".icon-close");
       target?.focus();
-      return { hasFocus: popover.contains(document.activeElement) };
+      const independentQuotaLabels = [...popover.querySelectorAll('.import-guide strong, .import-note strong')]
+        .filter((node) => node.textContent.includes('sub2api 独立额度'));
+      const zeroStats = [...popover.querySelectorAll('.import-summary > div')]
+        .filter((node) => node.querySelector('strong')?.textContent.trim() === '0');
+      return {
+        hasFocus: popover.contains(document.activeElement),
+        independentQuotaLabelCount: independentQuotaLabels.length,
+        zeroStatsMuted: zeroStats.length > 0 && zeroStats.every((node) => node.classList.contains('is-zero')),
+      };
     })()`);
     if (!importFocus.hasFocus) throw new Error("Import preview did not receive keyboard focus");
+    if (importFocus.independentQuotaLabelCount !== 1) {
+      throw new Error(`Import preview repeated independent quota guidance: ${JSON.stringify(importFocus)}`);
+    }
+    if (!importFocus.zeroStatsMuted) {
+      throw new Error(`Import preview zero statistics were not visually muted: ${JSON.stringify(importFocus)}`);
+    }
   }
 
   if (showDirty) {

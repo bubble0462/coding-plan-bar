@@ -303,11 +303,11 @@ function announcePopupStatus(providers) {
 }
 
 function focusFirstAttentionProvider() {
-  const card = root.querySelector(".provider.is-attention, .provider.is-watch");
+  const card = root.querySelector('.provider[data-needs-attention="true"]');
   if (!card) return;
   card.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
   card.classList.add("is-focus-target");
-  card.querySelector("[data-provider-drag]")?.focus();
+  card.focus({ preventScroll: true });
   window.setTimeout(() => card.classList.remove("is-focus-target"), prefersReducedMotion() ? 0 : 520);
 }
 
@@ -316,10 +316,14 @@ function prefersReducedMotion() {
 }
 
 function renderProvider(provider, index, fresh, changed, canReorder) {
+  const serviceStatus = providerServiceStatus(provider);
+  const quotaRisk = providerQuotaRisk(provider);
+  const needsAttention = Boolean(providerAlertClass(provider));
   const classes = [
     "provider",
-    `status-${provider.status}`,
-    providerAlertClass(provider),
+    `status-${serviceStatus.status}`,
+    providerServiceClass(provider),
+    quotaRisk ? `is-quota-${quotaRisk}` : "",
     canReorder ? "is-reorderable" : "",
     fresh ? "is-fresh" : "",
     changed ? "is-changed" : "",
@@ -333,7 +337,7 @@ function renderProvider(provider, index, fresh, changed, canReorder) {
       : renderProviderMessage(provider);
 
   return `
-    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}" data-can-reorder="${canReorder}"${enterStyle}>
+    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}" data-can-reorder="${canReorder}" data-needs-attention="${needsAttention}" tabindex="-1" aria-label="${escapeAttr(providerAccessibleLabel(provider, serviceStatus, quotaRisk))}"${enterStyle}>
       ${canReorder ? `<button class="provider-drag-handle" type="button" draggable="true" data-provider-drag="${escapeAttr(provider.id || "")}" title="Alt + 上下方向键调整显示顺序" aria-label="调整 ${escapeAttr(provider.name || provider.id)} 的显示顺序。按 Alt 加上方向键或下方向键移动。">${ICONS.grip}</button>` : ""}
       <div class="provider-top">
         <div class="provider-title">
@@ -343,7 +347,7 @@ function renderProvider(provider, index, fresh, changed, canReorder) {
             <p>${provider.planLabel ? escapeHtml(provider.planLabel) : provider.kindLabel || provider.kind}</p>
           </div>
         </div>
-        <span class="status-pill">${escapeHtml(STATUS_TEXT[provider.status] || provider.statusText || provider.status)}</span>
+        <span class="status-pill">${escapeHtml(serviceStatus.label)}</span>
       </div>
       ${body}
       ${renderGrokBilling(provider)}
@@ -438,11 +442,48 @@ function cssEscape(value) {
 }
 
 function providerAlertClass(provider) {
-  if (["error", "expired", "missing"].includes(provider.status)) return "is-attention";
-  const maxUtilization = Math.max(0, ...(provider.tiers || []).map((tier) => Number(tier.utilization || 0)));
-  if (maxUtilization >= 90) return "is-attention";
-  if (maxUtilization >= 75) return "is-watch";
+  if (providerServiceClass(provider)) return "is-attention";
+  const risk = providerQuotaRisk(provider);
+  if (risk === "danger") return "is-attention";
+  if (risk === "watch") return "is-watch";
   return "";
+}
+
+function providerServiceClass(provider) {
+  const hasTiers = Array.isArray(provider.tiers) && provider.tiers.length > 0;
+  const serviceFailure = Boolean(provider.failure) || ["error", "expired", "missing"].includes(provider.status);
+  const balanceFailure = !hasTiers && provider.status === "danger";
+  return serviceFailure || balanceFailure ? "is-service-attention" : "";
+}
+
+function providerServiceStatus(provider) {
+  if (providerServiceClass(provider)) {
+    return {
+      status: provider.status,
+      label: provider.failure?.label || provider.statusText || STATUS_TEXT[provider.status] || "错误",
+    };
+  }
+  if (Array.isArray(provider.tiers) && provider.tiers.length > 0) {
+    return { status: "ok", label: STATUS_TEXT.ok };
+  }
+  return {
+    status: provider.status,
+    label: provider.statusText || STATUS_TEXT[provider.status] || provider.status,
+  };
+}
+
+function providerQuotaRisk(provider) {
+  const maxUtilization = Math.max(0, ...(provider.tiers || []).map((tier) => Number(tier.utilization || 0)));
+  if (maxUtilization >= 90) return "danger";
+  if (maxUtilization >= 75) return "watch";
+  return "";
+}
+
+function providerAccessibleLabel(provider, serviceStatus, quotaRisk) {
+  const parts = [provider.name || provider.id, `服务${serviceStatus.label}`];
+  if (quotaRisk === "danger") parts.push("额度接近上限");
+  if (quotaRisk === "watch") parts.push("额度需要关注");
+  return parts.filter(Boolean).join("，");
 }
 
 function renderProviderNotice(provider) {
@@ -468,6 +509,8 @@ function renderTier(tier) {
   const utilization = clamp(Number(tier.utilization || 0), 0, 100);
   const remaining = clamp(100 - utilization, 0, 100);
   const colorClass = utilization >= 90 ? "bar-danger" : utilization >= 70 ? "bar-warn" : "bar-ok";
+  const riskClass = utilization >= 90 ? "is-quota-danger" : utilization >= 75 ? "is-quota-watch" : "";
+  const riskLabel = utilization >= 90 ? "接近上限" : utilization >= 75 ? "需要关注" : "";
   const reset = countdown(tier.resetsAt);
   const usd =
     tier.usedValueUsd != null && tier.maxValueUsd != null
@@ -475,11 +518,11 @@ function renderTier(tier) {
       : "";
 
   return `
-    <div class="tier">
+    <div class="tier ${riskClass}">
       ${renderTierUsage(tier.usage)}
       <div class="tier-line">
         <span>${escapeHtml(tier.label || tier.name)}</span>
-        <strong>已用 ${Math.round(utilization)}%</strong>
+        <strong>${riskLabel ? `<span class="tier-risk-label">${riskLabel}</span>` : ""}已用 ${Math.round(utilization)}%</strong>
       </div>
       <div class="progress-track">
         <div class="progress-bar ${colorClass}" style="width:${utilization}%"></div>

@@ -273,7 +273,7 @@ function render() {
           <div class="sidebar-head">
             <strong>账号与供应商</strong>
             <div class="sidebar-head-actions">
-              <button class="btn small" data-action="latest-import">最新</button>
+              <button class="btn small" data-action="latest-import" title="从 Downloads 查找最新的 sub2api JSON 文件">最新文件</button>
               <button class="btn small" data-action="import-accounts">导入</button>
               <button class="btn small primary" data-action="toggle-templates">添加</button>
             </div>
@@ -318,7 +318,6 @@ function render() {
       <footer class="bottom-bar">
         <span class="status ${state.statusIsError ? "is-error" : ""} ${state.statusTone ? `is-${state.statusTone}` : ""}">${escapeHtml(state.status)}</span>
         <div class="bottom-actions">
-          ${state.view === "health" ? `<button class="btn" data-action="refresh-quota">立即刷新</button>` : ""}
           ${state.view === "backup" ? `<button class="btn" data-action="backup-config">备份 config.json</button>` : ""}
           ${state.view === "update" ? `<button class="btn" data-action="check-update">检查更新</button>` : ""}
           <span class="dirty-actions">${renderDirtyActions()}</span>
@@ -1128,10 +1127,10 @@ function renderImportPreview() {
         </div>
         ${renderImportSteps(preview)}
         <div class="import-summary">
-          <div><strong>${Number(preview.accountCount || 0)}</strong><span>检测账号</span></div>
-          <div class="is-add"><strong>${Number(preview.importedCount || 0)}</strong><span>新增</span></div>
-          <div class="is-update"><strong>${Number(preview.updatedCount || 0)}</strong><span>更新</span></div>
-          <div class="is-skip"><strong>${Number(preview.skippedCount || 0)}</strong><span>跳过</span></div>
+          ${renderImportStat(preview.accountCount, "检测账号")}
+          ${renderImportStat(preview.importedCount, "新增", "is-add")}
+          ${renderImportStat(preview.updatedCount, "更新", "is-update")}
+          ${renderImportStat(preview.skippedCount, "跳过", "is-skip")}
         </div>
         ${renderImportGuidance(preview)}
         ${renderImportDuplicateNotes(preview)}
@@ -1147,6 +1146,11 @@ function renderImportPreview() {
   `;
 }
 
+function renderImportStat(value, label, tone = "") {
+  const count = Number(value || 0);
+  return `<div class="${[tone, count === 0 ? "is-zero" : ""].filter(Boolean).join(" ")}"><strong>${count}</strong><span>${label}</span></div>`;
+}
+
 function renderImportSteps(preview) {
   const hasChanges = Boolean((preview.importedCount || 0) + (preview.updatedCount || 0));
   return `
@@ -1159,21 +1163,12 @@ function renderImportSteps(preview) {
 }
 
 function renderImportGuidance(preview) {
-  const identityMethods = new Set((preview.items || []).map((item) => item.identityMethod).filter(Boolean));
-  const isSub2api = preview.format === "sub2api" || identityMethods.has("sub2api");
   const pieces = [];
   pieces.push({
     title: "安全预览",
     detail: "这里只显示账号数量、邮箱、短 ID 和操作原因，不会显示 OAuth token 或 API Key 原文。",
     tone: "info",
   });
-  if (isSub2api) {
-    pieces.push({
-      title: "sub2api 独立额度",
-      detail: "同邮箱或同 accountId 也可能是不同额度条目，本次会按 sub2api 独立额度身份分开保留。",
-      tone: "success",
-    });
-  }
   if (preview.updatedCount && !preview.importedCount) {
     pieces.push({
       title: "重复导入说明",
@@ -1236,7 +1231,6 @@ function bindEvents() {
 
   root.querySelectorAll("[data-action='toggle-enabled']").forEach((input) => {
     input.addEventListener("change", () => {
-      pulseToggle(input);
       updateProvider(input.dataset.id, { enabled: input.checked });
     });
   });
@@ -1554,16 +1548,6 @@ function bindUpdateEvents() {
   });
 }
 
-/* Add a one-shot bounce class to the toggle's wrapper for springy feedback. */
-function pulseToggle(input) {
-  const sw = input.closest(".switch");
-  if (!sw) return;
-  sw.classList.remove("is-just-toggled");
-  void sw.offsetWidth;
-  sw.classList.add("is-just-toggled");
-  window.setTimeout(() => sw.classList.remove("is-just-toggled"), 340);
-}
-
 function updateSelectedFromField(field, shouldRender) {
   const value = field.type === "checkbox" ? field.checked : field.value;
   updateSelectedField(field.dataset.field, value, shouldRender);
@@ -1662,7 +1646,6 @@ function bindProviderListEvents() {
   });
   root.querySelectorAll("[data-action='toggle-enabled']").forEach((input) => {
     input.addEventListener("change", () => {
-      pulseToggle(input);
       updateProvider(input.dataset.id, { enabled: input.checked });
     });
   });
