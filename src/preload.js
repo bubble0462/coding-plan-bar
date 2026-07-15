@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 contextBridge.exposeInMainWorld("codingPlanBar", {
   onSnapshot(callback) {
@@ -63,6 +63,12 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   },
   chooseImportAccounts() {
     return ipcRenderer.invoke("config:choose-import-accounts");
+  },
+  previewImportFile(filePath) {
+    return ipcRenderer.invoke("config:preview-import-file", filePath);
+  },
+  getPathForFile(file) {
+    return webUtils.getPathForFile(file);
   },
   latestImportAccounts() {
     return ipcRenderer.invoke("config:latest-import-accounts");

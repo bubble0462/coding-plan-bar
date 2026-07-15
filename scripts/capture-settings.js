@@ -8,6 +8,10 @@ const showTemplates = process.argv.includes("--templates");
 const showUpdate = process.argv.includes("--update");
 const showReorder = process.argv.includes("--reorder");
 const showImport = process.argv.includes("--import");
+const showImportSource = process.argv.includes("--import-source");
+const showImportDrop = process.argv.includes("--import-drop");
+const showImportPaste = process.argv.includes("--import-paste");
+const showDirty = process.argv.includes("--dirty");
 const showHealth = process.argv.includes("--health");
 const showBackup = process.argv.includes("--backup");
 const outputPath = path.join(
@@ -22,11 +26,19 @@ const outputPath = path.join(
         ? "settings-screenshot-reorder.png"
         : showImport
           ? "settings-screenshot-import.png"
-          : showHealth
-            ? "settings-screenshot-health.png"
-            : showBackup
-              ? "settings-screenshot-backup.png"
-              : "settings-screenshot.png",
+          : showImportSource
+            ? "settings-screenshot-import-source.png"
+            : showImportDrop
+              ? "settings-screenshot-import-drop.png"
+              : showImportPaste
+                ? "settings-screenshot-import-paste.png"
+              : showDirty
+                ? "settings-screenshot-dirty.png"
+                : showHealth
+                  ? "settings-screenshot-health.png"
+                  : showBackup
+                    ? "settings-screenshot-backup.png"
+                    : "settings-screenshot.png",
 );
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-settings-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
@@ -132,12 +144,17 @@ async function main() {
     filePath: sampleImportPath,
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
   }));
+  ipcMain.handle("config:preview-import-file", () => ({
+    ...previewAccountsImport(sampleConfig, sampleImportJson, sampleImportPath),
+    filePath: sampleImportPath,
+    configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
+  }));
   ipcMain.handle("config:import-accounts", () => ({
     ...importAccountsIntoConfig(sampleConfig, sampleImportJson, sampleImportPath),
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
     filePath: sampleImportPath,
   }));
-  ipcMain.handle("config:preview-import", (_event, raw) => previewAccountsImport(sampleConfig, raw, "pasted-json"));
+  ipcMain.handle("config:preview-import", (_event, raw) => previewAccountsImport(sampleConfig, JSON.parse(raw), "pasted-json"));
   ipcMain.handle("quota:refresh", () => {});
   ipcMain.handle("quota:open-config", () => {});
   ipcMain.handle("quota:hide", () => {});
@@ -324,12 +341,56 @@ async function main() {
     if (!rendered) throw new Error("Backup page did not render expected controls");
   }
 
-  if (showImport) {
+  if (showImport || showImportSource || showImportDrop || showImportPaste) {
     window.showInactive();
     await wait(120);
     await window.webContents.executeJavaScript(`
       document.querySelector('[data-action="import-accounts"]')?.click();
     `);
+    await wait(220);
+    const sourceRendered = await window.webContents.executeJavaScript(`(() => {
+      const popover = document.querySelector(".paste-popover");
+      if (!popover) return false;
+      const text = popover.textContent || "";
+      return text.includes("将 JSON 文件拖到这里") && text.includes("选择文件") && text.includes("粘贴内容");
+    })()`);
+    if (!sourceRendered) throw new Error("Unified import source dialog did not render expected controls");
+  }
+
+  if (showImportDrop) {
+    const point = await window.webContents.executeJavaScript(`(() => {
+      const rect = document.querySelector('.import-drop-zone')?.getBoundingClientRect();
+      return rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+    })()`);
+    if (!point) throw new Error("Import drop zone was not measurable");
+    window.webContents.debugger.attach("1.3");
+    const dragData = { items: [], files: [sampleImportPath], dragOperationsMask: 1 };
+    await window.webContents.debugger.sendCommand("Input.dispatchDragEvent", { type: "dragEnter", ...point, data: dragData });
+    await window.webContents.debugger.sendCommand("Input.dispatchDragEvent", { type: "dragOver", ...point, data: dragData });
+    await window.webContents.debugger.sendCommand("Input.dispatchDragEvent", { type: "drop", ...point, data: dragData });
+    window.webContents.debugger.detach();
+    await wait(450);
+    const dropped = await window.webContents.executeJavaScript(`Boolean(document.querySelector('.import-popover'))`);
+    if (!dropped) throw new Error("Dropped JSON file did not open the import preview");
+  }
+
+  if (showImport) {
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="choose-import-file"]')?.click();
+    `);
+  }
+
+  if (showImportPaste) {
+    await window.webContents.executeJavaScript(`(() => {
+      const input = document.querySelector('[data-field="importRaw"]');
+      if (!input) return;
+      input.value = ${JSON.stringify(JSON.stringify(sampleImportJson))};
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector('[data-action="preview-paste-import"]')?.click();
+    })()`);
+  }
+
+  if (showImport || showImportPaste) {
     await wait(450);
     const rendered = await window.webContents.executeJavaScript(
       `(() => {
@@ -348,6 +409,27 @@ async function main() {
       return { hasFocus: popover.contains(document.activeElement) };
     })()`);
     if (!importFocus.hasFocus) throw new Error("Import preview did not receive keyboard focus");
+  }
+
+  if (showDirty) {
+    window.showInactive();
+    await wait(120);
+    const dirtyResult = await window.webContents.executeJavaScript(`(() => {
+      const field = document.querySelector('.editor input[data-field="name"]');
+      if (!field) return { missing: true };
+      field.value = field.value + " Test";
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      return {
+        status: document.querySelector(".status")?.textContent || "",
+        hasSave: Boolean(document.querySelector('[data-action="save"]')),
+        hasReset: Boolean(document.querySelector('[data-action="reset"]')),
+        view: Boolean(document.querySelector(".provider-form")),
+      };
+    })()`);
+    if (!dirtyResult.hasSave || !dirtyResult.hasReset || !dirtyResult.status.includes("未保存")) {
+      throw new Error(`Dirty actions did not appear in the provider view: ${JSON.stringify(dirtyResult)}`);
+    }
+    await wait(220);
   }
 
   if (showReorder) {

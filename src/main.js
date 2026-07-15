@@ -965,6 +965,7 @@ async function startApp() {
   ipcMain.handle("config:restore", chooseRestoreConfigFile);
   ipcMain.handle("config:confirm-restore", confirmRestoreConfig);
   ipcMain.handle("config:choose-import-accounts", chooseImportAccountsFile);
+  ipcMain.handle("config:preview-import-file", (_event, filePath) => previewImportFile(filePath));
   ipcMain.handle("config:latest-import-accounts", previewLatestImportFile);
   ipcMain.handle("config:import-accounts", importAccountsFromFile);
   ipcMain.handle("config:import-accounts-raw", importAccountsFromRaw);

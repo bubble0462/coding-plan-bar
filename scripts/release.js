@@ -65,6 +65,9 @@ function main() {
   run("npm", ["run", "smoke:electron"]);
   run("npm", ["run", "screenshot:grok"]);
   run("npm", ["run", "screenshot:reorder"]);
+  run("npm", ["run", "screenshot:settings:import-drop"]);
+  run("npm", ["run", "screenshot:settings:import-paste"]);
+  run("npm", ["run", "screenshot:settings:dirty"]);
   run("npm", ["run", "dist"]);
   if (!fs.existsSync(asset)) throw new Error(`未找到安装包：${asset}`);
 
@@ -73,13 +76,18 @@ function main() {
   const notes = [
     `Coding Plan Bar ${tag}`,
     "",
+    "## 导入体验",
+    "",
+    "- 合并原“粘贴”和“导入”按钮，统一为一个导入入口。",
+    "- 新导入卡片支持拖放 JSON 文件、选择本机文件和直接粘贴 JSON 内容。",
+    "- 继续保留导入前的安全预览，不显示 OAuth token 或 API Key 原文。",
+    "- 明确提示确认导入后会立即加密保存，无需再次点击保存。",
+    "",
     "## Bug 修复",
     "",
-    "- 修复 Grok 当前周期使用率为 0% 时，被错误提示为“配置过期”或“缺少配置”的问题。",
-    "- 兼容 Grok gRPC 在 proto3 中省略零值使用率字段的响应格式，并正确显示 0% 与重置时间。",
-    "- 为 Grok JSON 备用查询接口增加零用量周期识别，避免主查询接口变化时额度卡片失效。",
-    "- 修正响应字段异常的错误分类，不再把接口解析问题误报为用户凭据问题。",
-    "- 增加 Grok 零用量真实响应、JSON 备用路径和错误分类回归测试。",
+    "- 修复供应商编辑页产生未保存修改后，右下角保存按钮不立即显示的问题。",
+    "- 保存与撤销按钮现在随脏状态局部更新，不需要切换到诊断中心触发整页渲染。",
+    "- 增加统一导入、真实文件拖放和供应商编辑页保存按钮回归测试。",
     "",
     "升级不会删除现有供应商、账号或 API Key 配置。",
     "",

@@ -274,7 +274,6 @@ function render() {
             <strong>账号与供应商</strong>
             <div class="sidebar-head-actions">
               <button class="btn small" data-action="latest-import">最新</button>
-              <button class="btn small" data-action="paste-import">粘贴</button>
               <button class="btn small" data-action="import-accounts">导入</button>
               <button class="btn small primary" data-action="toggle-templates">添加</button>
             </div>
@@ -322,10 +321,7 @@ function render() {
           ${state.view === "health" ? `<button class="btn" data-action="refresh-quota">立即刷新</button>` : ""}
           ${state.view === "backup" ? `<button class="btn" data-action="backup-config">备份 config.json</button>` : ""}
           ${state.view === "update" ? `<button class="btn" data-action="check-update">检查更新</button>` : ""}
-          ${state.dirty ? `
-            <button class="btn" data-action="reset">撤销未保存修改</button>
-            <button class="btn primary" data-action="save">保存并刷新额度</button>
-          ` : ""}
+          <span class="dirty-actions">${renderDirtyActions()}</span>
         </div>
       </footer>
 
@@ -1080,21 +1076,39 @@ function renderPasteDialog() {
   if (!state.pasteOpen) return "";
   return `
     <div class="import-backdrop" data-action="cancel-paste-import">
-      <div class="paste-popover" role="dialog" aria-modal="true" aria-label="粘贴 JSON 导入">
+      <div class="paste-popover" role="dialog" aria-modal="true" aria-label="导入账号 JSON">
         <div class="import-head">
           <div>
-            <strong>粘贴 JSON 导入</strong>
-            <span>支持 sessions.json / sub2api。不会显示或保存预览中的 token 原文。</span>
+            <strong>导入账号</strong>
+            <span>支持 sessions.json / sub2api。确认导入后会立即加密保存，无需再次点击保存。</span>
           </div>
           <button class="icon-close" data-action="cancel-paste-import" aria-label="关闭">×</button>
         </div>
-        <textarea class="paste-json" data-field="importRaw" placeholder="把 JSON 粘贴到这里，然后点击生成预览"></textarea>
+        <div class="import-source-body">
+          <div class="import-drop-zone" data-action="drop-import-file" tabindex="0" role="button" aria-label="拖放或选择 JSON 文件">
+            <span class="import-file-icon" aria-hidden="true">JSON</span>
+            <strong>将 JSON 文件拖到这里</strong>
+            <span>仅在本机读取，导入预览不会显示 token 原文</span>
+            <button class="btn" data-action="choose-import-file">选择文件</button>
+          </div>
+          <div class="import-source-divider"><span>或者粘贴内容</span></div>
+          <label class="import-paste-label" for="import-json-content">JSON 内容</label>
+          <textarea id="import-json-content" class="paste-json" data-field="importRaw" placeholder="把 sessions.json 或 sub2api JSON 粘贴到这里"></textarea>
+        </div>
         <div class="import-actions">
           <button class="btn" data-action="cancel-paste-import">取消</button>
-          <button class="btn primary" data-action="preview-paste-import">生成预览</button>
+          <button class="btn primary" data-action="preview-paste-import">预览粘贴内容</button>
         </div>
       </div>
     </div>
+  `;
+}
+
+function renderDirtyActions() {
+  if (!state.dirty) return "";
+  return `
+    <button class="btn" data-action="reset">撤销未保存修改</button>
+    <button class="btn primary" data-action="save">保存并刷新额度</button>
   `;
 }
 
@@ -1236,9 +1250,8 @@ function bindEvents() {
     openTemplates(event.currentTarget);
   });
 
-  root.querySelector("[data-action='import-accounts']")?.addEventListener("click", (event) => chooseImportAccounts(event.currentTarget));
+  root.querySelector("[data-action='import-accounts']")?.addEventListener("click", (event) => openPasteImport(event.currentTarget));
   root.querySelector("[data-action='latest-import']")?.addEventListener("click", (event) => chooseLatestImportAccounts(event.currentTarget));
-  root.querySelector("[data-action='paste-import']")?.addEventListener("click", (event) => openPasteImport(event.currentTarget));
   root.querySelector("[data-action='account-search']")?.addEventListener("input", (event) => {
     state.accountQuery = event.target.value;
     state.view = "providers";
@@ -1267,6 +1280,8 @@ function bindEvents() {
     });
   });
   root.querySelector("[data-action='preview-paste-import']")?.addEventListener("click", previewPasteImport);
+  root.querySelector("[data-action='choose-import-file']")?.addEventListener("click", chooseImportAccounts);
+  bindImportDropZone();
   const pasteInput = root.querySelector("[data-field='importRaw']");
   if (pasteInput) pasteInput.value = state.importRaw;
   pasteInput?.addEventListener("input", (event) => {
@@ -1274,8 +1289,7 @@ function bindEvents() {
   });
 
   bindProviderEditorEvents(root);
-  root.querySelector("[data-action='save']")?.addEventListener("click", save);
-  root.querySelector("[data-action='reset']")?.addEventListener("click", load);
+  bindDirtyActions();
   root.querySelector("[data-action='refresh']")?.addEventListener("click", load);
   root.querySelectorAll("[data-action='open-json']").forEach((button) => {
     button.addEventListener("click", openAdvancedJson);
@@ -1293,6 +1307,48 @@ function bindEvents() {
   });
 
   bindUpdateEvents();
+}
+
+function bindDirtyActions(scope = root) {
+  scope.querySelector("[data-action='save']")?.addEventListener("click", save);
+  scope.querySelector("[data-action='reset']")?.addEventListener("click", load);
+}
+
+function refreshDirtyActions() {
+  const actions = root.querySelector(".dirty-actions");
+  if (!actions) return;
+  const isVisible = Boolean(actions.querySelector("[data-action='save']"));
+  if (isVisible === state.dirty) return;
+  actions.innerHTML = renderDirtyActions();
+  bindDirtyActions(actions);
+}
+
+function bindImportDropZone() {
+  const zone = root.querySelector(".import-drop-zone");
+  if (!zone) return;
+  const setDragging = (active) => zone.classList.toggle("is-dragging", active);
+  ["dragenter", "dragover"].forEach((name) => {
+    zone.addEventListener(name, (event) => {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      setDragging(true);
+    });
+  });
+  ["dragleave", "dragend"].forEach((name) => zone.addEventListener(name, () => setDragging(false)));
+  zone.addEventListener("drop", (event) => {
+    event.preventDefault();
+    setDragging(false);
+    previewDroppedImport(event.dataTransfer?.files?.[0]);
+  });
+  zone.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;
+    root.querySelector("[data-action='choose-import-file']")?.click();
+  });
+  zone.addEventListener("keydown", (event) => {
+    if (!["Enter", " "].includes(event.key)) return;
+    event.preventDefault();
+    root.querySelector("[data-action='choose-import-file']")?.click();
+  });
 }
 
 function bindProviderEditorEvents(scope = root) {
@@ -1720,8 +1776,7 @@ function deleteSelectedProvider() {
   }
 }
 
-async function chooseImportAccounts(originElement) {
-  rememberDialogOrigin(originElement);
+async function chooseImportAccounts() {
   try {
     state.status = "请选择 sessions.json 或 sub2api 导出的 JSON 文件...";
     state.statusIsError = false;
@@ -1735,19 +1790,44 @@ async function chooseImportAccounts(originElement) {
       updateStatusText();
       return;
     }
-    state.importPreview = preview;
-    state.importPreviewClosing = false;
-    state.status = preview.message || "已生成导入预览，请确认";
-    state.statusIsError = false;
-    state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
-    render();
-    focusDialog(root.querySelector(".import-popover"), "[data-action='confirm-import-preview']:not([disabled])");
+    showImportPreview(preview);
   } catch (error) {
     state.status = error.message || String(error);
     state.statusIsError = true;
     state.statusTone = "error";
     updateStatusText();
   }
+}
+
+async function previewDroppedImport(file) {
+  try {
+    if (!file) throw new Error("请拖入一个 JSON 文件");
+    if (!/\.json$/i.test(file.name || "")) throw new Error("仅支持 JSON 文件");
+    const filePath = window.codingPlanBar.getPathForFile(file);
+    if (!filePath) throw new Error("无法读取拖入文件的本机路径");
+    state.status = `正在读取 ${file.name || "JSON 文件"}...`;
+    state.statusIsError = false;
+    state.statusTone = "loading";
+    updateStatusText();
+    const preview = await window.codingPlanBar.previewImportFile(filePath);
+    showImportPreview(preview);
+  } catch (error) {
+    state.status = error.message || String(error);
+    state.statusIsError = true;
+    state.statusTone = "error";
+    updateStatusText();
+  }
+}
+
+function showImportPreview(preview, raw = null) {
+  state.pasteOpen = false;
+  state.importPreview = raw ? { ...preview, raw, sourceType: "paste" } : preview;
+  state.importPreviewClosing = false;
+  state.status = preview.message || "已生成导入预览，请确认";
+  state.statusIsError = false;
+  state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
+  render();
+  focusDialog(root.querySelector(".import-popover"), "[data-action='confirm-import-preview']:not([disabled])");
 }
 
 async function chooseLatestImportAccounts(originElement) {
@@ -1786,7 +1866,7 @@ function openPasteImport(originElement) {
   state.importRaw = "";
   dismissDropdown();
   render();
-  focusDialog(root.querySelector(".paste-popover"), ".paste-json");
+  focusDialog(root.querySelector(".paste-popover"), ".import-drop-zone");
 }
 
 function closePasteImport() {
@@ -1800,14 +1880,7 @@ async function previewPasteImport() {
   try {
     if (!state.importRaw.trim()) throw new Error("请先粘贴 JSON 内容");
     const preview = await window.codingPlanBar.previewImport(state.importRaw);
-    state.pasteOpen = false;
-    state.importPreview = { ...preview, raw: state.importRaw, sourceType: "paste" };
-    state.importPreviewClosing = false;
-    state.status = preview.message || "已生成粘贴导入预览";
-    state.statusIsError = false;
-    state.statusTone = (preview.importedCount || preview.updatedCount) ? "dirty" : "success";
-    render();
-    focusDialog(root.querySelector(".import-popover"), "[data-action='confirm-import-preview']:not([disabled])");
+    showImportPreview(preview, state.importRaw);
   } catch (error) {
     state.status = error.message || String(error);
     state.statusIsError = true;
@@ -2175,6 +2248,7 @@ function markDirty() {
   state.status = "有未保存修改";
   state.statusIsError = false;
   state.statusTone = "dirty";
+  refreshDirtyActions();
 }
 
 function updateStatusText() {

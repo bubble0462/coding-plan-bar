@@ -28,7 +28,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.3.19-x64.exe
+Coding Plan Bar-Setup-0.3.22-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.
@@ -43,14 +43,13 @@ Quit any running older version before installing. The installer supports a custo
 
 ### Settings Toolbar
 
-The four shortcut buttons beside "Accounts & Providers" have different purposes:
+The three shortcut buttons beside "Accounts & Providers" have different purposes:
 
 - **Latest**: finds the newest sub2api-format JSON file in Downloads and prepares its accounts for import.
-- **Paste**: accepts sub2api JSON copied to the clipboard, so it can be previewed and imported without saving a file first.
-- **Import**: opens a file picker for a sub2api-format JSON file, then previews the accounts before importing them.
-- **Add**: opens the provider template picker for creating and configuring a provider. It is the only one of the four buttons that adds a provider; it does not import sub2api account files.
+- **Import**: opens one import card that accepts a dropped JSON file, a file selected from disk, or pasted JSON content. Confirming the preview encrypts and saves the accounts immediately.
+- **Add**: opens the provider template picker for creating and configuring a provider. It is the only one of the three buttons that adds a provider; it does not import account JSON.
 
-In short, **Latest**, **Paste**, and **Import** are account-JSON tools, while **Add** is the provider-configuration tool. Imported accounts appear in the provider list and can be enabled, disabled, reordered, and refreshed independently. The preview shows only the necessary account summary and never exposes the raw OAuth token or API key.
+In short, **Latest** and **Import** are account-JSON tools, while **Add** is the provider-configuration tool. Imported accounts appear in the provider list and can be enabled, disabled, reordered, and refreshed independently. Confirmed imports are saved immediately, so no second save action is required. The preview shows only the necessary account summary and never exposes the raw OAuth token or API key.
 
 User configuration is stored at:
 

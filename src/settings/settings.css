@@ -651,6 +651,10 @@ button {
   background: #ffffff;
 }
 
+.dirty-actions {
+  display: contents;
+}
+
 .status {
   position: relative;
   display: inline-flex;
@@ -1941,6 +1945,8 @@ button {
 .paste-popover {
   width: min(720px, calc(100vw - 52px));
   display: grid;
+  grid-template-rows: auto 1fr auto;
+  max-height: min(700px, calc(100vh - 52px));
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1949,9 +1955,95 @@ button {
   animation: cpb-import-in 240ms var(--ease-spring) both;
 }
 
+.import-source-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+}
+
+.import-drop-zone {
+  min-height: 174px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 7px;
+  border: 1px dashed #93b4e8;
+  border-radius: 8px;
+  background: #f7faff;
+  color: #172033;
+  outline: none;
+  cursor: pointer;
+  transition:
+    border-color 160ms var(--ease-out),
+    background-color 160ms var(--ease-out),
+    box-shadow 160ms var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+
+.import-drop-zone:hover,
+.import-drop-zone:focus-visible,
+.import-drop-zone.is-dragging {
+  border-color: var(--blue);
+  background: #eef5ff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08), var(--ring);
+}
+
+.import-drop-zone.is-dragging {
+  transform: translateY(-1px);
+}
+
+.import-drop-zone > strong {
+  font-size: 15px;
+}
+
+.import-drop-zone > span:not(.import-file-icon) {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.import-file-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--blue);
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.import-source-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.import-source-divider::before,
+.import-source-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+}
+
+.import-paste-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .paste-json {
-  min-height: 260px;
-  margin: 14px 16px;
+  width: 100%;
+  min-height: 138px;
+  margin: 0;
+  box-sizing: border-box;
   resize: vertical;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -1959,6 +2051,11 @@ button {
   font-family: Consolas, "Courier New", monospace;
   font-size: 12px;
   outline: none;
+}
+
+.paste-json:focus {
+  border-color: #93b4e8;
+  box-shadow: var(--ring);
 }
 
 .import-backdrop {
