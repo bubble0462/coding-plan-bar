@@ -351,6 +351,7 @@ function renderProvider(provider, index, fresh, changed, canReorder) {
       </div>
       ${body}
       ${renderGrokBilling(provider)}
+      ${renderResetCredits(provider)}
       ${renderProviderNotice(provider)}
     </article>
   `;
@@ -368,6 +369,18 @@ function renderGrokBilling(provider) {
       <span>按量付费</span>
       <strong class="${extra.isEnabled ? "is-enabled" : ""}">${extra.isEnabled ? "已启用" : "未启用"}</strong>
       ${amount ? `<span class="grok-billing-amount">${escapeHtml(amount)}</span>` : ""}
+    </div>
+  `;
+}
+
+function renderResetCredits(provider) {
+  const available = provider.resetCredits?.available;
+  if (available == null || !Number.isFinite(available) || available < 0) return "";
+  const label = available === 0 ? "已用尽" : `剩余 ${available} 次`;
+  return `
+    <div class="reset-credits-row">
+      <span>可重置额度</span>
+      <strong class="${available > 0 ? "is-available" : ""}">${escapeHtml(label)}</strong>
     </div>
   `;
 }

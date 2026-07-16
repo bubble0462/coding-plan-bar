@@ -114,6 +114,7 @@ function normalizeSubscriptionProvider(provider, quota) {
     queriedAt: quota.queriedAt || Date.now(),
     tiers,
     extraUsage: quota.extraUsage || null,
+    resetCredits: quota.resetCredits || null,
     billingDetails: quota.billingDetails || null,
     diagnostics: quota.diagnostics || null,
   };
@@ -565,6 +566,13 @@ async function queryCodexQuota(accessToken, accountId, tool = "codex") {
       resetsAt: window.reset_at ? new Date(window.reset_at * 1000).toISOString() : null,
     }));
 
+  const resetCreditsRaw = response.json?.rate_limit_reset_credits;
+  const resetCreditsAvailable = Number(resetCreditsRaw?.available_count);
+  const resetCredits =
+    resetCreditsRaw && Number.isFinite(resetCreditsAvailable) && resetCreditsAvailable >= 0
+      ? { available: resetCreditsAvailable }
+      : null;
+
   return {
     tool,
     credentialStatus: "valid",
@@ -572,6 +580,7 @@ async function queryCodexQuota(accessToken, accountId, tool = "codex") {
     success: true,
     tiers,
     extraUsage: null,
+    resetCredits,
     error: null,
     queriedAt: Date.now(),
   };

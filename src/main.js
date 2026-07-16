@@ -429,6 +429,7 @@ function applyLastSuccessProvider(provider, configuredProvider) {
     balances: previous.balances || provider.balances,
     usage: previous.usage || provider.usage,
     extraUsage: previous.extraUsage || provider.extraUsage,
+    resetCredits: previous.resetCredits || provider.resetCredits,
     lastSuccess: {
       queriedAt: previous.queriedAt || cached.savedAt,
       statusText: previous.statusText,

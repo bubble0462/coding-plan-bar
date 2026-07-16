@@ -42,6 +42,7 @@ const sampleProviders = [
     planLabel: "ChatGPT Pro",
     status: "warn",
     statusText: "偏高",
+    resetCredits: { available: 5 },
     tiers: [
       {
         name: "five_hour",
@@ -448,6 +449,7 @@ async function main() {
         serviceErrorCard?.classList.contains('is-service-attention') &&
         !serviceErrorCard.classList.contains('is-quota-danger')
       ),
+      resetCreditsText: document.querySelector('.provider[data-provider-id="codex"] .reset-credits-row strong')?.textContent || '',
     };
   })()`);
   if (assertions.refreshHasBusy === 'missing') throw new Error('Popup refresh control was not rendered');
@@ -463,6 +465,9 @@ async function main() {
   }
   if (!assertions.serviceErrorSeparated) {
     throw new Error('Popup service error must retain a distinct card-level warning');
+  }
+  if (!grokOnly && !/剩余\s*5\s*次/.test(assertions.resetCreditsText)) {
+    throw new Error(`Popup codex reset credits row was not rendered: ${JSON.stringify(assertions.resetCreditsText)}`);
   }
 
   app.exit(0);
