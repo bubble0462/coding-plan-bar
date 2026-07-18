@@ -378,7 +378,7 @@ function renderAccountTools() {
       <div class="account-filters" role="group" aria-label="账号筛选">
         ${renderAccountFilter("all", "全部")}
         ${renderAccountFilter("accounts", "官方")}
-        ${renderAccountFilter("cpa", "CPA")}
+        ${renderAccountFilter("imported", "导入账号")}
         ${renderAccountFilter("balance", "余额")}
         ${renderAccountFilter("attention", "需处理")}
         ${renderAccountFilter("disabled", "停用")}
@@ -414,7 +414,7 @@ function matchesAccountFilter(provider) {
   const filter = state.accountFilter || "all";
   if (filter === "all") return true;
   if (filter === "accounts") return (provider.kind === "official-subscription" && !["cpa", "sub2api"].includes(provider.importedFrom)) || provider.kind === "coding-plan";
-  if (filter === "cpa") return provider.kind === "official-subscription" && provider.importedFrom === "cpa";
+  if (filter === "imported") return provider.kind === "official-subscription" && ["cpa", "sub2api"].includes(provider.importedFrom);
   if (filter === "balance") return provider.kind === "balance";
   if (filter === "disabled") return provider.enabled === false;
   if (filter === "attention") return providerNeedsAttention(provider);

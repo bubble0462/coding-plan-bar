@@ -28,7 +28,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.3.26-x64.exe
+Coding Plan Bar-Setup-0.3.27-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.
@@ -49,7 +49,7 @@ The three shortcut buttons beside "Accounts & Providers" have different purposes
 - **Import**: opens one import card that accepts a dropped CPA JSON file, a file selected from disk, or pasted JSON content. Confirming the preview encrypts and saves the account immediately.
 - **Add**: opens the provider template picker for creating and configuring a provider. It is the only one of the three buttons that adds a provider; it does not import account JSON.
 
-In short, **Latest** and **Import** are CPA account-JSON tools, while **Add** is the provider-configuration tool. Imported accounts appear in the provider list and can be enabled, disabled, reordered, and refreshed independently. Importing the same `accountId` again updates its credentials instead of creating a duplicate. Confirmed imports are saved immediately, so no second save action is required. Only the access token required for quota queries is retained; CPA session and ID tokens are not stored. sub2api and sessions.json files remain accepted through manual import for migration compatibility. The source label follows the imported file format: CPA files display “CPA” and sub2api files display “sub2api”. CPA records misclassified by an older build are corrected automatically without merging or deleting accounts.
+In short, **Latest** and **Import** are CPA account-JSON tools, while **Add** is the provider-configuration tool. Imported accounts appear in the provider list and can be enabled, disabled, reordered, and refreshed independently. Importing the same `accountId` again updates its credentials instead of creating a duplicate. Confirmed imports are saved immediately, so no second save action is required. Only the access token required for quota queries is retained; CPA session and ID tokens are not stored. sub2api and sessions.json files remain accepted through manual import for migration compatibility. The source label follows the imported file format: CPA files display “CPA” and sub2api files display “sub2api”. CPA records misclassified by an older build are corrected automatically without merging or deleting accounts. The Imported Accounts filter includes both CPA and sub2api accounts.
 
 User configuration is stored at:
 
