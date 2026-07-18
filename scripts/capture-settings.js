@@ -69,35 +69,18 @@ const sampleConfig = {
 };
 
 const sampleImportJson = {
-  exported_at: "2026-07-07T00:00:00Z",
-  accounts: [
-    {
-      platform: "openai",
-      type: "oauth",
-      credentials: {
-        access_token: "sample-token-a",
-        chatgpt_account_id: "acct-sample-a",
-        chatgpt_user_id: "user-sample",
-        email: "demo+one@gmail.com",
-        expires_at: "2027-01-01T00:00:00Z",
-        plan_type: "plus",
-      },
-    },
-    {
-      platform: "openai",
-      type: "oauth",
-      credentials: {
-        access_token: "sample-token-b",
-        chatgpt_account_id: "acct-sample-b",
-        chatgpt_user_id: "user-sample",
-        email: "demo+two@gmail.com",
-        expires_at: "2027-01-01T00:00:00Z",
-        plan_type: "plus",
-      },
-    },
-  ],
+  type: "codex",
+  account_id: "acct-cpa-sample",
+  chatgpt_account_id: "acct-cpa-sample",
+  email: "demo.cpa@example.com",
+  name: "demo.cpa@example.com",
+  plan_type: "plus",
+  chatgpt_plan_type: "plus",
+  access_token: "sample-cpa-access-token",
+  session_token: "sample-session-token-not-persisted",
+  expired: "2027-01-01T00:00:00Z",
 };
-const sampleImportPath = path.join(__dirname, "..", "tmp", "sub2api-preview-sample.json");
+const sampleImportPath = path.join(__dirname, "..", "tmp", "demo.cpa.2026-07-18.json");
 
 // Mock updater state injected into the settings page. For --update we report a
 // newer release is available so the screenshot exercises the download path.
@@ -360,7 +343,7 @@ async function main() {
         text.includes("粘贴内容") &&
         latest.textContent.includes("最新文件") &&
         latest.title.includes("Downloads") &&
-        latest.title.includes("sub2api");
+        latest.title.includes("CPA");
     })()`);
     if (!sourceRendered) throw new Error("Unified import source dialog did not render expected controls");
   }
@@ -405,7 +388,7 @@ async function main() {
         const popover = document.querySelector(".import-popover");
         if (!popover) return false;
         const text = popover.textContent || "";
-        return text.includes("导入账号预览") && text.includes("检测账号") && text.includes("新增") && text.includes("sub2api 独立额度");
+        return text.includes("导入账号预览") && text.includes("检测账号") && text.includes("新增") && text.includes("CPA accountId");
       })()`,
     );
     if (!rendered) throw new Error("Import preview did not render expected summary");
@@ -414,19 +397,19 @@ async function main() {
       if (!popover) return { hasFocus: false };
       const target = popover.querySelector("[data-action='confirm-import-preview']:not([disabled])") || popover.querySelector(".icon-close");
       target?.focus();
-      const independentQuotaLabels = [...popover.querySelectorAll('.import-guide strong, .import-note strong')]
-        .filter((node) => node.textContent.includes('sub2api 独立额度'));
+      const cpaLabels = [...popover.querySelectorAll('.import-row small')]
+        .filter((node) => node.textContent.includes('CPA accountId'));
       const zeroStats = [...popover.querySelectorAll('.import-summary > div')]
         .filter((node) => node.querySelector('strong')?.textContent.trim() === '0');
       return {
         hasFocus: popover.contains(document.activeElement),
-        independentQuotaLabelCount: independentQuotaLabels.length,
+        cpaLabelCount: cpaLabels.length,
         zeroStatsMuted: zeroStats.length > 0 && zeroStats.every((node) => node.classList.contains('is-zero')),
       };
     })()`);
     if (!importFocus.hasFocus) throw new Error("Import preview did not receive keyboard focus");
-    if (importFocus.independentQuotaLabelCount !== 1) {
-      throw new Error(`Import preview repeated independent quota guidance: ${JSON.stringify(importFocus)}`);
+    if (importFocus.cpaLabelCount !== 1) {
+      throw new Error(`Import preview did not show one CPA identity label: ${JSON.stringify(importFocus)}`);
     }
     if (!importFocus.zeroStatsMuted) {
       throw new Error(`Import preview zero statistics were not visually muted: ${JSON.stringify(importFocus)}`);

@@ -497,7 +497,7 @@ function openConfigJson() {
 
 async function chooseImportAccountsFile() {
   const result = await dialog.showOpenDialog(settingsWindow || undefined, {
-    title: "导入账号 JSON",
+    title: "导入 CPA 账号 JSON",
     properties: ["openFile"],
     filters: [
       { name: "JSON 文件", extensions: ["json"] },
@@ -524,7 +524,7 @@ async function previewLatestImportFile() {
   if (!filePath) {
     return {
       canceled: true,
-      message: "Downloads 中没有找到 sub2api*.json 或 sub2api-account*.json",
+      message: "Downloads 中没有找到 CPA 账号 JSON（例如 name@gmail.cpa.日期.json）",
     };
   }
   return {
@@ -538,7 +538,7 @@ function latestDownloadsImportFile() {
   if (!downloads || !fs.existsSync(downloads)) return null;
   const candidates = fs
     .readdirSync(downloads, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /^sub2api(?:-account)?[\w.-]*\.json$/i.test(entry.name))
+    .filter((entry) => entry.isFile() && /(?:^|[._-])cpa(?:[._-].*)?\.json$/i.test(entry.name))
     .map((entry) => {
       const filePath = path.join(downloads, entry.name);
       const stat = fs.statSync(filePath);

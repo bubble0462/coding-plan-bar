@@ -32,6 +32,7 @@ const {
   mergeRendererConfig,
 } = require("../src/config-store");
 const { SECRET_MASK } = require("../src/secret-store");
+const { importAccountsIntoConfig, parseAccountImport, previewAccountsImport } = require("../src/account-importer");
 const { classifyFailure } = require("../src/failure-classifier");
 const { parseGrokWebBilling } = require("../src/grok-web-billing");
 const { computePopupHeight } = require("../src/layout");
@@ -65,6 +66,56 @@ assert.deepStrictEqual(JSON.parse(fs.readFileSync(atomicPath, "utf8")), {
   account: { key: "new-access-token", refresh_token: "new-refresh-token" },
 });
 assert(!fs.readdirSync(tempDir).some((name) => name.endsWith(".tmp")));
+
+const cpaFixture = {
+  type: "codex",
+  account_id: "cpa-account-id",
+  chatgpt_account_id: "cpa-account-id",
+  email: "cpa@example.com",
+  name: "cpa@example.com",
+  plan_type: "plus",
+  chatgpt_plan_type: "plus",
+  access_token: "cpa-access-token-v1",
+  id_token: "must-not-be-persisted",
+  session_token: "must-not-be-persisted",
+  expired: "2027-01-02T03:04:05Z",
+};
+const parsedCpa = parseAccountImport(cpaFixture, "cpa@example.com.cpa.2026-07-18.json");
+assert.strictEqual(parsedCpa.format, "cpa");
+assert.strictEqual(parsedCpa.accounts.length, 1);
+assert.strictEqual(parsedCpa.accounts[0].accountId, "cpa-account-id");
+assert.strictEqual(parsedCpa.accounts[0].planType, "plus");
+assert.strictEqual(parsedCpa.accounts[0].expiresAt, "2027-01-02T03:04:05.000Z");
+
+const cpaPreview = previewAccountsImport({ providers: [] }, cpaFixture, "cpa@example.com.cpa.2026-07-18.json");
+assert.strictEqual(cpaPreview.format, "cpa");
+assert.strictEqual(cpaPreview.importedCount, 1);
+assert(cpaPreview.items[0].identityLabel.includes("CPA accountId"));
+
+const firstCpaImport = importAccountsIntoConfig({ providers: [] }, cpaFixture, "cpa@example.com.cpa.2026-07-18.json");
+assert.strictEqual(firstCpaImport.importedCount, 1);
+assert.strictEqual(firstCpaImport.updatedCount, 0);
+assert.strictEqual(firstCpaImport.config.providers[0].importedFrom, "cpa");
+assert.strictEqual(firstCpaImport.config.providers[0].accessToken, "cpa-access-token-v1");
+assert.strictEqual(firstCpaImport.config.providers[0].sessionToken, undefined);
+assert.strictEqual(firstCpaImport.config.providers[0].idToken, undefined);
+
+const secondCpaImport = importAccountsIntoConfig(
+  firstCpaImport.config,
+  { ...cpaFixture, access_token: "cpa-access-token-v2" },
+  "cpa@example.com.cpa.2026-07-18_2.json",
+);
+assert.strictEqual(secondCpaImport.importedCount, 0);
+assert.strictEqual(secondCpaImport.updatedCount, 1);
+assert.strictEqual(secondCpaImport.config.providers.length, 1);
+assert.strictEqual(secondCpaImport.config.providers[0].accessToken, "cpa-access-token-v2");
+
+const legacySub2api = parseAccountImport(
+  { exported_at: "2026-07-01T00:00:00Z", accounts: [{ credentials: { access_token: "legacy-token" } }] },
+  "sub2api-account.json",
+);
+assert.strictEqual(legacySub2api.format, "sub2api");
+assert.strictEqual(legacySub2api.accounts.length, 1);
 
 const staleCodexAuthPath = path.join(tempDir, "codex-auth.json");
 writeJsonFileAtomic(staleCodexAuthPath, {

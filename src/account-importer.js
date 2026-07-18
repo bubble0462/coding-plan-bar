@@ -154,6 +154,7 @@ function collectCandidates(value) {
 
 function detectFormat(value, sourcePath = "") {
   const base = path.basename(sourcePath || "").toLowerCase();
+  if (isCpaAccount(value, base)) return "cpa";
   if (base.includes("sub2api") || (value && typeof value === "object" && Array.isArray(value.accounts) && value.exported_at)) {
     return "sub2api";
   }
@@ -208,6 +209,7 @@ function normalizeImportedAccount(candidate, format) {
   const expiresAt = normalizeDateString(firstString([
     credentials.expires_at,
     credentials.expiresAt,
+    candidate.expired,
     candidate.expires,
     candidate.expires_at,
     candidate.expiresAt,
@@ -217,6 +219,7 @@ function normalizeImportedAccount(candidate, format) {
     credentials.planType,
     account.planType,
     account.plan_type,
+    candidate.chatgpt_plan_type,
     candidate.planType,
     candidate.plan_type,
   ]);
@@ -426,6 +429,9 @@ function refreshPreviewNames(items, providers) {
 }
 
 function previewIdentity(account, provider) {
+  if (account.format === "cpa" || provider.importedFrom === "cpa") {
+    return { method: "accountId", label: `CPA accountId · ${shortId(account.accountId || provider.accountId)}` };
+  }
   if (account.format === "sub2api" || provider.importedFrom === "sub2api") {
     return { method: "sub2api", label: `sub2api 独立额度 · ${shortId(account.accountId || provider.accountId || provider.importKey)}` };
   }
@@ -458,6 +464,7 @@ function updateReason(existing, incoming) {
 }
 
 function identityReason(provider) {
+  if (provider.importedFrom === "cpa") return "新的 CPA accountId，将新增官方订阅账号";
   if (provider.importedFrom === "sub2api") return "新的 sub2api 独立额度条目，将新增账号";
   if (provider.accountId) return "新的 accountId，将新增官方订阅账号";
   if (provider.accountEmail) return "未提供 accountId，将按邮箱新增账号";
@@ -484,7 +491,19 @@ function importMessage(format, importedCount, updatedCount, skippedCount) {
 }
 
 function formatLabel(format) {
-  return format === "sub2api" ? "sub2api" : format === "sessions" ? "sessions.json" : "账号 JSON";
+  return format === "cpa" ? "CPA" : format === "sub2api" ? "sub2api" : format === "sessions" ? "sessions.json" : "账号 JSON";
+}
+
+function isCpaAccount(value, baseName = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const cpaFileName = /(?:^|[._-])cpa(?:[._-].*)?\.json$/i.test(baseName);
+  const cpaShape = Boolean(
+    value.access_token &&
+    value.email &&
+    (value.chatgpt_account_id || value.account_id) &&
+    (value.type === "codex" || value.chatgpt_plan_type || value.session_token),
+  );
+  return cpaFileName ? Boolean(value.access_token && (value.chatgpt_account_id || value.account_id)) : cpaShape;
 }
 
 function hasToken(value) {

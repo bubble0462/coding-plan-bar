@@ -273,7 +273,7 @@ function render() {
           <div class="sidebar-head">
             <strong>账号与供应商</strong>
             <div class="sidebar-head-actions">
-              <button class="btn small" data-action="latest-import" title="从 Downloads 查找最新的 sub2api JSON 文件">最新文件</button>
+              <button class="btn small" data-action="latest-import" title="从 Downloads 查找最新的 CPA 账号 JSON 文件">最新文件</button>
               <button class="btn small" data-action="import-accounts">导入</button>
               <button class="btn small primary" data-action="toggle-templates">添加</button>
             </div>
@@ -378,7 +378,7 @@ function renderAccountTools() {
       <div class="account-filters" role="group" aria-label="账号筛选">
         ${renderAccountFilter("all", "全部")}
         ${renderAccountFilter("accounts", "官方")}
-        ${renderAccountFilter("sub2api", "sub2api")}
+        ${renderAccountFilter("cpa", "CPA")}
         ${renderAccountFilter("balance", "余额")}
         ${renderAccountFilter("attention", "需处理")}
         ${renderAccountFilter("disabled", "停用")}
@@ -413,8 +413,8 @@ function syncSelectedProviderWithFilters() {
 function matchesAccountFilter(provider) {
   const filter = state.accountFilter || "all";
   if (filter === "all") return true;
-  if (filter === "accounts") return (provider.kind === "official-subscription" && provider.importedFrom !== "sub2api") || provider.kind === "coding-plan";
-  if (filter === "sub2api") return provider.kind === "official-subscription" && provider.importedFrom === "sub2api";
+  if (filter === "accounts") return (provider.kind === "official-subscription" && !["cpa", "sub2api"].includes(provider.importedFrom)) || provider.kind === "coding-plan";
+  if (filter === "cpa") return provider.kind === "official-subscription" && provider.importedFrom === "cpa";
   if (filter === "balance") return provider.kind === "balance";
   if (filter === "disabled") return provider.enabled === false;
   if (filter === "attention") return providerNeedsAttention(provider);
@@ -489,7 +489,8 @@ function renderProviderItem(provider) {
 function providerDetail(provider) {
   if (provider.kind === "official-subscription") {
     const parts = [];
-    if (provider.importedFrom === "sub2api") parts.push("sub2api 独立额度");
+    if (provider.importedFrom === "cpa") parts.push("CPA 账号");
+    else if (provider.importedFrom === "sub2api") parts.push("旧 sub2api 账号");
     else parts.push(KIND_LABELS[provider.kind]);
     if (provider.accountEmail) parts.push(provider.accountEmail);
     if (provider.accountId) parts.push(`ID ${shortId(provider.accountId)}`);
@@ -962,7 +963,7 @@ function renderAccountDetailCard(provider) {
   return `
     <div class="account-detail-card">
       <div>
-        <strong>${escapeHtml(provider.importedFrom === "sub2api" ? "sub2api 独立额度身份" : "账号身份")}</strong>
+        <strong>${escapeHtml(provider.importedFrom === "cpa" ? "CPA 账号身份" : provider.importedFrom === "sub2api" ? "旧 sub2api 独立额度身份" : "账号身份")}</strong>
         <span>${escapeHtml(identityHelpText(provider))}</span>
       </div>
       <dl>
@@ -974,6 +975,7 @@ function renderAccountDetailCard(provider) {
 }
 
 function accountSourceLabel(provider) {
+  if (provider.importedFrom === "cpa") return "CPA JSON 导入";
   if (provider.importedFrom === "sub2api") return "sub2api JSON 导入";
   if (provider.importedFrom === "sessions") return "sessions.json 导入";
   if (provider.importedFrom) return `${provider.importedFrom} 导入`;
@@ -981,6 +983,7 @@ function accountSourceLabel(provider) {
 }
 
 function identityHelpText(provider) {
+  if (provider.importedFrom === "cpa") return "按 CPA 文件中的 accountId 匹配账号；再次导入同一账号会更新凭证，不会重复新增。";
   if (provider.importedFrom === "sub2api") return "按 sub2api 导出的独立额度记录保留，不会因为 Gmail 主邮箱或 accountId 相同而合并。";
   if (provider.kind === "official-subscription") return "官方账号 token 使用 Windows DPAPI 加密保存在本机 config.json，预览与历史记录不会显示原文。";
   return "普通供应商使用 Base URL 与 API Key/环境变量查询余额。";
@@ -1079,7 +1082,7 @@ function renderPasteDialog() {
         <div class="import-head">
           <div>
             <strong>导入账号</strong>
-            <span>支持 sessions.json / sub2api。确认导入后会立即加密保存，无需再次点击保存。</span>
+            <span>主要支持 CPA 账号 JSON；兼容 sessions.json 和旧 sub2api。确认后会立即加密保存。</span>
           </div>
           <button class="icon-close" data-action="cancel-paste-import" aria-label="关闭">×</button>
         </div>
@@ -1092,7 +1095,7 @@ function renderPasteDialog() {
           </div>
           <div class="import-source-divider"><span>或者粘贴内容</span></div>
           <label class="import-paste-label" for="import-json-content">JSON 内容</label>
-          <textarea id="import-json-content" class="paste-json" data-field="importRaw" placeholder="把 sessions.json 或 sub2api JSON 粘贴到这里"></textarea>
+          <textarea id="import-json-content" class="paste-json" data-field="importRaw" placeholder="把 CPA 账号 JSON 粘贴到这里"></textarea>
         </div>
         <div class="import-actions">
           <button class="btn" data-action="cancel-paste-import">取消</button>
@@ -1761,7 +1764,7 @@ function deleteSelectedProvider() {
 
 async function chooseImportAccounts() {
   try {
-    state.status = "请选择 sessions.json 或 sub2api 导出的 JSON 文件...";
+    state.status = "请选择 CPA 账号 JSON 文件...";
     state.statusIsError = false;
     state.statusTone = "loading";
     updateStatusText();
@@ -1816,7 +1819,7 @@ function showImportPreview(preview, raw = null) {
 async function chooseLatestImportAccounts(originElement) {
   rememberDialogOrigin(originElement);
   try {
-    state.status = "正在查找 Downloads 中最新的 sub2api JSON...";
+    state.status = "正在查找 Downloads 中最新的 CPA 账号 JSON...";
     state.statusIsError = false;
     state.statusTone = "loading";
     updateStatusText();
