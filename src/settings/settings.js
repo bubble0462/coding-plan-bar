@@ -490,7 +490,7 @@ function providerDetail(provider) {
   if (provider.kind === "official-subscription") {
     const parts = [];
     if (provider.importedFrom === "cpa") parts.push("CPA 账号");
-    else if (provider.importedFrom === "sub2api") parts.push("旧 sub2api 账号");
+    else if (provider.importedFrom === "sub2api") parts.push("sub2api 账号");
     else parts.push(KIND_LABELS[provider.kind]);
     if (provider.accountEmail) parts.push(provider.accountEmail);
     if (provider.accountId) parts.push(`ID ${shortId(provider.accountId)}`);
@@ -963,7 +963,7 @@ function renderAccountDetailCard(provider) {
   return `
     <div class="account-detail-card">
       <div>
-        <strong>${escapeHtml(provider.importedFrom === "cpa" ? "CPA 账号身份" : provider.importedFrom === "sub2api" ? "旧 sub2api 独立额度身份" : "账号身份")}</strong>
+        <strong>${escapeHtml(provider.importedFrom === "cpa" ? "CPA 账号身份" : provider.importedFrom === "sub2api" ? "sub2api 独立额度身份" : "账号身份")}</strong>
         <span>${escapeHtml(identityHelpText(provider))}</span>
       </div>
       <dl>
@@ -1082,7 +1082,7 @@ function renderPasteDialog() {
         <div class="import-head">
           <div>
             <strong>导入账号</strong>
-            <span>主要支持 CPA 账号 JSON；兼容 sessions.json 和旧 sub2api。确认后会立即加密保存。</span>
+            <span>主要支持 CPA 账号 JSON；兼容 sessions.json 和 sub2api。确认后会立即加密保存。</span>
           </div>
           <button class="icon-close" data-action="cancel-paste-import" aria-label="关闭">×</button>
         </div>

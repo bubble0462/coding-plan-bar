@@ -117,6 +117,38 @@ const legacySub2api = parseAccountImport(
 assert.strictEqual(legacySub2api.format, "sub2api");
 assert.strictEqual(legacySub2api.accounts.length, 1);
 
+const migratedImportSources = normalizeConfig({
+  providers: [
+    {
+      id: "legacy-cpa",
+      name: "Legacy CPA",
+      kind: "official-subscription",
+      accessToken: "cpa-token",
+      importedFrom: "accounts",
+      importPath: "D:/Downloads/legacy@example.com.cpa.2026-07-18.json",
+    },
+    {
+      id: "legacy-sub2api",
+      name: "Legacy sub2api",
+      kind: "official-subscription",
+      accessToken: "sub2api-token",
+      importedFrom: "accounts",
+      importPath: "D:/Downloads/legacy@example.com.sub2api.2026-07-18.json",
+    },
+    {
+      id: "generic-account",
+      name: "Generic account",
+      kind: "official-subscription",
+      accessToken: "generic-token",
+      importedFrom: "accounts",
+      importPath: "D:/Downloads/accounts.json",
+    },
+  ],
+});
+assert.strictEqual(migratedImportSources.providers[0].importedFrom, "cpa");
+assert.strictEqual(migratedImportSources.providers[1].importedFrom, "sub2api");
+assert.strictEqual(migratedImportSources.providers[2].importedFrom, "accounts");
+
 const staleCodexAuthPath = path.join(tempDir, "codex-auth.json");
 writeJsonFileAtomic(staleCodexAuthPath, {
   auth_mode: "chatgpt",

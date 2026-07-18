@@ -28,7 +28,7 @@
 前往 [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest) 下载最新的 Windows 安装包：
 
 ```text
-Coding Plan Bar-Setup-0.3.25-x64.exe
+Coding Plan Bar-Setup-0.3.26-x64.exe
 ```
 
 安装前请先退出正在运行的旧版本。安装向导支持选择安装目录，包括 D 盘。升级安装不会删除用户配置。
@@ -49,7 +49,7 @@ Coding Plan Bar-Setup-0.3.25-x64.exe
 - **导入**：打开统一导入卡片，可拖入 CPA JSON、通过文件选择器选择文件，或直接粘贴 JSON 内容；预览确认后立即加密保存账户。
 - **添加**：打开供应商模板选择器，用于新增和配置供应商。这是三个按钮中唯一用于添加供应商的按钮，不负责导入账户 JSON。
 
-“最新”和“导入”服务于 CPA 账户 JSON 导入；导入完成后，账户会出现在供应商列表中，并可单独启用、停用、排序和刷新额度。再次导入相同 `accountId` 会更新凭证，不会重复创建账户。确认导入会直接写入本机配置，无需再次点击保存。应用仅保存额度查询所需的 access token，不保存 CPA 文件中的 session token 或 ID token；导入预览也不会展示任何凭证原文。旧 sub2api 与 sessions.json 仍可手动导入，便于迁移已有备份。
+“最新”和“导入”服务于 CPA 账户 JSON 导入；导入完成后，账户会出现在供应商列表中，并可单独启用、停用、排序和刷新额度。再次导入相同 `accountId` 会更新凭证，不会重复创建账户。确认导入会直接写入本机配置，无需再次点击保存。应用仅保存额度查询所需的 access token，不保存 CPA 文件中的 session token 或 ID token；导入预览也不会展示任何凭证原文。sub2api 与 sessions.json 仍可手动导入，便于迁移已有备份。应用会根据导入文件名保留来源：CPA 文件显示“CPA”，sub2api 文件显示“sub2api”；旧版本误标的 CPA 记录会在升级后自动修正，不会合并或删除账号。
 
 用户配置保存在：
 

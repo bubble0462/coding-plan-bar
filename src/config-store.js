@@ -71,6 +71,13 @@ function normalizeAutoUpdate(autoUpdate) {
   };
 }
 
+function inferImportedFrom(importedFrom, importPath) {
+  const fileName = path.basename(String(importPath || "")).toLowerCase();
+  if (/(?:^|[._-])cpa(?:[._-].*)?\.json$/i.test(fileName)) return "cpa";
+  if (/(?:^|[._-])sub2api(?:[._-].*)?\.json$/i.test(fileName)) return "sub2api";
+  return importedFrom || undefined;
+}
+
 function normalizeProvider(provider) {
   const normalized = {
     id: String(provider.id || "").trim(),
@@ -94,7 +101,8 @@ function normalizeProvider(provider) {
     if (provider.accountUserId) normalized.accountUserId = provider.accountUserId;
     if (provider.expiresAt) normalized.expiresAt = provider.expiresAt;
     if (provider.planType) normalized.planType = provider.planType;
-    if (provider.importedFrom) normalized.importedFrom = provider.importedFrom;
+    const importedFrom = inferImportedFrom(provider.importedFrom, provider.importPath);
+    if (importedFrom) normalized.importedFrom = importedFrom;
     if (provider.importedAt) normalized.importedAt = provider.importedAt;
     if (provider.importPath) normalized.importPath = provider.importPath;
     if (provider.importKey) normalized.importKey = provider.importKey;
