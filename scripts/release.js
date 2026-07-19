@@ -68,6 +68,7 @@ function main() {
   run("npm", ["run", "screenshot:settings:import-drop"]);
   run("npm", ["run", "screenshot:settings:import-paste"]);
   run("npm", ["run", "screenshot:settings:dirty"]);
+  run("npm", ["run", "screenshot:settings:usage"]);
   run("npm", ["run", "dist"]);
   if (!fs.existsSync(asset)) throw new Error(`未找到安装包：${asset}`);
 
@@ -76,13 +77,14 @@ function main() {
   const notes = [
     `Coding Plan Bar ${tag}`,
     "",
-    "## 导入账号筛选优化",
+    "## Codex Agent 用量统计",
     "",
-    "- 设置页将 CPA 与 sub2api 合并到一个“导入账号”筛选标签中。",
-    "- 账号详情仍分别显示 CPA 或 sub2api，来源信息保持准确。",
-    "- 延续旧 CPA 来源自动修复，不会合并、删除账号或覆盖现有凭证。",
+    "- 设置页新增「Agent 用量」，统一统计本机 Codex Agent 今天、最近 7 天与最近 30 天的请求、Token、会话和 API 等价费用。",
+    "- 新增 7 天趋势图与模型明细，未知定价模型仍统计 Token，但不会虚构金额。",
+    "- 参考 CC-Switch 的本地日志统计方式，对分叉会话和子任务携带的历史快照去重，避免重复计算。",
+    "- 统计结果不按账号拆分，也不代表订阅账户的实际账单。",
     "",
-    "升级前请从系统托盘完全退出旧版本，再运行新安装包，以免旧进程继续显示旧界面。",
+    "升级前请从系统托盘完全退出旧版本，再运行新安装包。",
     "",
     `SHA256: ${sha}`,
   ].join("\n");

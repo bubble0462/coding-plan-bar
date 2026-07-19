@@ -4,7 +4,7 @@ const os = require("os");
 const path = require("path");
 const { calculateCostUsd, normalizeModelId } = require("./model-pricing");
 
-const MAX_WINDOW_MS = 8 * 24 * 60 * 60 * 1000;
+const MAX_WINDOW_MS = 31 * 24 * 60 * 60 * 1000;
 const fileCache = new Map();
 
 async function collectLocalUsage(providers, now = Date.now()) {
@@ -18,6 +18,16 @@ async function collectLocalUsage(providers, now = Date.now()) {
     if (!activeFileKeys.has(key)) fileCache.delete(key);
   }
   return dedupeEvents(groups.flat());
+}
+
+async function collectCodexAgentUsage(providers = [], now = Date.now()) {
+  const requirements = usageRequirements(providers);
+  requirements.codexDirs.add(path.join(os.homedir(), ".codex"));
+  const activeFileKeys = new Set();
+  const groups = await Promise.all(
+    [...requirements.codexDirs].map((dir) => readSessionTree(dir, "codex", now, activeFileKeys)),
+  );
+  return summarizeCodexUsage(dedupeEvents(groups.flat()), now);
 }
 
 function usageRequirements(providers) {
@@ -102,21 +112,51 @@ async function readUsageFile(file, source, activeFileKeys) {
 
 function parseCodexJsonl(content, fileKey = "codex") {
   const events = [];
+  const lines = String(content || "").split(/\r?\n/);
   let sessionId = path.basename(fileKey, path.extname(fileKey));
   let model = "unknown";
   let accountId = null;
   let accountEmail = null;
   let previous = null;
   let eventIndex = 0;
+  let carriesHistorySnapshot = false;
+  let historyReplayBoundary = -1;
 
-  for (const line of String(content || "").split(/\r?\n/)) {
+  for (const line of lines) {
+    if (!line || !line.includes("session_meta")) continue;
+    const value = safeJson(line);
+    if (value?.type !== "session_meta") continue;
+    const payload = value.payload || {};
+    const currentId = firstString([payload.id, payload.thread_id, payload.threadId, payload.session_id, payload.sessionId]);
+    const parentId = firstString([payload.session_id, payload.sessionId]);
+    if (currentId) sessionId = currentId;
+    carriesHistorySnapshot = Boolean(
+      firstString([payload.forked_from_id]) ||
+      payload.source?.subagent ||
+      (parentId && currentId && parentId !== currentId)
+    );
+    break;
+  }
+
+  if (carriesHistorySnapshot) {
+    historyReplayBoundary = lines.findIndex((line) => {
+      if (!line || (!line.includes("thread_settings_applied") && !line.includes("inter_agent_communication"))) return false;
+      const value = safeJson(line);
+      if (!value) return false;
+      return String(value.type || "").startsWith("inter_agent_communication") ||
+        (value.type === "event_msg" && value.payload?.type === "thread_settings_applied");
+    });
+  }
+
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
     if (!line || (!line.includes("session_meta") && !line.includes("turn_context") && !line.includes("token_count"))) continue;
     const value = safeJson(line);
     if (!value) continue;
     const payload = value.payload || {};
 
     if (value.type === "session_meta") {
-      sessionId = String(payload.id || payload.session_id || payload.sessionId || sessionId);
+      sessionId = String(payload.id || payload.thread_id || payload.threadId || payload.session_id || payload.sessionId || sessionId);
       accountId = firstString([payload.account_id, payload.accountId, payload.chatgpt_account_id, payload.info?.account_id, payload.info?.accountId]) || accountId;
       accountEmail = firstString([payload.email, payload.account_email, payload.accountEmail, payload.info?.email, payload.info?.account_email]) || accountEmail;
       continue;
@@ -138,11 +178,13 @@ function parseCodexJsonl(content, fileKey = "codex") {
 
     const delta = total ? subtractTokens(total, previous) : last;
     if (total) previous = total;
+    if (historyReplayBoundary >= 0 && lineIndex < historyReplayBoundary) continue;
     if (!hasTokens(delta)) continue;
     eventIndex += 1;
     events.push(usageEvent({
       id: `codex:${sessionId}:${eventIndex}`,
       source: "codex",
+      sessionId,
       model,
       accountId,
       accountEmail,
@@ -283,6 +325,78 @@ function matchesProvider(provider, event) {
   return false;
 }
 
+function summarizeCodexUsage(events, now = Date.now()) {
+  const codexEvents = (events || []).filter((event) => event.source === "codex" && event.timestampMs > 0);
+  const todayStart = startOfLocalDay(now);
+  const sevenDayStart = startOfLocalDay(now - 6 * 24 * 60 * 60 * 1000);
+  const thirtyDayStart = startOfLocalDay(now - 29 * 24 * 60 * 60 * 1000);
+  const windows = {
+    today: summarizeUsageWindow(codexEvents, todayStart, now),
+    sevenDays: summarizeUsageWindow(codexEvents, sevenDayStart, now),
+    thirtyDays: summarizeUsageWindow(codexEvents, thirtyDayStart, now),
+  };
+
+  const thirtyDayEvents = codexEvents.filter((event) => event.timestampMs >= thirtyDayStart && event.timestampMs <= now + 60_000);
+  const byModel = new Map();
+  for (const event of thirtyDayEvents) {
+    const key = event.model || "unknown";
+    if (!byModel.has(key)) byModel.set(key, []);
+    byModel.get(key).push(event);
+  }
+
+  const models = [...byModel.entries()]
+    .map(([model, modelEvents]) => ({ model, ...summarizeUsageWindow(modelEvents, thirtyDayStart, now) }))
+    .sort((left, right) => right.totalTokens - left.totalTokens || right.requests - left.requests);
+
+  const daily = [];
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const dayStart = startOfLocalDay(now - offset * 24 * 60 * 60 * 1000);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    daily.push({
+      date: localDateKey(dayStart),
+      ...summarizeUsageWindow(codexEvents, dayStart, Math.min(now, dayEnd.getTime() - 1)),
+    });
+  }
+
+  return {
+    generatedAt: now,
+    lastEventAt: codexEvents.reduce((latest, event) => Math.max(latest, event.timestampMs), 0) || null,
+    windows,
+    daily,
+    models,
+  };
+}
+
+function summarizeUsageWindow(events, start, end) {
+  const selected = (events || []).filter((event) => event.timestampMs >= start && event.timestampMs <= end + 60_000);
+  const priced = selected.filter((event) => event.costUsd != null);
+  return {
+    requests: selected.length,
+    sessions: new Set(selected.map((event) => event.sessionId || event.id.split(":").slice(0, 2).join(":"))).size,
+    inputTokens: selected.reduce((sum, event) => sum + event.inputTokens, 0),
+    outputTokens: selected.reduce((sum, event) => sum + event.outputTokens, 0),
+    cacheReadTokens: selected.reduce((sum, event) => sum + event.cacheReadTokens, 0),
+    cacheCreationTokens: selected.reduce((sum, event) => sum + event.cacheCreationTokens, 0),
+    totalTokens: selected.reduce((sum, event) => sum + event.totalTokens, 0),
+    costUsd: priced.length ? priced.reduce((sum, event) => sum + event.costUsd, 0) : selected.length ? null : 0,
+    partialCost: priced.length > 0 && priced.length < selected.length,
+  };
+}
+
+function startOfLocalDay(value) {
+  const date = new Date(value);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function localDateKey(value) {
+  const date = new Date(value);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 function matchingUsageEvents(provider, events, allProviders = []) {
   const providerMatches = (events || []).filter((event) => matchesProvider(provider, event));
   if (!providerMatches.length) return [];
@@ -418,6 +532,7 @@ async function mapLimit(items, limit, worker) {
 
 module.exports = {
   collectLocalUsage,
+  collectCodexAgentUsage,
   parseCodexJsonl,
   parseClaudeJsonl,
   attachUsageToProvider,
@@ -425,5 +540,6 @@ module.exports = {
   aggregateWindowUsage,
   matchesProvider,
   matchingUsageEvents,
+  summarizeCodexUsage,
   tierDurationMs,
 };

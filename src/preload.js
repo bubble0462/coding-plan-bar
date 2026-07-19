@@ -46,6 +46,9 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   getConfig() {
     return ipcRenderer.invoke("config:get");
   },
+  getCodexAgentUsage() {
+    return ipcRenderer.invoke("usage:get-codex-agent");
+  },
   saveConfig(config) {
     return ipcRenderer.invoke("config:save", config);
   },

@@ -43,6 +43,7 @@ const {
   aggregateTierUsage,
   matchesProvider,
   matchingUsageEvents,
+  summarizeCodexUsage,
 } = require("../src/session-usage");
 const {
   parseVersion,
@@ -253,6 +254,35 @@ const codexWindow = aggregateTierUsage(
 assert.strictEqual(codexWindow.requests, 2);
 assert.strictEqual(codexWindow.totalTokens, 1760);
 assert(codexWindow.costUsd > 0);
+
+const forkedCodexEvents = parseCodexJsonl([
+  JSON.stringify({ type: "session_meta", payload: { id: "child-session", session_id: "parent-session", source: { subagent: {} } }, timestamp: "2026-07-05T10:00:00Z" }),
+  JSON.stringify({ type: "turn_context", payload: { model: "gpt-5.6-sol" }, timestamp: "2026-07-05T10:00:01Z" }),
+  JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 10_000, cached_input_tokens: 2_000, output_tokens: 1_000 } } }, timestamp: "2026-07-05T10:00:02Z" }),
+  JSON.stringify({ type: "event_msg", payload: { type: "thread_settings_applied" }, timestamp: "2026-07-05T10:00:03Z" }),
+  JSON.stringify({ type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 10_600, cached_input_tokens: 2_100, output_tokens: 1_060 } } }, timestamp: "2026-07-05T10:01:00Z" }),
+].join("\n"));
+assert.strictEqual(forkedCodexEvents.length, 1);
+assert.strictEqual(forkedCodexEvents[0].sessionId, "child-session");
+assert.strictEqual(forkedCodexEvents[0].inputTokens, 600);
+assert.strictEqual(forkedCodexEvents[0].cacheReadTokens, 100);
+assert.strictEqual(forkedCodexEvents[0].outputTokens, 60);
+
+const olderCodexEvent = {
+  ...codexEvents[0],
+  id: "codex:older-session:1",
+  sessionId: "older-session",
+  timestampMs: usageNow - 15 * 24 * 60 * 60 * 1000,
+  timestamp: new Date(usageNow - 15 * 24 * 60 * 60 * 1000).toISOString(),
+};
+const agentUsage = summarizeCodexUsage([...codexEvents, ...forkedCodexEvents, olderCodexEvent], usageNow);
+assert.strictEqual(agentUsage.windows.today.requests, 3);
+assert.strictEqual(agentUsage.windows.sevenDays.requests, 3);
+assert.strictEqual(agentUsage.windows.thirtyDays.requests, 4);
+assert.strictEqual(agentUsage.windows.thirtyDays.sessions, 3);
+assert.strictEqual(agentUsage.daily.length, 7);
+assert.strictEqual(agentUsage.models[0].model, "gpt-5.4");
+assert(agentUsage.windows.thirtyDays.costUsd > agentUsage.windows.sevenDays.costUsd);
 
 const claudeEvents = parseClaudeJsonl(JSON.stringify({
   type: "assistant",

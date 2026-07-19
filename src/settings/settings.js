@@ -34,6 +34,11 @@ let state = {
     error: null,
     checkedAt: null,
   },
+  agentUsage: {
+    loading: false,
+    data: null,
+    error: null,
+  },
   status: "正在读取设置...",
   statusIsError: false,
   statusTone: "loading",
@@ -258,10 +263,7 @@ function render() {
   root.innerHTML = `
     <section class="settings-shell ${enterClass}">
       <header class="topbar">
-        <div>
-          <h1>设置</h1>
-          <p>${escapeHtml(state.configPath || "配置文件尚未载入")}</p>
-        </div>
+        <h1>设置</h1>
         <div class="top-actions">
           <button class="btn" data-action="refresh">重新读取</button>
           <button class="btn" data-action="open-json">高级 JSON</button>
@@ -284,6 +286,10 @@ function render() {
             ${renderProviderList()}
           </div>
           <nav class="sidebar-nav">
+            <button class="nav-item ${state.view === "usage" ? "is-active" : ""}" data-action="show-usage">
+              <span class="nav-dot ${state.agentUsage.error ? "has-alert" : ""}"></span>
+              Agent 用量
+            </button>
             <button class="nav-item ${state.view === "health" ? "is-active" : ""}" data-action="show-health">
               <span class="nav-dot ${healthSummary().attention ? "has-alert" : ""}"></span>
               诊断中心
@@ -302,8 +308,10 @@ function render() {
 
         <section class="editor">
           ${
-            state.view === "update"
-              ? renderUpdatePage()
+            state.view === "usage"
+              ? renderAgentUsagePage()
+              : state.view === "update"
+                ? renderUpdatePage()
               : state.view === "health"
                 ? renderHealthPage()
                 : state.view === "backup"
@@ -516,6 +524,118 @@ function providerBadge(provider) {
 
 function renderEmptyList() {
   return `<div class="empty"><p class="hint">还没有供应商。</p></div>`;
+}
+
+function renderAgentUsagePage() {
+  const usage = state.agentUsage;
+  const data = usage.data;
+  const refreshedAt = data?.generatedAt ? new Date(data.generatedAt).toLocaleString("zh-CN") : "尚未统计";
+  let body = "";
+
+  if (usage.loading && !data) {
+    body = `<div class="usage-loading" aria-live="polite"><span></span><strong>正在扫描本机 Codex 会话…</strong><small>只读取 ~/.codex/sessions 与 archived_sessions 中的 Token 计数。</small></div>`;
+  } else if (usage.error && !data) {
+    body = `<div class="usage-error"><strong>统计失败</strong><p>${escapeHtml(usage.error)}</p><button class="btn" data-action="refresh-agent-usage">重试</button></div>`;
+  } else if (data) {
+    const daily = Array.isArray(data.daily) ? data.daily : [];
+    const models = Array.isArray(data.models) ? data.models : [];
+    const maxDaily = Math.max(1, ...daily.map((item) => Number(item.totalTokens || 0)));
+    body = `
+      <div class="usage-window-grid">
+        ${renderUsageWindowCard("今天", data.windows?.today)}
+        ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays)}
+        ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true)}
+      </div>
+      <section class="usage-section">
+        <div class="usage-section-head">
+          <div><strong>近 7 天趋势</strong><span>柱高按每日 Token 总量计算</span></div>
+          <span class="usage-legend"><i></i>Token</span>
+        </div>
+        <div class="usage-chart" role="img" aria-label="近 7 天 Codex Token 使用趋势">
+          ${daily.map((item) => {
+            const height = Math.max(item.totalTokens ? 8 : 2, Math.round(Number(item.totalTokens || 0) / maxDaily * 100));
+            const day = new Date(`${item.date}T00:00:00`).toLocaleDateString("zh-CN", { weekday: "short" });
+            return `<div class="usage-day" title="${escapeAttr(item.date)} · ${escapeAttr(formatUsageTokens(item.totalTokens))} Token">
+              <span class="usage-day-value">${escapeHtml(formatUsageTokens(item.totalTokens))}</span>
+              <span class="usage-day-track"><i style="height:${height}%"></i></span>
+              <span class="usage-day-label">${escapeHtml(day)}</span>
+            </div>`;
+          }).join("")}
+        </div>
+      </section>
+      <section class="usage-section">
+        <div class="usage-section-head"><div><strong>模型明细</strong><span>最近 30 天，费用按公开 API 单价估算</span></div></div>
+        <div class="usage-model-table">
+          <div class="usage-model-row is-head"><span>模型</span><span>请求</span><span>Token</span><span>估算费用</span></div>
+          ${models.map((item) => `<div class="usage-model-row">
+            <strong title="${escapeAttr(item.model)}">${escapeHtml(item.model)}</strong>
+            <span>${formatUsageInteger(item.requests)}</span>
+            <span>${escapeHtml(formatUsageTokens(item.totalTokens))}</span>
+            <span class="usage-cost">${escapeHtml(formatUsageMoney(item.costUsd, item.partialCost))}</span>
+          </div>`).join("") || '<div class="usage-model-empty">最近 30 天没有可统计的 Codex 会话。</div>'}
+        </div>
+      </section>
+      <p class="usage-note">统计来自本机 Codex JSONL 会话日志，不代表订阅账单；未知模型不会计入金额，但 Token 仍会保留。</p>
+    `;
+  }
+
+  return `
+    <div class="editor-head">
+      <div class="section-title"><strong>Agent 用量</strong><span>汇总本机 Codex Agent 的请求、Token 与 API 等价费用，不按账号拆分。</span></div>
+      <button class="btn" data-action="refresh-agent-usage" ${usage.loading ? "disabled" : ""}>${usage.loading ? "统计中…" : "重新统计"}</button>
+    </div>
+    <div class="form usage-page">
+      <div class="usage-meta"><span>数据更新时间：${escapeHtml(refreshedAt)}</span>${data?.lastEventAt ? `<span>最近活动：${escapeHtml(new Date(data.lastEventAt).toLocaleString("zh-CN"))}</span>` : ""}</div>
+      ${body}
+    </div>
+  `;
+}
+
+function renderUsageWindowCard(label, windowData = {}, featured = false) {
+  const input = Number(windowData?.inputTokens || 0);
+  const cached = Number(windowData?.cacheReadTokens || 0);
+  const cacheRate = input > 0 ? Math.min(100, Math.round(cached / input * 100)) : 0;
+  return `
+    <article class="usage-window-card ${featured ? "is-featured" : ""}">
+      <div class="usage-window-title"><span>${escapeHtml(label)}</span><em>${formatUsageInteger(windowData?.sessions)} 个会话</em></div>
+      <strong class="usage-window-total">${escapeHtml(formatUsageTokens(windowData?.totalTokens))}<small> Token</small></strong>
+      <div class="usage-window-stats"><span><b>${formatUsageInteger(windowData?.requests)}</b> 请求</span><span><b>${escapeHtml(formatUsageMoney(windowData?.costUsd, windowData?.partialCost))}</b> 估算</span></div>
+      <div class="usage-token-split"><span>输入 <b>${escapeHtml(formatUsageTokens(windowData?.inputTokens))}</b></span><span>输出 <b>${escapeHtml(formatUsageTokens(windowData?.outputTokens))}</b></span><span>缓存 <b>${escapeHtml(formatUsageTokens(windowData?.cacheReadTokens))}</b></span></div>
+      <div class="usage-cache"><span>缓存占输入 ${cacheRate}%</span><i><b style="width:${cacheRate}%"></b></i></div>
+    </article>
+  `;
+}
+
+function formatUsageInteger(value) {
+  return Math.max(0, Number(value) || 0).toLocaleString("zh-CN");
+}
+
+function formatUsageTokens(value) {
+  const amount = Math.max(0, Number(value) || 0);
+  if (amount >= 1_000_000_000) return `${(amount / 1_000_000_000).toFixed(amount >= 10_000_000_000 ? 1 : 2)}B`;
+  if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(amount >= 10_000_000 ? 1 : 2)}M`;
+  if (amount >= 1_000) return `${(amount / 1_000).toFixed(amount >= 10_000 ? 1 : 2)}K`;
+  return String(Math.round(amount));
+}
+
+function formatUsageMoney(value, partial = false) {
+  if (value == null || !Number.isFinite(Number(value))) return "未定价";
+  const amount = Math.max(0, Number(value));
+  const digits = amount >= 100 ? 0 : amount >= 10 ? 1 : 2;
+  return `${partial ? "≥ " : ""}$${amount.toFixed(digits)}`;
+}
+
+async function loadAgentUsage() {
+  if (state.agentUsage.loading) return;
+  state.agentUsage = { ...state.agentUsage, loading: true, error: null };
+  if (state.view === "usage") render();
+  try {
+    const data = await window.codingPlanBar.getCodexAgentUsage();
+    state.agentUsage = { loading: false, data, error: null };
+  } catch (error) {
+    state.agentUsage = { ...state.agentUsage, loading: false, error: error.message || String(error) };
+  }
+  if (state.view === "usage") render();
 }
 
 function renderUpdatePage() {
@@ -1510,6 +1630,14 @@ function reorderProviders(sourceId, targetId, position, restoreFocus = false) {
 /* Wire up the auto-update page. Kept separate so the provider editor's
    event binding stays focused and the update view is easy to reason about. */
 function bindUpdateEvents() {
+  root.querySelector("[data-action='show-usage']")?.addEventListener("click", () => {
+    state.view = "usage";
+    render();
+    if (!state.agentUsage.data && !state.agentUsage.loading) loadAgentUsage();
+  });
+  root.querySelectorAll("[data-action='refresh-agent-usage']").forEach((button) => {
+    button.addEventListener("click", loadAgentUsage);
+  });
   root.querySelector("[data-action='show-health']")?.addEventListener("click", () => {
     state.view = "health";
     render();

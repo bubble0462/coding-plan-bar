@@ -14,6 +14,7 @@ const showImportPaste = process.argv.includes("--import-paste");
 const showDirty = process.argv.includes("--dirty");
 const showHealth = process.argv.includes("--health");
 const showBackup = process.argv.includes("--backup");
+const showUsage = process.argv.includes("--usage");
 const outputPath = path.join(
   __dirname,
   "..",
@@ -38,7 +39,9 @@ const outputPath = path.join(
                   ? "settings-screenshot-health.png"
                   : showBackup
                     ? "settings-screenshot-backup.png"
-                    : "settings-screenshot.png",
+                    : showUsage
+                      ? "settings-screenshot-usage.png"
+                      : "settings-screenshot.png",
 );
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-settings-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
@@ -107,6 +110,28 @@ const mockUpdaterState = {
   lastPublishedAt: new Date().toISOString(),
 };
 
+const mockAgentUsage = {
+  generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
+  lastEventAt: Date.parse("2026-07-19T11:48:00+08:00"),
+  windows: {
+    today: { requests: 241, sessions: 6, inputTokens: 48200421, outputTokens: 166902, cacheReadTokens: 43721600, cacheCreationTokens: 0, totalTokens: 48367323, costUsd: 45.2819, partialCost: false },
+    sevenDays: { requests: 3123, sessions: 13, inputTokens: 459447914, outputTokens: 1862684, cacheReadTokens: 427806450, cacheCreationTokens: 0, totalTokens: 461310598, costUsd: 330.775, partialCost: true },
+    thirtyDays: { requests: 9120, sessions: 42, inputTokens: 1240820000, outputTokens: 4780000, cacheReadTokens: 1149210000, cacheCreationTokens: 0, totalTokens: 1245600000, costUsd: 876.42, partialCost: true },
+  },
+  daily: [
+    { date: "2026-07-13", totalTokens: 41200000 }, { date: "2026-07-14", totalTokens: 68000000 },
+    { date: "2026-07-15", totalTokens: 28700000 }, { date: "2026-07-16", totalTokens: 104000000 },
+    { date: "2026-07-17", totalTokens: 73500000 }, { date: "2026-07-18", totalTokens: 97300000 },
+    { date: "2026-07-19", totalTokens: 48367323 },
+  ],
+  models: [
+    { model: "gpt-5.6-sol", requests: 2253, totalTokens: 335210922, costUsd: 290.2766, partialCost: false },
+    { model: "gpt-5.6-luna", requests: 656, totalTokens: 88374236, costUsd: 19.0717, partialCost: false },
+    { model: "gpt-5.6-terra", requests: 209, totalTokens: 37539145, costUsd: 20.7717, partialCost: false },
+    { model: "gemini-3.5-flash-low", requests: 3, totalTokens: 53120, costUsd: null, partialCost: false },
+  ],
+};
+
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -139,6 +164,7 @@ async function main() {
   }));
   ipcMain.handle("config:preview-import", (_event, raw) => previewAccountsImport(sampleConfig, JSON.parse(raw), "pasted-json"));
   ipcMain.handle("quota:refresh", () => {});
+  ipcMain.handle("usage:get-codex-agent", () => mockAgentUsage);
   ipcMain.handle("quota:open-config", () => {});
   ipcMain.handle("quota:hide", () => {});
   ipcMain.handle("quota:keep-open", () => {});
@@ -160,9 +186,9 @@ async function main() {
   const window = new BrowserWindow({
     width: 940,
     height: 660,
-    show: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup,
-    x: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup ? -2200 : undefined,
-    y: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup ? 80 : undefined,
+    show: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup || showUsage,
+    x: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup || showUsage ? -2200 : undefined,
+    y: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup || showUsage ? 80 : undefined,
     frame: true,
     backgroundColor: "#f6f8fb",
     webPreferences: {
@@ -274,6 +300,26 @@ async function main() {
       })()`,
     );
     if (!rendered) throw new Error("Update page did not render with version info");
+  }
+
+  if (showUsage) {
+    window.showInactive();
+    await wait(120);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="show-usage"]')?.click();
+    `);
+    await wait(260);
+    const usageRendered = await window.webContents.executeJavaScript(`(() => {
+      const page = document.querySelector(".usage-page");
+      if (!page) return false;
+      const text = page.textContent || "";
+      return text.includes("今天") && text.includes("最近 7 天") && text.includes("最近 30 天") &&
+        text.includes("gpt-5.6-sol") && text.includes("1.25B") && text.includes("≥ $876");
+    })()`);
+    if (!usageRendered) {
+      const usageText = await window.webContents.executeJavaScript(`document.querySelector(".usage-page")?.textContent || "NO_PAGE"`);
+      throw new Error(`Agent usage page did not render expected metrics: ${usageText.slice(0, 800)}`);
+    }
   }
 
   if (showHealth) {

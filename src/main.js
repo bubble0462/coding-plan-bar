@@ -26,6 +26,7 @@ const { importAccountsIntoConfig, previewAccountsImport } = require("./account-i
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { calculatePopupPlacement } = require("./popup-placement");
 const { loadConfig, refreshProviders } = require("./providers");
+const { collectCodexAgentUsage } = require("./session-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
   DEFAULT_TTL_MS,
@@ -842,6 +843,11 @@ async function maybeAutoCheckOnStartup() {
   }
 }
 
+async function getCodexAgentUsage() {
+  const config = readConfigFile(configPath);
+  return collectCodexAgentUsage(config.providers || []);
+}
+
 function getConfigForSettings() {
   return {
     config: configForRenderer(readConfigFile(configPath)),
@@ -960,6 +966,7 @@ async function startApp() {
   ipcMain.handle("quota:refresh", () => refreshAll("manual"));
   ipcMain.handle("quota:open-config", openConfig);
   ipcMain.handle("config:get", getConfigForSettings);
+  ipcMain.handle("usage:get-codex-agent", getCodexAgentUsage);
   ipcMain.handle("config:save", saveConfigFromSettings);
   ipcMain.handle("config:open-json", openConfigJson);
   ipcMain.handle("config:backup", backupConfigFile);

@@ -11,6 +11,7 @@
 - 常驻 Windows 系统托盘，鼠标悬停或点击即可查看额度。
 - 展示 5 小时限额、周限额、重置倒计时和账户余额。
 - 按额度周期统计本机请求数、Token 数量，并根据实际模型公开价格估算美元成本。
+- 设置页新增「Agent 用量」，跨账号汇总本机 Codex 今天、最近 7 天和最近 30 天的请求、Token、会话、趋势及模型费用。
 - 余额卡可显示接口返回的今日请求数、Token 与消费；DeepSeek 使用本地日志显示近 7 天统计。
 - 供应商不超过 3 个时自动适配窗口高度，超过 3 个时固定高度并滚动。
 - 图形化添加、编辑、启用或停用供应商，无需手动修改 JSON。
@@ -28,7 +29,7 @@
 前往 [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest) 下载最新的 Windows 安装包：
 
 ```text
-Coding Plan Bar-Setup-0.3.27-x64.exe
+Coding Plan Bar-Setup-0.3.28-x64.exe
 ```
 
 安装前请先退出正在运行的旧版本。安装向导支持选择安装目录，包括 D 盘。升级安装不会删除用户配置。
@@ -60,6 +61,7 @@ Coding Plan Bar-Setup-0.3.27-x64.exe
 ### Token 与成本估算
 
 - Codex 使用量读取 `%USERPROFILE%\.codex\sessions` 与 `archived_sessions` 中的本机会话 JSONL。
+- 「Agent 用量」不按账号拆分，会合并默认目录与已配置 Codex 目录中的本机会话，并对 Codex 子任务/分叉会话携带的历史快照去重。
 - Claude 使用量读取 `%USERPROFILE%\.claude\projects` 中的本机会话 JSONL。
 - Kimi、GLM、MiniMax Coding Plan 会按日志里的模型 ID 自动归属；GLM 已覆盖 GLM-4.5/4.6/4.7、GLM-5/5-Turbo/5.1/5.2 等常用模型价格。
 - Codex 已覆盖 GPT-5.6 Sol、Terra、Luna 限量预览定价；缓存读取按输入价格的 10% 计算，缓存写入按 1.25 倍输入价格计算。
