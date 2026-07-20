@@ -1,6 +1,10 @@
 {
   "refreshIntervalSeconds": 300,
   "showOnHover": true,
+  "proxy": {
+    "mode": "system",
+    "url": ""
+  },
   "autoUpdate": {
     "enabled": true
   },

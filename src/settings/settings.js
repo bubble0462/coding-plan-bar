@@ -18,6 +18,10 @@ let state = {
       suppressBackupWarning: false,
       suppressImportWarning: false,
     },
+    proxy: {
+      mode: "system",
+      url: "",
+    },
     autoUpdate: { enabled: true },
     importHistory: [],
     providers: [],
@@ -909,6 +913,7 @@ function renderBackupPage() {
         <button class="btn" data-action="restore-config">从备份恢复</button>
         <button class="btn" data-action="open-json">打开高级 JSON</button>
       </div>
+      ${renderProxySection()}
       ${renderDensitySection()}
       <div class="section">
         <div class="section-title">
@@ -930,6 +935,36 @@ function renderHistoryItem(item) {
       <strong>${escapeHtml(item.sourceLabel || "账号 JSON")}</strong>
       <span>${escapeHtml(time)} · ${escapeHtml(item.format || "accounts")} · 检测 ${Number(item.accountCount || 0)} / 新增 ${Number(item.importedCount || 0)} / 更新 ${Number(item.updatedCount || 0)} / 跳过 ${Number(item.skippedCount || 0)}</span>
       <small>${escapeHtml((item.identityMethods || []).join("、") || "身份方式未知")}</small>
+    </div>
+  `;
+}
+
+function renderProxySection() {
+  const proxy = state.config.proxy || { mode: "system", url: "" };
+  const mode = proxy.mode || "system";
+  const showUrl = mode === "manual";
+  return `
+    <div class="section proxy-section">
+      <div class="section-title">
+        <strong>网络代理</strong>
+        <span>让额度查询 / 测试连通 / 对话探测与浏览器出网一致。</span>
+      </div>
+      <div class="segmented">
+        <button class="segment ${mode === "system" ? "is-active" : ""}" data-action="set-proxy-mode" data-mode="system">系统代理</button>
+        <button class="segment ${mode === "direct" ? "is-active" : ""}" data-action="set-proxy-mode" data-mode="direct">直连</button>
+        <button class="segment ${mode === "manual" ? "is-active" : ""}" data-action="set-proxy-mode" data-mode="manual">手动代理</button>
+      </div>
+      ${
+        showUrl
+          ? `
+            <div class="field full" style="margin-top:10px">
+              <label id="proxy-url-label">代理地址</label>
+              <input data-field="proxyUrl" aria-labelledby="proxy-url-label" value="${escapeAttr(proxy.url || "")}" placeholder="例如：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080" />
+              <p class="hint">支持 http / https / socks5。保存后立即生效，并用于后续额度刷新与连通性测试。</p>
+            </div>
+          `
+          : `<p class="hint" style="margin-top:8px">${mode === "direct" ? "不使用任何代理，直接访问上游。" : "跟随 Windows 系统代理 / PAC（推荐，与浏览器行为一致）。"}</p>`
+      }
     </div>
   `;
 }
@@ -1136,7 +1171,7 @@ function renderCodexTestBlock(provider) {
   const tiers = (cached.tiers || [])
     .filter((tier) => typeof tier.utilization === "number")
     .map((tier) => {
-      const pct = `${Math.round(tier.utilization * 100)}%`;
+      const pct = `${Math.round(Number(tier.utilization || 0))}%`;
       const reset = tier.resetsAt ? ` · 重置 ${new Date(tier.resetsAt).toLocaleTimeString()}` : "";
       return `<div><dt>${escapeHtml(tier.name || "窗口")}</dt><dd>${escapeHtml(pct)}${reset}</dd></div>`;
     })
@@ -1145,7 +1180,10 @@ function renderCodexTestBlock(provider) {
     ? `<div><dt>重置额度</dt><dd>${cached.resetCredits.available}</dd></div>`
     : "";
   const failureTip = !cached.ok && cached.failure
-    ? `<p class="diagnostic-tip"><strong>${escapeHtml(cached.failure.label)}：</strong>${escapeHtml(cached.failure.action || cached.message || "")}</p>`
+    ? `<p class="diagnostic-tip"><strong>${escapeHtml(cached.failure.label)}：</strong>${escapeHtml(cached.failure.action || "")}</p>`
+    : "";
+  const detailTip = !cached.ok && cached.message
+    ? `<p class="diagnostic-tip codex-test-detail">${escapeHtml(cached.message)}</p>`
     : "";
   return `
     <div class="codex-test-block">
@@ -1155,6 +1193,7 @@ function renderCodexTestBlock(provider) {
       </div>
       ${tiers || resetCredits ? `<dl>${tiers}${resetCredits}</dl>` : ""}
       ${failureTip}
+      ${detailTip}
     </div>
   `;
 }
@@ -1530,6 +1569,14 @@ function bindEvents() {
   root.querySelectorAll("[data-action='set-density']").forEach((button) => {
     button.addEventListener("click", () => setPanelDensity(button.dataset.density));
   });
+  root.querySelectorAll("[data-action='set-proxy-mode']").forEach((button) => {
+    button.addEventListener("click", () => setProxyMode(button.dataset.mode));
+  });
+  root.querySelector("[data-field='proxyUrl']")?.addEventListener("input", (event) => {
+    state.config.proxy = { ...(state.config.proxy || { mode: "manual" }), mode: "manual", url: event.target.value };
+    markDirty();
+    updateStatusText();
+  });
   root.querySelector("[data-action='backup-config']")?.addEventListener("click", backupConfig);
   root.querySelector("[data-action='restore-config']")?.addEventListener("click", restoreConfig);
   root.querySelector("[data-field='suppressBackupWarning']")?.addEventListener("change", (event) => {
@@ -1617,7 +1664,7 @@ function bindProviderEditorEvents(scope = root) {
   });
 
   scope.querySelectorAll("input[data-field]").forEach((field) => {
-    if (["suppressBackupWarning"].includes(field.dataset.field)) return;
+    if (["suppressBackupWarning", "proxyUrl"].includes(field.dataset.field)) return;
     if (field.type === "checkbox") {
       field.addEventListener("change", () => {
         pulseToggle(field);
@@ -1989,13 +2036,13 @@ async function runCodexConnectionTest(button) {
   state.statusTone = "loading";
   updateStatusText();
   try {
-    const result = await window.codingPlanBar.testCodexConnection(provider);
+    const result = await window.codingPlanBar.testCodexConnection(provider.id);
     state.testCodexResult = { providerId: provider.id, result };
     refreshSelectedAccountDetail(provider.id);
     if (result.ok) {
       const tiers = (result.tiers || [])
         .filter((tier) => typeof tier.utilization === "number")
-        .map((tier) => `${tier.name || "窗口"} ${Math.round(tier.utilization * 100)}%`)
+        .map((tier) => `${tier.name || "窗口"} ${Math.round(Number(tier.utilization || 0))}%`)
         .join(" · ");
       state.status = `连通正常 · ${result.latencyMs}ms · HTTP ${result.httpStatus}${tiers ? " · " + tiers : ""}`;
       state.statusIsError = false;
@@ -2096,7 +2143,7 @@ async function runChatProbe(provider) {
 
   try {
     const result = await window.codingPlanBar.probeCodexChat({
-      provider,
+      provider: provider.id,
       model: probe.selectedModel,
       prompt: probe.prompt,
     });
@@ -2362,6 +2409,17 @@ async function confirmImportAccounts() {
 
 function setPanelDensity(value) {
   state.config.panelDensity = value === "compact" ? "compact" : "comfortable";
+  markDirty();
+  render();
+}
+
+function setProxyMode(value) {
+  const mode = value === "direct" || value === "manual" ? value : "system";
+  const previous = state.config.proxy || { mode: "system", url: "" };
+  state.config.proxy = {
+    mode,
+    url: mode === "manual" ? String(previous.url || "") : String(previous.url || ""),
+  };
   markDirty();
   render();
 }
@@ -2742,6 +2800,7 @@ function uniqueProvider(provider) {
 }
 
 function cloneConfig(config) {
+  const proxy = config.proxy || {};
   return {
     refreshIntervalSeconds: Number(config.refreshIntervalSeconds || 300),
     showOnHover: config.showOnHover !== false,
@@ -2750,6 +2809,10 @@ function cloneConfig(config) {
       suppressAdvancedJsonWarning: Boolean((config.privacy || {}).suppressAdvancedJsonWarning),
       suppressBackupWarning: Boolean((config.privacy || {}).suppressBackupWarning),
       suppressImportWarning: Boolean((config.privacy || {}).suppressImportWarning),
+    },
+    proxy: {
+      mode: proxy.mode === "direct" || proxy.mode === "manual" ? proxy.mode : "system",
+      url: String(proxy.url || ""),
     },
     autoUpdate: {
       enabled: (config.autoUpdate || {}).enabled !== false,

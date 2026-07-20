@@ -2403,6 +2403,23 @@ button {
   font-weight: 700;
 }
 
+.codex-test-detail {
+  margin: 0;
+  word-break: break-word;
+  white-space: pre-wrap;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.proxy-section {
+  margin-top: 4px;
+}
+
+.proxy-section .segmented {
+  margin-top: 2px;
+}
+
 .chat-probe-card {
   display: grid;
   gap: 10px;

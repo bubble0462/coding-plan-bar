@@ -3,6 +3,7 @@ const os = require("os");
 const path = require("path");
 const { readConfigFile, normalizeConfig } = require("./config-store");
 const { classifyFailure } = require("./failure-classifier");
+const { appFetch } = require("./http-client");
 const { collectLocalUsage, attachUsageToProvider } = require("./session-usage");
 const { fetchGrokBillingViaCli } = require("./grok-rpc");
 const { fetchGrokWebBilling } = require("./grok-web-billing");
@@ -228,8 +229,22 @@ async function queryOfficialSubscription(provider) {
   return subscriptionError(provider.tool || provider.id, "not_found", "不支持的官方工具");
 }
 
+function isRedactedSecret(value) {
+  const text = String(value || "");
+  // Renderer uses SECRET_MASK "••••••••••••" (U+2022). Never send that as a real token.
+  return !text || text.includes("\u2022") || text === "********" || /^•+$/u.test(text);
+}
+
 function readCodexCredentials(provider) {
   if (provider.accessToken) {
+    if (isRedactedSecret(provider.accessToken)) {
+      return {
+        accessToken: null,
+        accountId: provider.accountId || null,
+        status: "missing",
+        message: "token 已脱敏，请从本机配置重新读取",
+      };
+    }
     const expired = provider.expiresAt ? isExpired(provider.expiresAt) : false;
     const label = provider.accountEmail || provider.planType || null;
     return {
@@ -1139,7 +1154,7 @@ async function fetchJsonOnce(url, options, timeoutMs, maxResponseBytes) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, {
+    const response = await appFetch(url, {
       ...options,
       signal: controller.signal,
     });

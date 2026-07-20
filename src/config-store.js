@@ -8,6 +8,7 @@ const {
   mergeMaskedSecrets,
   hasPlaintextSecrets,
 } = require("./secret-store");
+const { normalizeProxy } = require("./proxy");
 
 let secretCodec = null;
 
@@ -27,6 +28,7 @@ function normalizeConfig(config) {
     showOnHover: config.showOnHover !== false,
     panelDensity: normalizePanelDensity(config.panelDensity),
     privacy: normalizePrivacy(config.privacy),
+    proxy: normalizeProxy(config.proxy),
     autoUpdate: normalizeAutoUpdate(config.autoUpdate),
     importHistory: normalizeImportHistory(config.importHistory),
     providers: Array.isArray(config.providers) ? config.providers.map(normalizeProvider) : [],
@@ -153,6 +155,9 @@ function mergeRendererConfig(config, current) {
 function validateConfig(config) {
   if (!Number.isFinite(config.refreshIntervalSeconds) || config.refreshIntervalSeconds < 30) {
     throw new Error("刷新间隔不能小于 30 秒");
+  }
+  if (config.proxy?.mode === "manual" && !String(config.proxy.url || "").trim()) {
+    throw new Error("手动代理模式下必须填写代理地址，例如 http://127.0.0.1:7890");
   }
 
   const ids = new Set();

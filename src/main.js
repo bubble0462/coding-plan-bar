@@ -28,6 +28,7 @@ const { calculatePopupPlacement } = require("./popup-placement");
 const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials } = require("./providers");
 const { classifyFailure } = require("./failure-classifier");
 const { listCodexModels, probeCodexStream } = require("./chat-probe");
+const { applyProxySettings } = require("./proxy");
 const { collectCodexAgentUsage } = require("./session-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
@@ -859,9 +860,26 @@ function getConfigForSettings() {
   };
 }
 
+// Renderer only holds redacted tokens (••••). Always re-load the real provider
+// from disk before probing so Authorization headers never carry the mask.
+function resolveProviderForProbe(providerOrId) {
+  const id = typeof providerOrId === "string"
+    ? providerOrId
+    : providerOrId?.id;
+  if (!id) throw new Error("缺少供应商 ID");
+  const config = readConfigFile(configPath);
+  const provider = (config.providers || []).find((item) => item.id === id);
+  if (!provider) throw new Error(`找不到供应商：${id}`);
+  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") {
+    throw new Error("当前仅支持 Codex 官方订阅账号探测");
+  }
+  return provider;
+}
+
 async function saveConfigFromSettings(_event, config) {
   const current = readConfigFile(configPath);
   const saved = writeConfigFile(configPath, mergeRendererConfig(config, current));
+  await applyProxySettings(saved.proxy);
   syncPopupProvidersToConfig(saved);
   await refreshAll("config");
   scheduleRefresh();
@@ -952,12 +970,14 @@ async function startApp() {
   ensureConfigFile();
   Menu.setApplicationMenu(null);
 
+  const bootConfig = loadConfig(configPath);
+  await applyProxySettings(bootConfig.proxy);
+
   if (process.argv.includes("--smoke-startup")) {
     const icon = createTrayIcon();
     if (icon.isEmpty()) {
       throw new Error("Tray icon image is empty");
     }
-    loadConfig(configPath);
     app.exit(0);
     return;
   }
@@ -967,9 +987,9 @@ async function startApp() {
 
   ipcMain.handle("quota:refresh", () => refreshAll("manual"));
   ipcMain.handle("quota:open-config", openConfig);
-  ipcMain.handle("quota:test-codex", async (_event, provider) => {
+  ipcMain.handle("quota:test-codex", async (_event, providerOrId) => {
     try {
-      return await testCodexConnection(provider);
+      return await testCodexConnection(resolveProviderForProbe(providerOrId));
     } catch (error) {
       const message = String(error?.message || error);
       return {
@@ -989,7 +1009,15 @@ async function startApp() {
   ipcMain.handle("chat:list-codex-models", () => listCodexModels());
   ipcMain.handle("chat:probe-codex", async (event, { provider, model, prompt }) => {
     const win = event.sender;
-    const credentials = readCodexCredentials(provider);
+    let resolvedProvider;
+    try {
+      resolvedProvider = resolveProviderForProbe(provider);
+    } catch (error) {
+      const message = String(error?.message || error);
+      const failure = classifyFailure(message);
+      return { ok: false, error: message, failure };
+    }
+    const credentials = readCodexCredentials(resolvedProvider);
     if (credentials.status !== "valid" && !credentials.accessToken) {
       const failure = classifyFailure(credentials.message || credentials.status, null);
       return { ok: false, error: credentials.message || failure.label, failure };

@@ -1,6 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { appFetch } = require("./http-client");
 
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_CLI_USER_AGENT = "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color";
@@ -80,7 +81,7 @@ async function* probeCodexStream({ credentials, model, prompt }) {
 
   let response;
   try {
-    response = await fetch(CODEX_RESPONSES_URL, { method: "POST", headers, body });
+    response = await appFetch(CODEX_RESPONSES_URL, { method: "POST", headers, body });
   } catch (error) {
     yield { type: "error", error: String(error?.message || error) };
     return;
