@@ -1432,6 +1432,81 @@ function statusText(status) {
   }[status] || status;
 }
 
+async function testCodexConnection(provider) {
+  const testedAt = new Date().toISOString();
+  const credentials = readCodexCredentials(provider);
+
+  if (credentials.status !== "valid" && !credentials.accessToken) {
+    const failure = classifyFailure(credentials.message || credentials.status, null);
+    return {
+      ok: false,
+      stage: "credentials",
+      httpStatus: null,
+      latencyMs: 0,
+      credentialStatus: credentials.status,
+      tiers: [],
+      resetCredits: null,
+      failure,
+      message: credentials.message || failure.label,
+      testedAt,
+    };
+  }
+
+  const startedAt = Date.now();
+  let result;
+  try {
+    result = await queryCodexQuota(credentials.accessToken, credentials.accountId, "codex");
+  } catch (error) {
+    const latencyMs = Date.now() - startedAt;
+    const message = String(error?.message || error);
+    const failure = classifyFailure(message);
+    return {
+      ok: false,
+      stage: "network",
+      httpStatus: null,
+      latencyMs,
+      credentialStatus: "valid",
+      tiers: [],
+      resetCredits: null,
+      failure,
+      message,
+      testedAt,
+    };
+  }
+  const latencyMs = Date.now() - startedAt;
+
+  if (result && result.success) {
+    return {
+      ok: true,
+      stage: "parsed",
+      httpStatus: 200,
+      latencyMs,
+      credentialStatus: result.credentialStatus || "valid",
+      tiers: result.tiers || [],
+      resetCredits: result.resetCredits || null,
+      failure: null,
+      message: null,
+      testedAt,
+    };
+  }
+
+  const message = (result && (result.error || result.credentialMessage)) || "查询失败";
+  const httpStatus = (result && result.httpStatus) || null;
+  const failure = classifyFailure(message, httpStatus);
+  return {
+    ok: false,
+    stage: "http",
+    httpStatus,
+    latencyMs,
+    credentialStatus: (result && result.credentialStatus) || "valid",
+    tiers: [],
+    resetCredits: null,
+    failure,
+    message,
+    testedAt,
+  };
+}
+
 module.exports = {
   loadConfig,
   normalizeProviderConfig,
@@ -1446,4 +1521,5 @@ module.exports = {
   queryGrokQuota,
   normalizeGrokBilling,
   queryZhipuCoding,
+  testCodexConnection,
 };

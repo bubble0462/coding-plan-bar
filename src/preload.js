@@ -49,6 +49,20 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   getCodexAgentUsage() {
     return ipcRenderer.invoke("usage:get-codex-agent");
   },
+  testCodexConnection(provider) {
+    return ipcRenderer.invoke("quota:test-codex", provider);
+  },
+  listCodexModels() {
+    return ipcRenderer.invoke("chat:list-codex-models");
+  },
+  probeCodexChat(args) {
+    return ipcRenderer.invoke("chat:probe-codex", args);
+  },
+  onProbeEvent(callback) {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("chat:probe-event", listener);
+    return () => ipcRenderer.removeListener("chat:probe-event", listener);
+  },
   saveConfig(config) {
     return ipcRenderer.invoke("config:save", config);
   },

@@ -55,6 +55,19 @@ let state = {
   backupPreview: null,
   accountFilter: "all",
   accountQuery: "",
+  testCodexResult: null,
+  chatProbe: {
+    providerId: null,
+    models: [],
+    modelsLoading: false,
+    modelsLoaded: false,
+    selectedModel: "",
+    prompt: "hi",
+    status: "idle",
+    streamingText: "",
+    meta: null,
+    error: null,
+  },
 };
 
 let templatesCloseTimer = null;
@@ -191,6 +204,10 @@ if (typeof window.codingPlanBar.onConfigChanged === "function") {
     state.statusTone = "success";
     render();
   });
+}
+
+if (typeof window.codingPlanBar.onProbeEvent === "function") {
+  window.codingPlanBar.onProbeEvent((payload) => handleProbeEvent(payload));
 }
 
 window.codingPlanBar.onUpdaterState((next) => {
@@ -990,11 +1007,17 @@ function renderEditor(provider) {
           <input type="checkbox" data-field="enabled" aria-label="启用 ${escapeAttr(provider.name || provider.id)}" ${provider.enabled !== false ? "checked" : ""} />
           <span></span>
         </label>
+        ${
+          provider.kind === "official-subscription" && (provider.tool || "codex") === "codex"
+            ? `<button class="btn" data-action="test-codex" title="向 ChatGPT 后端发送一次额度查询请求">测试连通</button>`
+            : ""
+        }
         <button class="btn danger" data-action="delete-provider">删除</button>
       </div>
     </div>
     <form class="form">
       ${renderAccountDetailCard(provider)}
+      ${renderChatProbeCard(provider)}
       <div class="form-grid">
         <div class="field">
           <label id="provider-id-label">供应商 ID</label>
@@ -1080,6 +1103,7 @@ function renderAccountDetailCard(provider) {
   ].filter(([, value]) => value);
 
   if (!rows.length && provider.kind !== "official-subscription") return "";
+  const testBlock = renderCodexTestBlock(provider);
   return `
     <div class="account-detail-card">
       <div>
@@ -1090,6 +1114,47 @@ function renderAccountDetailCard(provider) {
         ${rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}
       </dl>
       ${runtime?.failure ? `<p class="diagnostic-tip"><strong>${escapeHtml(runtime.failure.label)}：</strong>${escapeHtml(runtime.failure.action)}</p>` : ""}
+      ${testBlock}
+    </div>
+  `;
+}
+
+function renderCodexTestBlock(provider) {
+  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") return "";
+  const cached = state.testCodexResult && state.testCodexResult.providerId === provider.id
+    ? state.testCodexResult.result
+    : null;
+  if (!cached) return "";
+  const testedAt = new Date(cached.testedAt).toLocaleTimeString();
+  const headTone = cached.ok ? "is-ok" : "is-danger";
+  const headLabel = cached.ok ? "连通正常" : "连通失败";
+  const meta = [
+    cached.httpStatus ? `HTTP ${cached.httpStatus}` : null,
+    `${cached.latencyMs}ms`,
+    cached.stage && cached.stage !== "parsed" ? `阶段：${cached.stage}` : null,
+  ].filter(Boolean).join(" · ");
+  const tiers = (cached.tiers || [])
+    .filter((tier) => typeof tier.utilization === "number")
+    .map((tier) => {
+      const pct = `${Math.round(tier.utilization * 100)}%`;
+      const reset = tier.resetsAt ? ` · 重置 ${new Date(tier.resetsAt).toLocaleTimeString()}` : "";
+      return `<div><dt>${escapeHtml(tier.name || "窗口")}</dt><dd>${escapeHtml(pct)}${reset}</dd></div>`;
+    })
+    .join("");
+  const resetCredits = cached.resetCredits && typeof cached.resetCredits.available === "number"
+    ? `<div><dt>重置额度</dt><dd>${cached.resetCredits.available}</dd></div>`
+    : "";
+  const failureTip = !cached.ok && cached.failure
+    ? `<p class="diagnostic-tip"><strong>${escapeHtml(cached.failure.label)}：</strong>${escapeHtml(cached.failure.action || cached.message || "")}</p>`
+    : "";
+  return `
+    <div class="codex-test-block">
+      <div class="codex-test-head">
+        <span class="provider-badge ${headTone}">${escapeHtml(headLabel)}</span>
+        <span class="codex-test-meta">${escapeHtml(meta)} · ${escapeHtml(testedAt)}</span>
+      </div>
+      ${tiers || resetCredits ? `<dl>${tiers}${resetCredits}</dl>` : ""}
+      ${failureTip}
     </div>
   `;
 }
@@ -1100,6 +1165,56 @@ function accountSourceLabel(provider) {
   if (provider.importedFrom === "sessions") return "sessions.json 导入";
   if (provider.importedFrom) return `${provider.importedFrom} 导入`;
   return KIND_LABELS[provider.kind] || provider.kind;
+}
+
+function renderChatProbeCard(provider) {
+  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") return "";
+  const probe = state.chatProbe || {};
+  const active = probe.providerId === provider.id;
+  const models = (active && probe.models) || [];
+  const modelsLoading = active && probe.modelsLoading;
+  const selectedModel = (active && probe.selectedModel) || "";
+  const prompt = (active && probe.prompt) || "hi";
+  const status = (active && probe.status) || "idle";
+  const streamingText = (active && probe.streamingText) || "";
+  const meta = active && probe.meta;
+  const error = active && probe.error;
+  const busy = status === "loading" || status === "streaming";
+
+  let modelOptions;
+  if (models.length) {
+    modelOptions = models
+      .map((m) => `<option value="${escapeAttr(m.slug)}"${m.slug === selectedModel ? " selected" : ""}>${escapeHtml(m.label)}</option>`)
+      .join("");
+  } else {
+    modelOptions = `<option value="">${modelsLoading ? "加载模型中…" : "点击加载模型清单"}</option>`;
+  }
+
+  const sendLabel = busy ? "发送中…" : (status === "idle" && !streamingText ? "发送 hi" : "重新发送");
+  const replyBody = streamingText
+    ? escapeHtml(streamingText)
+    : `<span class="chat-reply-placeholder">${busy ? "等待回复…" : "点击「发送」后会在这里显示模型回复"}</span>`;
+
+  return `
+    <div class="chat-probe-card">
+      <div class="chat-probe-head">
+        <strong>对话探测</strong>
+        <span>实际向 ChatGPT 后端发送一条消息，验证模型可回复（消耗少量额度）</span>
+      </div>
+      <div class="chat-probe-controls">
+        <select class="chat-model-select" data-action="select-chat-model" ${busy ? "disabled" : ""} aria-label="选择测试模型">
+          ${modelOptions}
+        </select>
+        ${!models.length && !modelsLoading ? `<button class="btn" data-action="load-chat-models" ${busy ? "disabled" : ""}>加载模型</button>` : ""}
+        <input class="chat-prompt-input" data-action="edit-chat-prompt" value="${escapeAttr(prompt)}" placeholder="测试消息（默认 hi）" ${busy ? "disabled" : ""} aria-label="测试消息" />
+        <button class="btn primary" data-action="send-chat-probe" ${busy ? "disabled" : ""}>${escapeHtml(sendLabel)}</button>
+      </div>
+      <div class="chat-reply-area" data-role="chat-reply">${replyBody}${status === "streaming" ? '<span class="chat-cursor">▋</span>' : ""}</div>
+      ${(meta || error) ? `<div class="chat-meta ${error ? "is-error" : ""}">${error
+        ? `<strong>失败：</strong>${escapeHtml(error)}`
+        : `<strong>完成：</strong>HTTP ${meta.httpStatus || 200} · ${meta.latencyMs}ms · ${escapeHtml(meta.model || "")}`}</div>` : ""}
+    </div>
+  `;
 }
 
 function identityHelpText(provider) {
@@ -1470,6 +1585,16 @@ function bindImportDropZone() {
 
 function bindProviderEditorEvents(scope = root) {
   scope.querySelector("[data-action='delete-provider']")?.addEventListener("click", () => deleteSelectedProvider());
+
+  const testBtn = scope.querySelector("[data-action='test-codex']");
+  if (testBtn) {
+    testBtn.addEventListener("click", () => runCodexConnectionTest(testBtn));
+  }
+
+  const chatProbeCard = scope.querySelector(".chat-probe-card");
+  if (chatProbeCard) {
+    bindChatProbeEvents(chatProbeCard);
+  }
 
   scope.querySelectorAll("[data-action='toggle-dropdown']").forEach((button) => {
     button.addEventListener("click", (event) => {
@@ -1851,6 +1976,205 @@ function replaceEditorForSelectedProvider() {
   bindProviderEditorEvents(editor);
   flashFormSwap();
   lastSelectedId = state.selectedId;
+}
+
+async function runCodexConnectionTest(button) {
+  const provider = selectedProvider();
+  if (!provider || button.disabled) return;
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "测试中…";
+  state.status = `正在测试 ${provider.name || provider.id} 的连通性…`;
+  state.statusIsError = false;
+  state.statusTone = "loading";
+  updateStatusText();
+  try {
+    const result = await window.codingPlanBar.testCodexConnection(provider);
+    state.testCodexResult = { providerId: provider.id, result };
+    refreshSelectedAccountDetail(provider.id);
+    if (result.ok) {
+      const tiers = (result.tiers || [])
+        .filter((tier) => typeof tier.utilization === "number")
+        .map((tier) => `${tier.name || "窗口"} ${Math.round(tier.utilization * 100)}%`)
+        .join(" · ");
+      state.status = `连通正常 · ${result.latencyMs}ms · HTTP ${result.httpStatus}${tiers ? " · " + tiers : ""}`;
+      state.statusIsError = false;
+      state.statusTone = "success";
+    } else {
+      state.status = `测试失败：${(result.failure && result.failure.label) || result.message || "未知错误"}`;
+      state.statusIsError = true;
+      state.statusTone = "error";
+    }
+  } catch (error) {
+    state.status = `测试失败：${String(error?.message || error)}`;
+    state.statusIsError = true;
+    state.statusTone = "error";
+  } finally {
+    updateStatusText();
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
+
+function bindChatProbeEvents(scope) {
+  const provider = selectedProvider();
+  if (!provider) return;
+  ensureChatProbeForProvider(provider);
+
+  const modelSelect = scope.querySelector("[data-action='select-chat-model']");
+  modelSelect?.addEventListener("change", () => {
+    state.chatProbe.selectedModel = modelSelect.value;
+  });
+
+  const promptInput = scope.querySelector("[data-action='edit-chat-prompt']");
+  promptInput?.addEventListener("input", () => {
+    state.chatProbe.prompt = promptInput.value;
+  });
+
+  scope.querySelector("[data-action='load-chat-models']")?.addEventListener("click", () => {
+    loadChatProbeModels(provider);
+  });
+
+  scope.querySelector("[data-action='send-chat-probe']")?.addEventListener("click", () => {
+    runChatProbe(provider);
+  });
+}
+
+function ensureChatProbeForProvider(provider) {
+  if (state.chatProbe.providerId !== provider.id) {
+    state.chatProbe = {
+      providerId: provider.id,
+      models: state.chatProbe.models,
+      modelsLoading: false,
+      modelsLoaded: state.chatProbe.modelsLoaded,
+      selectedModel: "",
+      prompt: "hi",
+      status: "idle",
+      streamingText: "",
+      meta: null,
+      error: null,
+    };
+  }
+  if (!state.chatProbe.modelsLoaded && !state.chatProbe.modelsLoading) {
+    loadChatProbeModels(provider);
+  }
+}
+
+async function loadChatProbeModels(provider) {
+  state.chatProbe.modelsLoading = true;
+  state.chatProbe.providerId = provider.id;
+  patchChatProbeCard(provider);
+  try {
+    const models = await window.codingPlanBar.listCodexModels();
+    state.chatProbe.models = Array.isArray(models) ? models : [];
+    state.chatProbe.modelsLoaded = true;
+    if (!state.chatProbe.selectedModel && state.chatProbe.models.length) {
+      const preferred = ["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"];
+      const found = preferred.map((s) => state.chatProbe.models.find((m) => m.slug === s)).find(Boolean);
+      state.chatProbe.selectedModel = (found && found.slug) || state.chatProbe.models[0].slug;
+    }
+  } catch (error) {
+    state.chatProbe.error = `加载模型失败：${String(error?.message || error)}`;
+  } finally {
+    state.chatProbe.modelsLoading = false;
+    patchChatProbeCard(provider);
+  }
+}
+
+async function runChatProbe(provider) {
+  if (!provider) return;
+  ensureChatProbeForProvider(provider);
+  const probe = state.chatProbe;
+  if (probe.status === "loading" || probe.status === "streaming") return;
+
+  probe.status = "loading";
+  probe.streamingText = "";
+  probe.meta = null;
+  probe.error = null;
+  patchChatProbeCard(provider);
+  updateStatusTextForChat("正在发送对话探测…", "loading", false);
+
+  try {
+    const result = await window.codingPlanBar.probeCodexChat({
+      provider,
+      model: probe.selectedModel,
+      prompt: probe.prompt,
+    });
+    if (state.chatProbe.providerId !== provider.id) return;
+    if (result && result.ok) {
+      probe.status = "success";
+      probe.meta = { httpStatus: result.httpStatus || 200, latencyMs: result.latencyMs, model: result.model || probe.selectedModel };
+      updateStatusTextForChat(`对话成功 · ${result.latencyMs}ms · ${escapeHtml(result.model || probe.selectedModel || "")}`, "success", false);
+    } else {
+      probe.status = "error";
+      probe.error = (result && (result.error || (result.failure && result.failure.label))) || "未知错误";
+      const tip = result?.failure?.action ? `：${result.failure.action}` : "";
+      updateStatusTextForChat(`对话失败：${probe.error}${tip}`, "error", true);
+    }
+  } catch (error) {
+    if (state.chatProbe.providerId !== provider.id) return;
+    probe.status = "error";
+    probe.error = String(error?.message || error);
+    updateStatusTextForChat(`对话失败：${probe.error}`, "error", true);
+  } finally {
+    if (state.chatProbe.providerId === provider.id) {
+      patchChatProbeCard(provider);
+    }
+  }
+}
+
+function handleProbeEvent(payload) {
+  const provider = selectedProvider();
+  if (!provider || !state.chatProbe || state.chatProbe.providerId !== provider.id) return;
+  const probe = state.chatProbe;
+  if (!payload || typeof payload !== "object") return;
+
+  if (payload.type === "started") {
+    probe.status = "streaming";
+    probe.streamingText = "";
+    probe.meta = null;
+    probe.error = null;
+    patchChatProbeCard(provider);
+  } else if (payload.type === "delta") {
+    probe.streamingText = (probe.streamingText || "") + (payload.text || "");
+    patchChatReplyArea();
+  } else if (payload.type === "complete") {
+    if (probe.status !== "success" && probe.status !== "error") {
+      probe.status = "success";
+    }
+  } else if (payload.type === "error") {
+    probe.status = "error";
+    probe.error = payload.error || "未知错误";
+  }
+}
+
+function patchChatReplyArea() {
+  const replyArea = root.querySelector(".editor [data-role='chat-reply']");
+  if (!replyArea || !state.chatProbe) return;
+  const text = state.chatProbe.streamingText || "";
+  const streaming = state.chatProbe.status === "streaming";
+  replyArea.innerHTML = text
+    ? escapeHtml(text) + (streaming ? '<span class="chat-cursor">▋</span>' : "")
+    : `<span class="chat-reply-placeholder">${streaming ? "等待回复…" : ""}</span>`;
+}
+
+function patchChatProbeCard(provider) {
+  if (state.selectedId !== provider.id || state.view !== "providers") return;
+  const card = root.querySelector(".editor .chat-probe-card");
+  if (!card) return;
+  const fresh = renderChatProbeCard(provider);
+  if (fresh) {
+    card.outerHTML = fresh;
+    const newCard = root.querySelector(".editor .chat-probe-card");
+    if (newCard) bindChatProbeEvents(newCard);
+  }
+}
+
+function updateStatusTextForChat(message, tone, isError) {
+  state.status = message;
+  state.statusTone = tone;
+  state.statusIsError = isError;
+  updateStatusText();
 }
 
 function addTemplate(templateId) {

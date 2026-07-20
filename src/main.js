@@ -25,7 +25,9 @@ const {
 const { importAccountsIntoConfig, previewAccountsImport } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { calculatePopupPlacement } = require("./popup-placement");
-const { loadConfig, refreshProviders } = require("./providers");
+const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials } = require("./providers");
+const { classifyFailure } = require("./failure-classifier");
+const { listCodexModels, probeCodexStream } = require("./chat-probe");
 const { collectCodexAgentUsage } = require("./session-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
@@ -965,6 +967,65 @@ async function startApp() {
 
   ipcMain.handle("quota:refresh", () => refreshAll("manual"));
   ipcMain.handle("quota:open-config", openConfig);
+  ipcMain.handle("quota:test-codex", async (_event, provider) => {
+    try {
+      return await testCodexConnection(provider);
+    } catch (error) {
+      const message = String(error?.message || error);
+      return {
+        ok: false,
+        stage: "network",
+        httpStatus: null,
+        latencyMs: 0,
+        credentialStatus: "valid",
+        tiers: [],
+        resetCredits: null,
+        failure: classifyFailure(message),
+        message,
+        testedAt: new Date().toISOString(),
+      };
+    }
+  });
+  ipcMain.handle("chat:list-codex-models", () => listCodexModels());
+  ipcMain.handle("chat:probe-codex", async (event, { provider, model, prompt }) => {
+    const win = event.sender;
+    const credentials = readCodexCredentials(provider);
+    if (credentials.status !== "valid" && !credentials.accessToken) {
+      const failure = classifyFailure(credentials.message || credentials.status, null);
+      return { ok: false, error: credentials.message || failure.label, failure };
+    }
+    const startedAt = Date.now();
+    let fullText = "";
+    try {
+      for await (const ev of probeCodexStream({ credentials, model, prompt })) {
+        if (ev.type === "started") {
+          win.send("chat:probe-event", { type: "started", httpStatus: ev.httpStatus, model: ev.model });
+        } else if (ev.type === "delta") {
+          fullText += ev.text;
+          win.send("chat:probe-event", { type: "delta", text: ev.text });
+        } else if (ev.type === "complete") {
+          const latencyMs = Date.now() - startedAt;
+          const text = ev.text || fullText;
+          win.send("chat:probe-event", { type: "complete", text });
+          return { ok: true, text, latencyMs, httpStatus: ev.httpStatus || 200, model: ev.model };
+        } else if (ev.type === "error") {
+          const latencyMs = Date.now() - startedAt;
+          const failure = classifyFailure(ev.error, ev.httpStatus);
+          win.send("chat:probe-event", { type: "error", error: ev.error });
+          return { ok: false, error: ev.error, latencyMs, httpStatus: ev.httpStatus, failure };
+        }
+      }
+      const latencyMs = Date.now() - startedAt;
+      win.send("chat:probe-event", { type: "complete", text: fullText });
+      return { ok: true, text: fullText, latencyMs };
+    } catch (error) {
+      const latencyMs = Date.now() - startedAt;
+      const message = String(error?.message || error);
+      const failure = classifyFailure(message);
+      win.send("chat:probe-event", { type: "error", error: message });
+      return { ok: false, error: message, latencyMs, failure };
+    }
+  });
   ipcMain.handle("config:get", getConfigForSettings);
   ipcMain.handle("usage:get-codex-agent", getCodexAgentUsage);
   ipcMain.handle("config:save", saveConfigFromSettings);
