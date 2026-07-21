@@ -3,12 +3,15 @@ const MAX_BODY_BYTES = 1024 * 1024;
 
 async function fetchGrokWebBilling(accessToken, options = {}) {
   if (!accessToken) throw new Error("缺少 Grok Web Billing 授权");
-  const fetchImpl = options.fetchImpl || fetch;
+  const fetchImpl =
+    options.fetchImpl ||
+    ((url, opts) => {
+      const { fetchWithTimeout } = require("./http-client");
+      return fetchWithTimeout(url, opts, options.timeoutMs || 15000);
+    });
   const endpoint = options.endpoint || DEFAULT_ENDPOINT;
   let lastError = null;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), options.timeoutMs || 15000);
     try {
       const response = await fetchImpl(endpoint, {
         method: "POST",
@@ -23,7 +26,6 @@ async function fetchGrokWebBilling(accessToken, options = {}) {
           "User-Agent": "Coding Plan Bar",
         },
         body: Buffer.from([0, 0, 0, 0, 0]),
-        signal: controller.signal,
       });
       if (!response.ok) {
         const error = new Error(`Grok Web Billing HTTP ${response.status}`);
@@ -39,8 +41,6 @@ async function fetchGrokWebBilling(accessToken, options = {}) {
     } catch (error) {
       lastError = error;
       if (attempt >= 2 || !isRetryable(error)) throw error;
-    } finally {
-      clearTimeout(timer);
     }
   }
   throw lastError;

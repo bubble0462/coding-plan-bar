@@ -3117,3 +3117,22 @@ button {
     transform: none;
   }
 }
+
+@keyframes cpb-toggle-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 6px rgba(37, 99, 235, 0);
+  }
+}
+
+.is-pulsing {
+  animation: cpb-toggle-pulse 0.24s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-pulsing {
+    animation: none;
+  }
+}

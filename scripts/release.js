@@ -45,6 +45,37 @@ function succeeds(command, args) {
   }
 }
 
+/**
+ * Pull the section for `version` from CHANGELOG.md (Keep a Changelog style).
+ * Falls back to a short default note when the section is missing.
+ */
+function releaseNotesFromChangelog(version, sha) {
+  const changelogPath = path.join(root, "CHANGELOG.md");
+  let body = "";
+  if (fs.existsSync(changelogPath)) {
+    const text = fs.readFileSync(changelogPath, "utf8");
+    const re = new RegExp(
+      `## \\[${escapeRegExp(version)}\\][^\\n]*\\n([\\s\\S]*?)(?=\\n## \\[|$)`,
+    );
+    const match = text.match(re);
+    if (match) body = match[1].trim();
+  }
+  if (!body) {
+    body = [
+      "### Notes",
+      "",
+      "详见仓库 CHANGELOG.md。",
+      "",
+      "升级前请从系统托盘完全退出旧版本，再运行新安装包。",
+    ].join("\n");
+  }
+  return [`Coding Plan Bar ${tag}`, "", body, "", `SHA256: ${sha}`].join("\n");
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function main() {
   if (!/^\d+\.\d+\.\d+$/.test(plain)) throw new Error(`无效版本号：${tag}`);
   if (plain !== pkg.version) throw new Error(`package.json 是 ${pkg.version}，不能发布 ${tag}`);
@@ -74,21 +105,7 @@ function main() {
 
   const sha = sha256File(asset);
   run("git", ["push", "origin", "main"]);
-  const notes = [
-    `Coding Plan Bar ${tag}`,
-    "",
-    "## 代理支持与连通性修复",
-    "",
-    "- 设置页「备份与安全」新增网络代理：系统代理 / 直连 / 手动代理（http/https/socks5），保存后立即生效。",
-    "- 额度查询、测试连通、对话探测改为走 Electron Chromium 网络栈，与浏览器出网行为更一致。",
-    "- 修复「测试连通」误把脱敏 token（••••）写入 Authorization 导致 ByteString 报错的问题；主进程改为按 providerId 从本机配置读取真实凭据。",
-    "- 修复测试结果利用率多乘 100 的显示错误（例如 39% 被显示成 3900%）。",
-    "- 连通失败时展示完整错误原文，便于排查网络与代理问题。",
-    "",
-    "升级前请从系统托盘完全退出旧版本，再运行新安装包。",
-    "",
-    `SHA256: ${sha}`,
-  ].join("\n");
+  const notes = releaseNotesFromChangelog(plain, sha);
   run("gh", [
     "release",
     "create",

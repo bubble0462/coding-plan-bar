@@ -37,17 +37,17 @@ const {
   readProviderCache,
   writeProviderCache,
 } = require("./provider-cache");
+const { AppTimers } = require("./app-timers");
 
 const MAX_IMPORT_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_IMPORT_TEXT_LENGTH = 20 * 1024 * 1024;
 const MAX_IMPORTED_ACCOUNTS = 5000;
 
+const timers = new AppTimers();
+
 let tray = null;
 let popupWindow = null;
 let settingsWindow = null;
-let refreshTimer = null;
-let hideTimer = null;
-let revealTimer = null;
 let configPath = null;
 let providerCachePath = null;
 let refreshGeneration = 0;
@@ -195,12 +195,12 @@ function requestPopupHide() {
   if (!popupWindow.webContents.isDestroyed()) {
     popupWindow.webContents.send("quota:visibility", { visible: false });
   }
-  hideTimer = setTimeout(hidePopup, 280);
+  timers.setTimeout("hide", hidePopup, 280);
 }
 
 function scheduleHide(delay = 500) {
   cancelHide();
-  hideTimer = setTimeout(() => {
+  timers.setTimeout("hide", () => {
     if (isPopupHovered || isCursorInsidePopup()) {
       cancelHide();
       return;
@@ -210,24 +210,11 @@ function scheduleHide(delay = 500) {
 }
 
 function cancelHide() {
-  clearTimeout(hideTimer);
-  hideTimer = null;
-}
-
-function scheduleReveal() {
-  cancelReveal();
-  revealTimer = setTimeout(() => {
-    if (!popupWindow || popupWindow.isDestroyed() || !popupWindow.isVisible()) return;
-    resizePopupForState();
-    positionPopup();
-    popupWindow.setOpacity(1);
-    revealTimer = null;
-  }, 80);
+  timers.clear("hide");
 }
 
 function cancelReveal() {
-  clearTimeout(revealTimer);
-  revealTimer = null;
+  timers.clear("reveal");
 }
 
 function keepPopupOpen() {
@@ -339,11 +326,12 @@ async function refreshAll(reason = "timer") {
   try {
     return await task;
   } finally {
-    if (refreshInFlight !== task) return;
-    refreshInFlight = null;
-    const nextReason = pendingRefreshReason;
-    pendingRefreshReason = null;
-    if (nextReason) void refreshAll(nextReason);
+    if (refreshInFlight === task) {
+      refreshInFlight = null;
+      const nextReason = pendingRefreshReason;
+      pendingRefreshReason = null;
+      if (nextReason) void refreshAll(nextReason);
+    }
   }
 }
 
@@ -484,9 +472,8 @@ function cloneProvider(provider) {
 }
 
 function scheduleRefresh() {
-  clearInterval(refreshTimer);
   const seconds = Math.max(30, Number(currentState.refreshIntervalSeconds || 300));
-  refreshTimer = setInterval(() => refreshAll("timer"), seconds * 1000);
+  timers.setInterval("refresh", () => refreshAll("timer"), seconds * 1000);
 }
 
 function openConfig() {
@@ -1115,7 +1102,5 @@ if (!singleInstanceLock) {
 app.on("window-all-closed", () => {});
 
 app.on("before-quit", () => {
-  clearInterval(refreshTimer);
-  clearTimeout(hideTimer);
-  clearTimeout(revealTimer);
+  timers.clearAll();
 });

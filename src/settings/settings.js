@@ -1,3 +1,8 @@
+/* global motionDelay, formatUsageInteger, formatUsageTokens,
+   formatUsageMoney, formatBytes, formatDuration, displayVersion, releaseNotesPreview,
+   maskSecret, safeProviderPreview, shortId, normalizeText, escapeHtml, escapeAttr,
+   expiryState */
+
 const root = document.getElementById("settings");
 
 const KIND_LABELS = {
@@ -80,14 +85,6 @@ let dropdownCloseTimer = null;
 let dialogOrigin = null;
 let hasRenderedSettingsShell = false;
 let providerDrag = { sourceId: null, targetId: null, position: null };
-
-function prefersReducedMotion() {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
-}
-
-function motionDelay(milliseconds) {
-  return prefersReducedMotion() ? 0 : milliseconds;
-}
 
 function rememberDialogOrigin(element) {
   dialogOrigin = {
@@ -627,25 +624,6 @@ function renderUsageWindowCard(label, windowData = {}, featured = false) {
   `;
 }
 
-function formatUsageInteger(value) {
-  return Math.max(0, Number(value) || 0).toLocaleString("zh-CN");
-}
-
-function formatUsageTokens(value) {
-  const amount = Math.max(0, Number(value) || 0);
-  if (amount >= 1_000_000_000) return `${(amount / 1_000_000_000).toFixed(amount >= 10_000_000_000 ? 1 : 2)}B`;
-  if (amount >= 1_000_000) return `${(amount / 1_000_000).toFixed(amount >= 10_000_000 ? 1 : 2)}M`;
-  if (amount >= 1_000) return `${(amount / 1_000).toFixed(amount >= 10_000 ? 1 : 2)}K`;
-  return String(Math.round(amount));
-}
-
-function formatUsageMoney(value, partial = false) {
-  if (value == null || !Number.isFinite(Number(value))) return "未定价";
-  const amount = Math.max(0, Number(value));
-  const digits = amount >= 100 ? 0 : amount >= 10 ? 1 : 2;
-  return `${partial ? "≥ " : ""}$${amount.toFixed(digits)}`;
-}
-
 async function loadAgentUsage() {
   if (state.agentUsage.loading) return;
   state.agentUsage = { ...state.agentUsage, loading: true, error: null };
@@ -879,18 +857,6 @@ function healthSummary(rows = healthRows()) {
   return summary;
 }
 
-function expiryState(value) {
-  const time = new Date(value).getTime();
-  if (!Number.isFinite(time)) return null;
-  const diff = time - Date.now();
-  return {
-    expired: diff <= 0,
-    soon: diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000,
-    relative: formatDuration(diff),
-    absolute: new Date(time).toLocaleString("zh-CN"),
-  };
-}
-
 function renderBackupPage() {
   return `
     <div class="editor-head">
@@ -982,49 +948,6 @@ function renderDensitySection() {
       </div>
     </div>
   `;
-}
-
-function safeProviderPreview(provider) {
-  const clone = { ...provider };
-  if (clone.accessToken) clone.accessToken = maskSecret(clone.accessToken);
-  if (clone.apiKey) clone.apiKey = maskSecret(clone.apiKey);
-  if (clone.importPath) clone.importPath = "<local file>";
-  return clone;
-}
-
-function maskSecret(value) {
-  const text = String(value || "");
-  if (text.length <= 12) return "********";
-  return `${text.slice(0, 4)}…${text.slice(-4)}`;
-}
-
-function displayVersion(value) {
-  if (!value) return "—";
-  return String(value).trim().replace(/^v(?=\d)/i, "");
-}
-
-function releaseNotesPreview(value) {
-  const text = String(value || "")
-    .replace(/[#>*_`-]/g, "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .slice(0, 3)
-    .join(" · ");
-  return text.length > 160 ? `${text.slice(0, 160)}…` : text;
-}
-
-function formatBytes(bytes) {
-  const value = Number(bytes);
-  if (!Number.isFinite(value) || value <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let index = 0;
-  let scaled = value;
-  while (scaled >= 1024 && index < units.length - 1) {
-    scaled /= 1024;
-    index += 1;
-  }
-  return `${scaled.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
 function renderEditor(provider) {
@@ -1679,6 +1602,15 @@ function bindProviderEditorEvents(scope = root) {
     field.addEventListener("input", () => updateSelectedFromField(field, false));
     field.addEventListener("change", () => updateSelectedFromField(field, true));
   });
+}
+
+function pulseToggle(field) {
+  const node = field && field.parentElement ? field.parentElement : field;
+  if (!node || !node.classList) return;
+  node.classList.remove("is-pulsing");
+  void node.offsetWidth;
+  node.classList.add("is-pulsing");
+  window.setTimeout(() => node.classList.remove("is-pulsing"), 240);
 }
 
 function bindProviderReorder() {
@@ -2826,10 +2758,6 @@ function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function option(value, label, selected) {
-  return `<option value="${escapeAttr(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
-}
-
 function apiKeyEnvToText(value) {
   if (Array.isArray(value)) return value.join(", ");
   return value || "";
@@ -2844,32 +2772,3 @@ function textToApiKeyEnv(value) {
   return parts.length === 1 ? parts[0] : parts;
 }
 
-function formatDuration(ms) {
-  const minutes = Math.max(0, Math.floor(Number(ms || 0) / 60000));
-  if (minutes < 60) return `${minutes} 分钟`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时 ${minutes % 60} 分钟`;
-  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
-}
-
-function shortId(value) {
-  const text = String(value || "");
-  return text.length <= 8 ? text : `${text.slice(0, 4)}…${text.slice(-4)}`;
-}
-
-function normalizeText(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function escapeAttr(value) {
-  return escapeHtml(value);
-}

@@ -835,12 +835,43 @@ function jsonResponse(status, body) {
   };
 }
 
+async function runFetchTimeoutSmoke() {
+  const { fetchWithTimeout } = require("../src/http-client");
+  const previousFetch = global.fetch;
+  try {
+    // 1) Happy path: response resolves before timeout, timer is cleared.
+    global.fetch = async (url, options) => {
+      assert.strictEqual(url, "https://example.test/ok");
+      assert.ok(options && options.signal, "fetch options should carry an AbortSignal");
+      return { ok: true, status: 200, headers: new Map(), text: async () => "ok" };
+    };
+    const ok = await fetchWithTimeout("https://example.test/ok", {}, 1000);
+    assert.strictEqual(ok.status, 200);
+
+    // 2) Timeout path: never-resolving fetch + 10ms timeout must reject via AbortController.
+    global.fetch = (url, options) =>
+      new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    let caught = null;
+    try {
+      await fetchWithTimeout("https://example.test/slow", {}, 10);
+    } catch (error) {
+      caught = error;
+    }
+    assert.ok(caught, "fetchWithTimeout should reject when the timeout elapses");
+  } finally {
+    global.fetch = previousFetch;
+  }
+}
+
 runZhipuRequestSmoke()
   .then(runGrokRefreshSmoke)
   .then(runGrokSourceSmoke)
   .then(runIncrementalRefreshSmoke)
   .then(runSecretStorageSmoke)
   .then(runUpdaterIntegritySmoke)
+  .then(runFetchTimeoutSmoke)
   .then(() => console.log("Smoke tests passed"))
   .catch((error) => {
     console.error(error);

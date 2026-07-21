@@ -248,7 +248,7 @@ function collect(res, resolve, reject) {
   res.on("end", () => {
     try {
       resolve(JSON.parse(body));
-    } catch (error) {
+    } catch (_error) {
       reject(new Error("无法解析 GitHub 响应"));
     }
   });

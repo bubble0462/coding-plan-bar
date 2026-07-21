@@ -1374,14 +1374,6 @@ function percentOf(used, limit) {
   return clamp((Number(used) / Number(limit)) * 100, 0, 100);
 }
 
-function firstNumber(values) {
-  for (const value of values || []) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
 function camelExtraUsage(extra) {
   if (!extra) return null;
   return {
