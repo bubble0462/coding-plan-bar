@@ -821,10 +821,15 @@ async function runIncrementalRefreshSmoke() {
 async function runSecretStorageSmoke() {
   const secretDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-secret-"));
   const secretPath = path.join(secretDir, "config.json");
+  const brokenPath = path.join(secretDir, "broken.json");
   const fakeSafeStorage = {
     isEncryptionAvailable: () => true,
     encryptString: (value) => Buffer.from(`protected:${value}`, "utf8"),
-    decryptString: (value) => value.toString("utf8").replace(/^protected:/, ""),
+    decryptString: (value) => {
+      const text = value.toString("utf8");
+      if (!text.startsWith("protected:")) throw new Error("invalid secret ciphertext");
+      return text.slice("protected:".length);
+    },
   };
   try {
     configureSecretStorage(fakeSafeStorage);
@@ -850,6 +855,43 @@ async function runSecretStorageSmoke() {
       mergeRendererConfig(rendererConfig, revealed).providers[0].apiKey,
       "super-secret-key",
     );
+
+    // One undecryptable credential must not crash boot, and its ciphertext
+    // must survive a subsequent write so peers remain intact.
+    fs.writeFileSync(
+      brokenPath,
+      `${JSON.stringify({
+        refreshIntervalSeconds: 300,
+        providers: [
+          {
+            id: "broken",
+            name: "Broken",
+            kind: "balance",
+            baseUrl: "https://example.com",
+            apiKeyEncrypted: "dpapi:not-valid-ciphertext",
+            enabled: true,
+          },
+          {
+            id: "healthy",
+            name: "Healthy",
+            kind: "balance",
+            baseUrl: "https://example.com",
+            apiKey: "healthy-secret",
+            enabled: true,
+          },
+        ],
+      }, null, 2)}\n`,
+      "utf8",
+    );
+    const tolerant = readConfigFile(brokenPath);
+    assert.strictEqual(tolerant.providers[0].apiKey, undefined);
+    assert.deepStrictEqual(tolerant.providers[0].unavailableSecretFields, ["apiKey"]);
+    assert.strictEqual(tolerant.providers[1].apiKey, "healthy-secret");
+    writeConfigFile(brokenPath, tolerant);
+    const rewritten = JSON.parse(fs.readFileSync(brokenPath, "utf8"));
+    assert.strictEqual(rewritten.providers[0].apiKeyEncrypted, "dpapi:not-valid-ciphertext");
+    assert(!rewritten.providers[1].apiKey);
+    assert(rewritten.providers[1].apiKeyEncrypted);
   } finally {
     configureSecretStorage(null);
     fs.rmSync(secretDir, { recursive: true, force: true });

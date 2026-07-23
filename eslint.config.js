@@ -3,7 +3,7 @@ const prettier = require("eslint-config-prettier");
 
 module.exports = [
   {
-    ignores: ["node_modules/**", "release/**", "tmp/**", "build/**", "dist/**"],
+    ignores: ["node_modules/**", "release/**", "tmp/**", "build/**", "dist/**", ".patch-work-*/**"],
   },
   js.configs.recommended,
   {

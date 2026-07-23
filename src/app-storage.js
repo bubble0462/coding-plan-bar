@@ -34,20 +34,33 @@ function initializeApplicationDataDirectory(options = {}) {
   fs.mkdirSync(dataDirectory, { recursive: true });
   let migrated = false;
   let migrationError = null;
+  let legacyCleanupError = null;
   if (!options.skipMigration && !samePath(legacyUserDataPath, dataDirectory) && fs.existsSync(legacyUserDataPath)) {
+    const copy = options.copyDirectoryContents || copyDirectoryContents;
+    const removeLegacyDirectory = options.removeLegacyDirectory || ((directory) => {
+      fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2, retryDelay: 80 });
+    });
     try {
-      copyDirectoryContents(legacyUserDataPath, dataDirectory);
-      fs.rmSync(legacyUserDataPath, { recursive: true, force: true, maxRetries: 2, retryDelay: 80 });
+      copy(legacyUserDataPath, dataDirectory);
       migrated = true;
     } catch (error) {
       // Keep the legacy directory intact if migration was incomplete. The next
       // startup can retry safely because destination files are never overwritten.
       migrationError = error.message || String(error);
     }
+    if (migrated) {
+      try {
+        removeLegacyDirectory(legacyUserDataPath);
+      } catch (error) {
+        // The copied D: data is ready even when a legacy Electron process still
+        // holds a file open. Cleanup can happen later without blocking startup.
+        legacyCleanupError = error.message || String(error);
+      }
+    }
   }
 
   const cleanup = cleanupApplicationDataDirectory(dataDirectory, options.now);
-  return { dataDirectory, migrated, migrationError, cleanup };
+  return { dataDirectory, migrated, migrationError, legacyCleanupError, cleanup };
 }
 
 function copyDirectoryContents(sourceDirectory, targetDirectory) {

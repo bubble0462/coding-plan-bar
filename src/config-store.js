@@ -7,6 +7,7 @@ const {
   redactConfigSecrets,
   mergeMaskedSecrets,
   hasPlaintextSecrets,
+  normalizeUnavailableSecretFields,
 } = require("./secret-store");
 const { normalizeProxy } = require("./proxy");
 
@@ -88,9 +89,11 @@ function normalizeProvider(provider) {
     tool: provider.tool || undefined,
     baseUrl: provider.baseUrl || undefined,
     apiKey: provider.apiKey || undefined,
+    apiKeyEncrypted: provider.apiKeyEncrypted || undefined,
     apiKeyEnv: provider.apiKeyEnv || undefined,
     enabled: provider.enabled !== false,
     tiers: provider.tiers || undefined,
+    unavailableSecretFields: normalizeUnavailableSecretFields(provider),
   };
 
   if (normalized.kind === "official-subscription") {
@@ -98,6 +101,7 @@ function normalizeProvider(provider) {
     if (provider.authPath) normalized.authPath = provider.authPath;
     if (provider.credentialsPath) normalized.credentialsPath = provider.credentialsPath;
     if (provider.accessToken) normalized.accessToken = provider.accessToken;
+    if (provider.accessTokenEncrypted) normalized.accessTokenEncrypted = provider.accessTokenEncrypted;
     if (provider.accountId) normalized.accountId = provider.accountId;
     if (provider.accountEmail) normalized.accountEmail = provider.accountEmail;
     if (provider.accountUserId) normalized.accountUserId = provider.accountUserId;
@@ -110,13 +114,32 @@ function normalizeProvider(provider) {
     if (provider.importKey) normalized.importKey = provider.importKey;
     delete normalized.baseUrl;
     delete normalized.apiKey;
+    delete normalized.apiKeyEncrypted;
     delete normalized.apiKeyEnv;
     delete normalized.tiers;
+    // Keep ciphertext for secrets that still need re-auth after a DPAPI miss.
+    if (!normalized.accessToken && !normalized.accessTokenEncrypted) {
+      delete normalized.accessTokenEncrypted;
+    }
+    normalized.unavailableSecretFields = normalized.unavailableSecretFields.filter(
+      (field) => field === "accessToken" && !normalized.accessToken,
+    );
   } else {
     delete normalized.tool;
     delete normalized.authPath;
     delete normalized.credentialsPath;
+    delete normalized.accessToken;
+    delete normalized.accessTokenEncrypted;
+    // Preserve undecryptable ciphertext across normalize/write cycles.
+    if (!normalized.apiKey && !normalized.apiKeyEncrypted) {
+      delete normalized.apiKeyEncrypted;
+    }
+    normalized.unavailableSecretFields = normalized.unavailableSecretFields.filter(
+      (field) => field === "apiKey" && !normalized.apiKey,
+    );
   }
+
+  if (!normalized.unavailableSecretFields.length) delete normalized.unavailableSecretFields;
 
   return normalized;
 }
