@@ -11,7 +11,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Lives in the Windows system tray; hover or click to open the quota panel.
 - Shows five-hour limits, weekly limits, reset countdowns, and account balances.
 - Shows request counts and token totals per quota window, with model-aware estimated cost in USD.
-- Adds an Agent Usage page that aggregates local Codex activity across accounts for today, the last seven days, and the last thirty days, including trends and model-level cost estimates.
+- The Settings page includes **Agent Usage**. It opens on OpenCode by default and has icon buttons for switching between OpenCode and Codex local usage: today, the last 7 days, the last 30 days, requests, tokens, sessions, and model-level cost.
 - Balance cards can show today's requests, tokens, and spend returned by the endpoint; DeepSeek uses seven-day local-log statistics.
 - Automatically fits up to three providers and switches to a scrollable fixed height for four or more.
 - Graphical provider management without manually editing JSON.
@@ -29,7 +29,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.3.28-x64.exe
+Coding Plan Bar-Setup-0.4.3-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.
@@ -62,6 +62,7 @@ User configuration is stored at:
 
 - Codex usage is read from local JSONL sessions under `%USERPROFILE%\.codex\sessions` and `archived_sessions`.
 - Agent Usage is intentionally account-agnostic: it combines the default and configured Codex session directories and removes replayed history carried by forked or subagent sessions.
+- OpenCode usage is collected through local `opencode stats --pure` for today, the last 7 days, and the last 30 days. No chat content is read or uploaded. Provider-recorded cost can be `$0.00` when the provider does not report pricing, while tokens and messages remain available.
 - Claude usage is read from local JSONL sessions under `%USERPROFILE%\.claude\projects`.
 - Kimi, GLM, and MiniMax coding-plan usage is assigned by the model ID recorded in the session. GLM pricing covers the common GLM 4.5/4.6/4.7 and GLM 5/5-Turbo/5.1/5.2 families.
 - Codex pricing includes the GPT-5.6 Sol, Terra, and Luna limited preview. Cache reads use 10% of the input rate and cache writes use 1.25x the input rate.

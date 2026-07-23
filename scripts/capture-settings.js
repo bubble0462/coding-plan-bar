@@ -110,7 +110,7 @@ const mockUpdaterState = {
   lastPublishedAt: new Date().toISOString(),
 };
 
-const mockAgentUsage = {
+const mockCodexAgentUsage = {
   generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
   lastEventAt: Date.parse("2026-07-19T11:48:00+08:00"),
   windows: {
@@ -130,6 +130,25 @@ const mockAgentUsage = {
     { model: "gpt-5.6-terra", requests: 209, totalTokens: 37539145, costUsd: 20.7717, partialCost: false },
     { model: "gemini-3.5-flash-low", requests: 3, totalTokens: 53120, costUsd: null, partialCost: false },
   ],
+};
+
+const mockAgentUsage = {
+  generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
+  codex: mockCodexAgentUsage,
+  opencode: {
+    available: true,
+    generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
+    windows: {
+      today: { requests: 96, sessions: 3, inputTokens: 2500000, outputTokens: 89000, cacheReadTokens: 21500000, cacheCreationTokens: 0, totalTokens: 24089000, costUsd: 0.22, partialCost: false },
+      sevenDays: { requests: 603, sessions: 18, inputTokens: 7300000, outputTokens: 242000, cacheReadTokens: 67600000, cacheCreationTokens: 0, totalTokens: 75142000, costUsd: 0.22, partialCost: false },
+      thirtyDays: { requests: 1339, sessions: 42, inputTokens: 11900000, outputTokens: 485300, cacheReadTokens: 110000000, cacheCreationTokens: 0, totalTokens: 122385300, costUsd: 0.22, partialCost: false },
+    },
+    models: [
+      { model: "cpa/gpt-5.6-sol", requests: 663, inputTokens: 8200000, outputTokens: 793300, cacheReadTokens: 72400000, cacheCreationTokens: 0, totalTokens: 81393300, costUsd: 0, partialCost: false },
+      { model: "zhipuai-coding-plan/glm-5.2", requests: 312, inputTokens: 2400000, outputTokens: 103000, cacheReadTokens: 28500000, cacheCreationTokens: 0, totalTokens: 31003000, costUsd: 0.22, partialCost: false },
+    ],
+    error: null,
+  },
 };
 
 function wait(ms) {
@@ -164,7 +183,10 @@ async function main() {
   }));
   ipcMain.handle("config:preview-import", (_event, raw) => previewAccountsImport(sampleConfig, JSON.parse(raw), "pasted-json"));
   ipcMain.handle("quota:refresh", () => {});
-  ipcMain.handle("usage:get-codex-agent", () => mockAgentUsage);
+  ipcMain.handle("usage:get-codex-agent", () => mockCodexAgentUsage);
+  ipcMain.handle("usage:get-agent", () => mockAgentUsage);
+  ipcMain.handle("chat:list-codex-models", () => []);
+  ipcMain.handle("chat:probe-codex", () => ({ ok: true, text: "", latencyMs: 0 }));
   ipcMain.handle("quota:open-config", () => {});
   ipcMain.handle("quota:hide", () => {});
   ipcMain.handle("quota:keep-open", () => {});
@@ -309,17 +331,26 @@ async function main() {
       document.querySelector('[data-action="show-usage"]')?.click();
     `);
     await wait(260);
-    const usageRendered = await window.webContents.executeJavaScript(`(() => {
+    const openCodeRendered = await window.webContents.executeJavaScript(`(() => {
       const page = document.querySelector(".usage-page");
-      if (!page) return false;
-      const text = page.textContent || "";
-      return text.includes("今天") && text.includes("最近 7 天") && text.includes("最近 30 天") &&
-        text.includes("gpt-5.6-sol") && text.includes("1.25B") && text.includes("≥ $876");
+      const active = document.querySelector('[data-action="set-agent-usage-source"][data-source="opencode"]');
+      const text = page?.textContent || "";
+      return Boolean(active?.classList.contains("is-active")) && text.includes("OpenCode") && text.includes("cpa/gpt-5.6-sol") && text.includes("记录费用");
     })()`);
-    if (!usageRendered) {
-      const usageText = await window.webContents.executeJavaScript(`document.querySelector(".usage-page")?.textContent || "NO_PAGE"`);
-      throw new Error(`Agent usage page did not render expected metrics: ${usageText.slice(0, 800)}`);
-    }
+    if (!openCodeRendered) throw new Error("Agent usage did not default to OpenCode");
+
+    await window.webContents.executeJavaScript(`document.querySelector('[data-action="set-agent-usage-source"][data-source="codex"]')?.click()`);
+    await wait(80);
+    const codexRendered = await window.webContents.executeJavaScript(`(() => {
+      const page = document.querySelector(".usage-page");
+      const active = document.querySelector('[data-action="set-agent-usage-source"][data-source="codex"]');
+      const text = page?.textContent || "";
+      return Boolean(active?.classList.contains("is-active")) && text.includes("gpt-5.6-sol") && text.includes("1.25B");
+    })()`);
+    if (!codexRendered) throw new Error("Agent usage did not switch to Codex");
+
+    await window.webContents.executeJavaScript(`document.querySelector('[data-action="set-agent-usage-source"][data-source="opencode"]')?.click()`);
+    await wait(80);
   }
 
   if (showHealth) {

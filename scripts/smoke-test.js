@@ -45,6 +45,7 @@ const {
   matchingUsageEvents,
   summarizeCodexUsage,
 } = require("../src/session-usage");
+const { parseOpenCodeStats } = require("../src/opencode-usage");
 const {
   parseVersion,
   normalizeVersionLabel,
@@ -283,6 +284,22 @@ assert.strictEqual(agentUsage.windows.thirtyDays.sessions, 3);
 assert.strictEqual(agentUsage.daily.length, 7);
 assert.strictEqual(agentUsage.models[0].model, "gpt-5.4");
 assert(agentUsage.windows.thirtyDays.costUsd > agentUsage.windows.sevenDays.costUsd);
+
+const openCodeStatsFixture = [
+  "OVERVIEW", "Sessions 3", "Messages 12", "Days 7",
+  "COST & TOKENS", "Total Cost $1.25", "Input 1.2M", "Output 34.5K", "Cache Read 6.7M", "Cache Write 0",
+  "MODEL USAGE", "cpa/gpt-5.6-sol", "Messages 10", "Input Tokens 1.0M", "Output Tokens 30K", "Cache Read 6.0M", "Cache Write 0", "Cost $0.00",
+  "zhipuai-coding-plan/glm-5.2", "Messages 2", "Input Tokens 200K", "Output Tokens 4.5K", "Cache Read 700K", "Cache Write 0", "Cost $1.25",
+  "TOOL USAGE",
+].join("\n");
+const openCodeUsage = parseOpenCodeStats(openCodeStatsFixture);
+assert.strictEqual(openCodeUsage.summary.sessions, 3);
+assert.strictEqual(openCodeUsage.summary.requests, 12);
+assert.strictEqual(openCodeUsage.summary.totalTokens, 7_934_500);
+assert.strictEqual(openCodeUsage.summary.costUsd, 1.25);
+assert.strictEqual(openCodeUsage.models.length, 2);
+assert.strictEqual(openCodeUsage.models[0].model, "cpa/gpt-5.6-sol");
+assert.strictEqual(openCodeUsage.models[0].totalTokens, 7_030_000);
 
 const claudeEvents = parseClaudeJsonl(JSON.stringify({
   type: "assistant",

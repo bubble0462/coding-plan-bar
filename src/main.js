@@ -30,6 +30,7 @@ const { classifyFailure } = require("./failure-classifier");
 const { listCodexModels, probeCodexStream } = require("./chat-probe");
 const { applyProxySettings } = require("./proxy");
 const { collectCodexAgentUsage } = require("./session-usage");
+const { collectOpenCodeAgentUsage } = require("./opencode-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
   DEFAULT_TTL_MS,
@@ -838,6 +839,34 @@ async function getCodexAgentUsage() {
   return collectCodexAgentUsage(config.providers || []);
 }
 
+async function getAgentUsage() {
+  const config = readConfigFile(configPath);
+  const generatedAt = Date.now();
+  const [codexResult, openCodeResult] = await Promise.allSettled([
+    collectCodexAgentUsage(config.providers || [], generatedAt),
+    collectOpenCodeAgentUsage({ now: generatedAt }),
+  ]);
+  const codex = codexResult.status === "fulfilled"
+    ? codexResult.value
+    : {
+      generatedAt,
+      lastEventAt: null,
+      windows: {},
+      daily: [],
+      models: [],
+      error: `Codex 统计失败：${codexResult.reason?.message || String(codexResult.reason)}`,
+    };
+  const opencode = openCodeResult.status === "fulfilled"
+    ? openCodeResult.value
+    : {
+      available: false,
+      generatedAt,
+      windows: {},
+      models: [],
+      error: `OpenCode 统计失败：${openCodeResult.reason?.message || String(openCodeResult.reason)}`,
+    };
+  return { generatedAt, codex, opencode };
+}
 function getConfigForSettings() {
   return {
     config: configForRenderer(readConfigFile(configPath)),
@@ -1043,6 +1072,7 @@ async function startApp() {
   });
   ipcMain.handle("config:get", getConfigForSettings);
   ipcMain.handle("usage:get-codex-agent", getCodexAgentUsage);
+  ipcMain.handle("usage:get-agent", getAgentUsage);
   ipcMain.handle("config:save", saveConfigFromSettings);
   ipcMain.handle("config:open-json", openConfigJson);
   ipcMain.handle("config:backup", backupConfigFile);

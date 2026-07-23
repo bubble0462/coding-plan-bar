@@ -3136,3 +3136,103 @@ button {
     animation: none;
   }
 }
+
+/* Agent Usage source selector */
+.agent-usage-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-source-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #f8fafc;
+  padding: 3px;
+}
+
+.agent-source-button {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+
+.agent-source-button:hover {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+.agent-source-button:active {
+  transform: scale(0.94);
+}
+
+.agent-source-button:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+.agent-source-button.is-active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+}
+
+.agent-source-button img {
+  display: block;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.agent-source-button[data-source="codex"] img {
+  border-radius: 5px;
+  background: #0f172a;
+  padding: 3px;
+}
+
+.usage-window-grid.is-opencode .usage-window-card.is-featured::before {
+  background: #2563eb;
+}
+
+.usage-window-grid.is-opencode .usage-cache > i > b {
+  background: linear-gradient(90deg, #2563eb, #06b6d4);
+}
+
+.usage-unavailable {
+  min-height: 148px;
+  place-items: start;
+  align-content: center;
+  justify-items: start;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fffaf5;
+  padding: 16px;
+  text-align: left;
+}
+
+.usage-note code {
+  border-radius: 4px;
+  background: #eef2f7;
+  color: #334155;
+  padding: 1px 4px;
+  font-size: 0.95em;
+}
+
+@media (max-width: 860px) {
+  .usage-window-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-model-row {
+    grid-template-columns: minmax(110px, 1.25fr) 0.55fr 0.8fr 0.8fr;
+  }
+}

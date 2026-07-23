@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.3] - 2026-07-23
+
+### Added
+
+- 设置页「Agent 用量」新增 OpenCode 本机统计：读取今天、最近 7 天和最近 30 天的会话、请求、Token、provider 记录费用与模型明细。
+- Agent 用量页顶部加入 Codex / OpenCode 图标切换；首次进入默认显示 OpenCode。
+
+### Fixed
+
+- Codex 会话扫描异常时不再阻断 OpenCode 统计；两个来源独立降级并显示各自错误信息。
+- OpenCode CLI 不存在、超时或返回异常时提供明确提示，不影响 Codex 用量查看。
+
+### Notes
+
+- OpenCode 数据仅来自本机 `opencode stats --pure`，不会读取或上传聊天内容。
+- provider 未记录价格时仍显示 Token 与请求数，费用可能为 `$0.00`。
+
 ## [0.4.2] - 2026-07-21
 
 ### Fixed

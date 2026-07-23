@@ -49,6 +49,9 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   getCodexAgentUsage() {
     return ipcRenderer.invoke("usage:get-codex-agent");
   },
+  getAgentUsage() {
+    return ipcRenderer.invoke("usage:get-agent");
+  },
   testCodexConnection(providerOrId) {
     return ipcRenderer.invoke("quota:test-codex", providerOrId);
   },
