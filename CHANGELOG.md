@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.6] - 2026-07-23
+
+### Fixed
+
+- OpenCode Agent 用量「缓存占输入」误按 `cache / input` 计算并被封顶为 100%。现按 Anthropic / cc-switch 口径改为 **缓存命中率** `cache / (input + cache)`；Codex 仍使用 `cache / input`。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。
+
 ## [0.4.5] - 2026-07-23
 
 ### Fixed

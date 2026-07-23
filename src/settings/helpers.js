@@ -2,7 +2,7 @@
 /* exported motionDelay, formatUsageInteger, formatUsageTokens,
    formatUsageMoney, formatBytes, formatDuration, displayVersion, releaseNotesPreview,
    maskSecret, safeProviderPreview, shortId, normalizeText, escapeHtml, escapeAttr,
-   expiryState */
+   expiryState, computeCacheShare */
 
 /**
  * Pure formatting / helper utilities split out of settings.js.
@@ -43,6 +43,33 @@ function formatUsageMoney(value, partial = false) {
   const amount = Math.max(0, Number(value));
   const digits = amount >= 100 ? 0 : amount >= 10 ? 1 : 2;
   return `${partial ? "≥ " : ""}$${amount.toFixed(digits)}`;
+}
+
+/**
+ * Cache share for Agent usage cards.
+ *
+ * - "included" (Codex): cache_read is typically already counted inside input,
+ *   so the bar is cache / input (capped at 100%).
+ * - "separate" (OpenCode / Anthropic-style): input is fresh tokens only and
+ *   cache is tracked separately (same split as cc-switch + opencode stats).
+ *   Hit rate is cache / (input + cache).
+ */
+function computeCacheShare(windowData = {}, mode = "included") {
+  const input = Math.max(0, Number(windowData?.inputTokens) || 0);
+  const cached = Math.max(0, Number(windowData?.cacheReadTokens) || 0);
+  if (mode === "separate") {
+    const prompt = input + cached;
+    if (prompt <= 0) return { rate: 0, label: "缓存命中率" };
+    return {
+      rate: Math.min(100, Math.round((cached / prompt) * 100)),
+      label: "缓存命中率",
+    };
+  }
+  if (input <= 0) return { rate: 0, label: "缓存占输入" };
+  return {
+    rate: Math.min(100, Math.round((Math.min(cached, input) / input) * 100)),
+    label: "缓存占输入",
+  };
 }
 
 function formatBytes(bytes) {

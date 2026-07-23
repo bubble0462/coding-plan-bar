@@ -1,7 +1,7 @@
 /* global motionDelay, formatUsageInteger, formatUsageTokens,
    formatUsageMoney, formatBytes, formatDuration, displayVersion, releaseNotesPreview,
    maskSecret, safeProviderPreview, shortId, normalizeText, escapeHtml, escapeAttr,
-   expiryState */
+   expiryState, computeCacheShare */
 
 const root = document.getElementById("settings");
 
@@ -640,9 +640,9 @@ function renderCodexAgentUsage(data) {
   const maxDaily = Math.max(1, ...daily.map((item) => Number(item.totalTokens || 0)));
   return `
     <div class="usage-window-grid">
-      ${renderUsageWindowCard("今天", data.windows?.today)}
-      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays)}
-      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true)}
+      ${renderUsageWindowCard("今天", data.windows?.today, false, "估算", "included")}
+      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "估算", "included")}
+      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "估算", "included")}
     </div>
     <section class="usage-section">
       <div class="usage-section-head">
@@ -676,9 +676,9 @@ function renderOpenCodeAgentUsage(data) {
   const models = Array.isArray(data.models) ? data.models : [];
   return `
     <div class="usage-window-grid is-opencode">
-      ${renderUsageWindowCard("今天", data.windows?.today, false, "记录")}
-      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "记录")}
-      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "记录")}
+      ${renderUsageWindowCard("今天", data.windows?.today, false, "记录", "separate")}
+      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "记录", "separate")}
+      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "记录", "separate")}
     </div>
     ${renderUsageModelsSection(models, "模型明细", "最近 30 天，费用来自 OpenCode 的 provider 记录", "记录费用", "最近 30 天没有可统计的 OpenCode 使用记录。")}
     <p class="usage-note">统计调用本机 <code>opencode stats --pure</code>，不会读取或上传聊天内容。部分 provider 不回传价格时会显示 $0.00，但 Token 与消息数仍会保留。</p>
@@ -702,17 +702,15 @@ function renderUsageModelsSection(models, title, subtitle, costLabel, emptyText)
   `;
 }
 
-function renderUsageWindowCard(label, windowData = {}, featured = false, costLabel = "估算") {
-  const input = Number(windowData?.inputTokens || 0);
-  const cached = Number(windowData?.cacheReadTokens || 0);
-  const cacheRate = input > 0 ? Math.min(100, Math.round(cached / input * 100)) : 0;
+function renderUsageWindowCard(label, windowData = {}, featured = false, costLabel = "估算", cacheMode = "included") {
+  const cacheShare = computeCacheShare(windowData, cacheMode);
   return `
     <article class="usage-window-card ${featured ? "is-featured" : ""}">
       <div class="usage-window-title"><span>${escapeHtml(label)}</span><em>${formatUsageInteger(windowData?.sessions)} 个会话</em></div>
       <strong class="usage-window-total">${escapeHtml(formatUsageTokens(windowData?.totalTokens))}<small> Token</small></strong>
       <div class="usage-window-stats"><span><b>${formatUsageInteger(windowData?.requests)}</b> 请求</span><span><b>${escapeHtml(formatUsageMoney(windowData?.costUsd, windowData?.partialCost))}</b> ${escapeHtml(costLabel)}</span></div>
       <div class="usage-token-split"><span>输入 <b>${escapeHtml(formatUsageTokens(windowData?.inputTokens))}</b></span><span>输出 <b>${escapeHtml(formatUsageTokens(windowData?.outputTokens))}</b></span><span>缓存 <b>${escapeHtml(formatUsageTokens(windowData?.cacheReadTokens))}</b></span></div>
-      <div class="usage-cache"><span>缓存占输入 ${cacheRate}%</span><i><b style="width:${cacheRate}%"></b></i></div>
+      <div class="usage-cache"><span>${escapeHtml(cacheShare.label)} ${cacheShare.rate}%</span><i><b style="width:${cacheShare.rate}%"></b></i></div>
     </article>
   `;
 }
