@@ -102,6 +102,7 @@ fs.utimesSync(oldLogPath, new Date(1_000), new Date(1_000));
 const initializedStorage = initializeApplicationDataDirectory({
   legacyUserDataPath: legacyStorage,
   dataDirectory: targetStorage,
+  previousWindowsDataDirectory: null,
   now: 1_740_000_000_000,
 });
 assert.strictEqual(initializedStorage.dataDirectory, path.resolve(targetStorage));
@@ -115,6 +116,22 @@ assert.strictEqual(resolveApplicationDataDirectory({
   platform: "win32",
   exists: () => true,
 }), DEFAULT_WINDOWS_DATA_DIRECTORY);
+
+// Previous D:\Coding Plan Bar\Data must migrate into the new default under D:\Apps.
+const previousStorage = path.join(tempDir, "previous-d-storage");
+const appsStorage = path.join(tempDir, "apps-storage");
+fs.mkdirSync(previousStorage, { recursive: true });
+fs.writeFileSync(path.join(previousStorage, "config.json"), "{\"providers\":[]}\n", "utf8");
+fs.writeFileSync(path.join(previousStorage, "agent-usage-cache.json"), "{\"savedAt\":1}\n", "utf8");
+const previousMigrated = initializeApplicationDataDirectory({
+  legacyUserDataPath: path.join(tempDir, "empty-appdata"),
+  dataDirectory: appsStorage,
+  previousWindowsDataDirectory: previousStorage,
+});
+assert.strictEqual(previousMigrated.migrated, true);
+assert.strictEqual(fs.existsSync(path.join(appsStorage, "config.json")), true);
+assert.strictEqual(fs.existsSync(path.join(appsStorage, "agent-usage-cache.json")), true);
+assert.strictEqual(fs.existsSync(previousStorage), false);
 assert.strictEqual(fs.existsSync(path.join(targetStorage, "logs", "old.log")), false);
 assert.strictEqual(resolveApplicationDataDirectory({
   legacyUserDataPath: targetStorage,

@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.7] - 2026-07-23
+
+### Changed
+
+- 默认应用数据目录改为 `D:\Apps\Coding Plan Bar\Data`（与安装目录同树）。
+- 升级时自动从旧路径 `D:\Coding Plan Bar\Data` 与 `%APPDATA%\Coding Plan Bar` 迁移配置/缓存（不覆盖已有文件）。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本。若需自定义目录，可设置环境变量 `CODING_PLAN_BAR_DATA_DIR`。
+
 ## [0.4.6] - 2026-07-23
 
 ### Fixed

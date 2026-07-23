@@ -55,10 +55,10 @@ Coding Plan Bar-Setup-0.4.4-x64.exe
 应用数据默认保存在：
 
 ```text
-D:\Coding Plan Bar\Data
+D:\Apps\Coding Plan Bar\Data
 ```
 
-D 盘不可用时会自动回退到 `%APPDATA%\Coding Plan Bar`。首次升级会在复制成功后迁移旧的应用数据；也可以通过环境变量 `CODING_PLAN_BAR_DATA_DIR` 指定其他目录。
+与安装目录 `D:\Apps\Coding Plan Bar` 放在同一树下。D 盘不可用时回退到 `%APPDATA%\Coding Plan Bar`。升级时会把旧的 `D:\Coding Plan Bar\Data` 与 `%APPDATA%` 数据复制过来（不覆盖已有文件）；也可用环境变量 `CODING_PLAN_BAR_DATA_DIR` 指定其它目录。
 
 ### Token 与成本估算
 

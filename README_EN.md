@@ -55,10 +55,10 @@ In short, **Latest** and **Import** are CPA account-JSON tools, while **Add** is
 Persistent app data is stored by default at:
 
 ```text
-D:\Coding Plan Bar\Data
+D:\Apps\Coding Plan Bar\Data
 ```
 
-If D: is unavailable, the app falls back to `%APPDATA%\Coding Plan Bar`. On the first upgrade, existing app data is migrated only after it has been copied successfully. Set `CODING_PLAN_BAR_DATA_DIR` to use a different directory.
+This sits next to the install directory `D:\Apps\Coding Plan Bar`. If D: is unavailable, the app falls back to `%APPDATA%\Coding Plan Bar`. On upgrade it migrates from the old `D:\Coding Plan Bar\Data` path and from `%APPDATA%` (never overwriting existing files). Set `CODING_PLAN_BAR_DATA_DIR` to use a different directory.
 
 ### Token and cost estimates
 
