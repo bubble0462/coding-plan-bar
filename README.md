@@ -29,7 +29,7 @@
 前往 [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest) 下载最新的 Windows 安装包：
 
 ```text
-Coding Plan Bar-Setup-0.4.3-x64.exe
+Coding Plan Bar-Setup-0.4.4-x64.exe
 ```
 
 安装前请先退出正在运行的旧版本。安装向导支持选择安装目录，包括 D 盘。升级安装不会删除用户配置。
@@ -52,11 +52,13 @@ Coding Plan Bar-Setup-0.4.3-x64.exe
 
 “最新”和“导入”服务于 CPA 账户 JSON 导入；导入完成后，账户会出现在供应商列表中，并可单独启用、停用、排序和刷新额度。再次导入相同 `accountId` 会更新凭证，不会重复创建账户。确认导入会直接写入本机配置，无需再次点击保存。应用仅保存额度查询所需的 access token，不保存 CPA 文件中的 session token 或 ID token；导入预览也不会展示任何凭证原文。sub2api 与 sessions.json 仍可手动导入，便于迁移已有备份。应用会根据导入文件名保留来源：CPA 文件显示“CPA”，sub2api 文件显示“sub2api”；旧版本误标的 CPA 记录会在升级后自动修正，不会合并或删除账号。账号列表中的“导入账号”筛选会同时显示 CPA 与 sub2api 账号。
 
-用户配置保存在：
+应用数据默认保存在：
 
 ```text
-%APPDATA%\Coding Plan Bar\config.json
+D:\Coding Plan Bar\Data
 ```
+
+D 盘不可用时会自动回退到 `%APPDATA%\Coding Plan Bar`。首次升级会在复制成功后迁移旧的应用数据；也可以通过环境变量 `CODING_PLAN_BAR_DATA_DIR` 指定其他目录。
 
 ### Token 与成本估算
 
@@ -125,6 +127,7 @@ npm run dist
 - 使用中转站时，请自行确认其可信度以及 API Key 的使用范围。
 - 更新功能只从本仓库 `bubble0462/coding-plan-bar` 的 GitHub Release 读取，只接受带 SHA256 的 Windows x64 NSIS 安装包；下载完成后会同时校验大小与 SHA256。
 
+- Agent 用量缓存只保存聚合后的统计快照（最大 512 KB），不复制或上传原始会话、聊天内容；应用会每日清理过期临时文件、保留 14 天/10 MB 以内的应用日志，并清理 Electron HTTP 缓存。
 ## 致谢
 
 项目设计和供应商适配思路参考了 [codexbar](https://github.com/iamzjt-front-end/codexbar)、[CodexBar](https://github.com/steipete/CodexBar) 与 [cc-switch](https://github.com/farion1231/cc-switch)。

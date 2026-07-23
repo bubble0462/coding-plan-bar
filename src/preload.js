@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
     ipcRenderer.on("config:changed", listener);
     return () => ipcRenderer.removeListener("config:changed", listener);
   },
+  onAgentUsageSnapshot(callback) {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("agent-usage:snapshot", listener);
+    return () => ipcRenderer.removeListener("agent-usage:snapshot", listener);
+  },
   refresh() {
     return ipcRenderer.invoke("quota:refresh");
   },
@@ -49,8 +54,8 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   getCodexAgentUsage() {
     return ipcRenderer.invoke("usage:get-codex-agent");
   },
-  getAgentUsage() {
-    return ipcRenderer.invoke("usage:get-agent");
+  getAgentUsage(options = {}) {
+    return ipcRenderer.invoke("usage:get-agent", options);
   },
   testCodexConnection(providerOrId) {
     return ipcRenderer.invoke("quota:test-codex", providerOrId);

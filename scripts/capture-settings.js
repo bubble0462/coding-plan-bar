@@ -150,6 +150,14 @@ const mockAgentUsage = {
     error: null,
   },
 };
+const mockAgentUsageEnvelope = {
+  data: mockAgentUsage,
+  refreshing: false,
+  stale: false,
+  savedAt: mockAgentUsage.generatedAt,
+  error: null,
+};
+
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -160,6 +168,7 @@ async function main() {
     config: sampleConfig,
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
     templates: providerTemplates(),
+    agentUsage: mockAgentUsageEnvelope,
   }));
   ipcMain.handle("config:save", (_event, config) => ({
     config,
@@ -184,7 +193,7 @@ async function main() {
   ipcMain.handle("config:preview-import", (_event, raw) => previewAccountsImport(sampleConfig, JSON.parse(raw), "pasted-json"));
   ipcMain.handle("quota:refresh", () => {});
   ipcMain.handle("usage:get-codex-agent", () => mockCodexAgentUsage);
-  ipcMain.handle("usage:get-agent", () => mockAgentUsage);
+  ipcMain.handle("usage:get-agent", () => mockAgentUsageEnvelope);
   ipcMain.handle("chat:list-codex-models", () => []);
   ipcMain.handle("chat:probe-codex", () => ({ ok: true, text: "", latencyMs: 0 }));
   ipcMain.handle("quota:open-config", () => {});
@@ -339,6 +348,10 @@ async function main() {
     })()`);
     if (!openCodeRendered) throw new Error("Agent usage did not default to OpenCode");
 
+    const usageLoading = await window.webContents.executeJavaScript(
+      `Boolean(document.querySelector(".usage-loading"))`,
+    );
+    if (usageLoading) throw new Error("Cached agent usage rendered a blocking loading state");
     await window.webContents.executeJavaScript(`document.querySelector('[data-action="set-agent-usage-source"][data-source="codex"]')?.click()`);
     await wait(80);
     const codexRendered = await window.webContents.executeJavaScript(`(() => {

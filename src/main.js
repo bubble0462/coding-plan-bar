@@ -9,6 +9,7 @@ const {
   screen,
   safeStorage,
   shell,
+  session,
 } = require("electron");
 const fs = require("fs");
 const path = require("path");
@@ -39,21 +40,38 @@ const {
   writeProviderCache,
 } = require("./provider-cache");
 const { AppTimers } = require("./app-timers");
+const { readAgentUsageCache, writeAgentUsageCache } = require("./agent-usage-cache");
+const {
+  cleanupApplicationDataDirectory,
+  initializeApplicationDataDirectory,
+  resolveApplicationDataDirectory,
+} = require("./app-storage");
 
 const MAX_IMPORT_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_IMPORT_TEXT_LENGTH = 20 * 1024 * 1024;
 const MAX_IMPORTED_ACCOUNTS = 5000;
+const AGENT_USAGE_WARMUP_DELAY_MS = 0;
+const AGENT_USAGE_MIN_REFRESH_SECONDS = 300;
+const AGENT_USAGE_FAILURE_RETRY_MS = 60 * 1000;
+const STORAGE_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const timers = new AppTimers();
 
 let tray = null;
 let popupWindow = null;
 let settingsWindow = null;
+let appDataDirectory = null;
 let configPath = null;
 let providerCachePath = null;
+let agentUsageCachePath = null;
 let refreshGeneration = 0;
 let refreshInFlight = null;
 let pendingRefreshReason = null;
+let agentUsageSnapshot = null;
+let agentUsageSavedAt = 0;
+let agentUsageRefreshInFlight = null;
+let agentUsageLastError = null;
+let agentUsageRetryAfter = 0;
 let isPopupHovered = false;
 let measuredPopupHeight = 0;
 let measuredPopupKey = "";
@@ -74,10 +92,45 @@ function createTrayIcon() {
   return nativeImage.createFromPath(path.join(__dirname, "assets", "tray-icon.png"));
 }
 
+function configureApplicationStorage() {
+  const legacyUserDataPath = app.getPath("userData");
+  const smokeMode = process.argv.includes("--smoke-startup");
+  const dataDirectory = smokeMode
+    ? path.join(app.getPath("temp"), "coding-plan-bar-smoke", String(process.pid))
+    : resolveApplicationDataDirectory({ legacyUserDataPath });
+
+  try {
+    app.setPath("userData", dataDirectory);
+    app.setPath("sessionData", path.join(dataDirectory, "session"));
+    const storage = initializeApplicationDataDirectory({
+      legacyUserDataPath,
+      dataDirectory,
+      skipMigration: smokeMode,
+    });
+    const copiedConfigPath = path.join(storage.dataDirectory, "config.json");
+    const legacyConfigPath = path.join(legacyUserDataPath, "config.json");
+    if (storage.migrationError && fs.existsSync(legacyConfigPath) && !fs.existsSync(copiedConfigPath)) {
+      throw new Error(`Unable to migrate the existing config: ${storage.migrationError}`);
+    }
+    app.setAppLogsPath(path.join(storage.dataDirectory, "logs"));
+    appDataDirectory = storage.dataDirectory;
+    if (storage.migrationError) {
+      console.warn(`Application data migration will retry next startup: ${storage.migrationError}`);
+    }
+  } catch (error) {
+    console.warn(`Unable to use the preferred application data directory: ${error.message || error}`);
+    app.setPath("userData", legacyUserDataPath);
+    app.setPath("sessionData", path.join(legacyUserDataPath, "session"));
+    app.setAppLogsPath(path.join(legacyUserDataPath, "logs"));
+    appDataDirectory = legacyUserDataPath;
+  }
+}
+
 function ensureConfigFile() {
-  const userData = app.getPath("userData");
+  const userData = appDataDirectory || app.getPath("userData");
   configPath = path.join(userData, "config.json");
   providerCachePath = path.join(userData, "quota-cache.json");
+  agentUsageCachePath = path.join(userData, "agent-usage-cache.json");
   if (!fs.existsSync(configPath)) {
     const examplePath = path.join(__dirname, "..", "config.example.json");
     fs.mkdirSync(userData, { recursive: true });
@@ -85,6 +138,9 @@ function ensureConfigFile() {
   }
   migrateConfigSecrets(configPath);
   lastSuccessfulProviders = readProviderCache(providerCachePath);
+  const cachedAgentUsage = readAgentUsageCache(agentUsageCachePath);
+  agentUsageSnapshot = cachedAgentUsage?.snapshot || null;
+  agentUsageSavedAt = Number(cachedAgentUsage?.savedAt || 0);
   currentState.configPath = configPath;
 }
 
@@ -477,6 +533,50 @@ function scheduleRefresh() {
   timers.setInterval("refresh", () => refreshAll("timer"), seconds * 1000);
 }
 
+function agentUsageRefreshIntervalMs(config) {
+  const requestedSeconds = Number(config?.refreshIntervalSeconds || currentState.refreshIntervalSeconds || 300);
+  const seconds = Number.isFinite(requestedSeconds) ? requestedSeconds : 300;
+  return Math.max(AGENT_USAGE_MIN_REFRESH_SECONDS, seconds) * 1000;
+}
+
+function isAgentUsageStale(now = Date.now()) {
+  return !agentUsageSnapshot || !agentUsageSavedAt || now - agentUsageSavedAt >= agentUsageRefreshIntervalMs();
+}
+
+function shouldRefreshAgentUsage(force = false, now = Date.now()) {
+  if (force) return true;
+  if (agentUsageRefreshInFlight) return false;
+  return (!agentUsageSnapshot || isAgentUsageStale(now)) && now >= agentUsageRetryAfter;
+}
+
+function scheduleAgentUsageRefresh(config) {
+  timers.setInterval("agent-usage-refresh", () => {
+    void refreshAgentUsage("timer");
+  }, agentUsageRefreshIntervalMs(config));
+}
+
+function scheduleAgentUsageWarmup() {
+  if (!shouldRefreshAgentUsage()) return;
+  timers.setTimeout("agent-usage-warmup", () => {
+    void refreshAgentUsage("startup");
+  }, AGENT_USAGE_WARMUP_DELAY_MS);
+}
+
+function scheduleStorageMaintenance() {
+  timers.setInterval("storage-maintenance", () => {
+    cleanupApplicationDataDirectory(appDataDirectory || app.getPath("userData"));
+    void clearBrowserHttpCache();
+  }, STORAGE_MAINTENANCE_INTERVAL_MS);
+}
+
+async function clearBrowserHttpCache() {
+  try {
+    await session.defaultSession.clearCache();
+  } catch (error) {
+    console.warn(`Unable to clear the disposable browser cache: ${error.message || error}`);
+  }
+}
+
 function openConfig() {
   if (!settingsWindow) createSettingsWindow();
   settingsWindow.show();
@@ -550,6 +650,8 @@ async function importAccountsFromFile(_event, filePath) {
     syncPopupProvidersToConfig(saved);
     await refreshAll("import");
     scheduleRefresh();
+    scheduleAgentUsageRefresh(saved);
+    void refreshAgentUsage("import");
     return {
       ...imported,
       config: configForRenderer(saved),
@@ -627,6 +729,8 @@ async function importAccountsFromRaw(_event, raw) {
     syncPopupProvidersToConfig(saved);
     await refreshAll("import");
     scheduleRefresh();
+    scheduleAgentUsageRefresh(saved);
+    void refreshAgentUsage("import");
     return {
       ...imported,
       config: configForRenderer(saved),
@@ -797,6 +901,8 @@ async function confirmRestoreConfig(_event, token) {
   syncPopupProvidersToConfig(saved);
   await refreshAll("restore");
   scheduleRefresh();
+  scheduleAgentUsageRefresh(saved);
+  void refreshAgentUsage("restore");
   return { config: configForRenderer(saved), configPath, message: "配置已恢复并刷新额度" };
 }
 
@@ -834,45 +940,155 @@ async function maybeAutoCheckOnStartup() {
   }
 }
 
-async function getCodexAgentUsage() {
-  const config = readConfigFile(configPath);
-  return collectCodexAgentUsage(config.providers || []);
+function getCodexAgentUsage() {
+  if (shouldRefreshAgentUsage()) void refreshAgentUsage("legacy-codex");
+  return agentUsageSnapshot?.codex || {
+    generatedAt: Date.now(),
+    lastEventAt: null,
+    windows: {},
+    daily: [],
+    models: [],
+    error: "Agent usage is still collecting.",
+  };
 }
 
-async function getAgentUsage() {
+function getAgentUsage(options = {}) {
+  const force = Boolean(options?.force);
+  if (shouldRefreshAgentUsage(force)) void refreshAgentUsage(force ? "manual" : "settings");
+  return agentUsagePayload();
+}
+
+function refreshAgentUsage(reason = "scheduled") {
+  if (agentUsageRefreshInFlight) return agentUsageRefreshInFlight;
+  const force = reason === "manual";
+  if (!force && agentUsageRetryAfter > Date.now()) {
+    return Promise.resolve(agentUsagePayload());
+  }
+  const task = refreshAgentUsageNow().catch((error) => {
+    agentUsageLastError = error.message || String(error);
+    agentUsageRetryAfter = Date.now() + AGENT_USAGE_FAILURE_RETRY_MS;
+    return agentUsagePayload();
+  });
+  agentUsageRefreshInFlight = task;
+  sendAgentUsageSnapshot();
+  void task.finally(() => {
+    if (agentUsageRefreshInFlight !== task) return;
+    agentUsageRefreshInFlight = null;
+    sendAgentUsageSnapshot();
+  });
+  return task;
+}
+
+async function refreshAgentUsageNow() {
   const config = readConfigFile(configPath);
-  const generatedAt = Date.now();
+  const startedAt = Date.now();
   const [codexResult, openCodeResult] = await Promise.allSettled([
-    collectCodexAgentUsage(config.providers || [], generatedAt),
-    collectOpenCodeAgentUsage({ now: generatedAt }),
+    collectCodexAgentUsage(config.providers || [], startedAt),
+    collectOpenCodeAgentUsage({ now: startedAt }),
   ]);
-  const codex = codexResult.status === "fulfilled"
+  const candidateCodex = codexResult.status === "fulfilled"
     ? codexResult.value
-    : {
-      generatedAt,
-      lastEventAt: null,
-      windows: {},
-      daily: [],
-      models: [],
-      error: `Codex 统计失败：${codexResult.reason?.message || String(codexResult.reason)}`,
-    };
-  const opencode = openCodeResult.status === "fulfilled"
+    : createCodexUsageFailure(codexResult.reason, startedAt);
+  const candidateOpenCode = openCodeResult.status === "fulfilled"
     ? openCodeResult.value
-    : {
-      available: false,
-      generatedAt,
-      windows: {},
-      models: [],
-      error: `OpenCode 统计失败：${openCodeResult.reason?.message || String(openCodeResult.reason)}`,
-    };
-  return { generatedAt, codex, opencode };
+    : createOpenCodeUsageFailure(openCodeResult.reason, startedAt);
+  const sourceErrors = {};
+  const previous = agentUsageSnapshot || {};
+  const codex = mergeAgentUsageSource("codex", previous.codex, candidateCodex, sourceErrors);
+  const opencode = mergeAgentUsageSource("opencode", previous.opencode, candidateOpenCode, sourceErrors);
+  const snapshot = {
+    generatedAt: Date.now(),
+    codex,
+    opencode,
+    sourceErrors,
+    refreshElapsedMs: Date.now() - startedAt,
+  };
+  const hasFreshSource = isUsableAgentUsageSource("codex", candidateCodex) ||
+    isUsableAgentUsageSource("opencode", candidateOpenCode);
+  agentUsageSnapshot = snapshot;
+  agentUsageLastError = hasFreshSource ? null : Object.values(sourceErrors).join(" ") || null;
+
+  if (hasFreshSource) {
+    agentUsageSavedAt = Date.now();
+    agentUsageRetryAfter = 0;
+    persistAgentUsageCache();
+  } else {
+    agentUsageRetryAfter = Date.now() + AGENT_USAGE_FAILURE_RETRY_MS;
+  }
+  return agentUsagePayload();
+}
+
+function createCodexUsageFailure(error, generatedAt) {
+  return {
+    generatedAt,
+    lastEventAt: null,
+    windows: {},
+    daily: [],
+    models: [],
+    error: `Codex usage collection failed: ${error?.message || String(error)}`,
+  };
+}
+
+function createOpenCodeUsageFailure(error, generatedAt) {
+  return {
+    available: false,
+    generatedAt,
+    windows: {},
+    models: [],
+    error: `OpenCode usage collection failed: ${error?.message || String(error)}`,
+  };
+}
+
+function mergeAgentUsageSource(source, previous, candidate, sourceErrors) {
+  if (isUsableAgentUsageSource(source, candidate)) return candidate;
+  const message = candidate?.error || `${source} usage collection failed.`;
+  sourceErrors[source] = message;
+  if (isUsableAgentUsageSource(source, previous)) {
+    return { ...previous, stale: true };
+  }
+  return candidate;
+}
+
+function isUsableAgentUsageSource(source, value) {
+  if (!value || typeof value !== "object" || value.error) return false;
+  return source !== "opencode" || value.available !== false;
+}
+
+function agentUsagePayload() {
+  return {
+    data: agentUsageSnapshot ? cloneAgentUsageSnapshot(agentUsageSnapshot) : null,
+    refreshing: Boolean(agentUsageRefreshInFlight),
+    stale: isAgentUsageStale(),
+    savedAt: agentUsageSavedAt || null,
+    error: agentUsageLastError,
+  };
+}
+
+function cloneAgentUsageSnapshot(snapshot) {
+  return JSON.parse(JSON.stringify(snapshot));
+}
+
+function persistAgentUsageCache() {
+  if (!agentUsageCachePath || !agentUsageSnapshot) return;
+  try {
+    writeAgentUsageCache(agentUsageCachePath, agentUsageSnapshot, { savedAt: agentUsageSavedAt });
+  } catch (error) {
+    console.warn(`Unable to persist agent usage cache: ${error.message || error}`);
+  }
+}
+
+function sendAgentUsageSnapshot() {
+  if (!settingsWindow || settingsWindow.webContents.isDestroyed()) return;
+  settingsWindow.webContents.send("agent-usage:snapshot", agentUsagePayload());
 }
 function getConfigForSettings() {
+  if (shouldRefreshAgentUsage()) void refreshAgentUsage("settings-open");
   return {
     config: configForRenderer(readConfigFile(configPath)),
     configPath,
     templates: providerTemplates(),
     snapshot: snapshotPayload(),
+    agentUsage: agentUsagePayload(),
   };
 }
 
@@ -899,6 +1115,8 @@ async function saveConfigFromSettings(_event, config) {
   syncPopupProvidersToConfig(saved);
   await refreshAll("config");
   scheduleRefresh();
+  scheduleAgentUsageRefresh(saved);
+  void refreshAgentUsage("config");
   return { config: configForRenderer(saved), configPath };
 }
 
@@ -1072,7 +1290,7 @@ async function startApp() {
   });
   ipcMain.handle("config:get", getConfigForSettings);
   ipcMain.handle("usage:get-codex-agent", getCodexAgentUsage);
-  ipcMain.handle("usage:get-agent", getAgentUsage);
+  ipcMain.handle("usage:get-agent", (_event, options) => getAgentUsage(options));
   ipcMain.handle("config:save", saveConfigFromSettings);
   ipcMain.handle("config:open-json", openConfigJson);
   ipcMain.handle("config:backup", backupConfigFile);
@@ -1109,6 +1327,10 @@ async function startApp() {
   ipcMain.handle("updater:open-release", openReleaseUrl);
   ipcMain.handle("updater:get-state", () => ({ ...updaterState }));
 
+  scheduleAgentUsageRefresh(bootConfig);
+  scheduleAgentUsageWarmup();
+  scheduleStorageMaintenance();
+  void clearBrowserHttpCache();
   await refreshAll("startup");
   scheduleRefresh();
   maybeAutoCheckOnStartup();
@@ -1123,6 +1345,7 @@ if (!singleInstanceLock) {
   app.quit();
 } else {
   app.on("second-instance", showPopup);
+  configureApplicationStorage();
   app.whenReady().then(startApp).catch((error) => {
     console.error(error);
     app.exit(1);

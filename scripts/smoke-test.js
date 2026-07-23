@@ -56,6 +56,16 @@ const {
   buildRedirectRelease,
   verifyDownloadedFile,
 } = require("../src/updater");
+const {
+  readAgentUsageCache,
+  writeAgentUsageCache,
+} = require("../src/agent-usage-cache");
+const {
+  DEFAULT_WINDOWS_DATA_DIRECTORY,
+  initializeApplicationDataDirectory,
+  resolveApplicationDataDirectory,
+} = require("../src/app-storage");
+
 
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
 assert.strictEqual(windowSecondsToTierName(604800), "seven_day");
@@ -68,6 +78,56 @@ assert.deepStrictEqual(JSON.parse(fs.readFileSync(atomicPath, "utf8")), {
   account: { key: "new-access-token", refresh_token: "new-refresh-token" },
 });
 assert(!fs.readdirSync(tempDir).some((name) => name.endsWith(".tmp")));
+const agentUsageCachePath = path.join(tempDir, "agent-usage-cache.json");
+const cachedAgentUsage = {
+  generatedAt: 1_740_000_000_000,
+  codex: { generatedAt: 1_740_000_000_000, windows: {}, daily: [], models: [] },
+  opencode: { available: true, generatedAt: 1_740_000_000_000, windows: {}, models: [] },
+};
+assert.strictEqual(writeAgentUsageCache(agentUsageCachePath, cachedAgentUsage, { savedAt: 1_740_000_000_000 }), true);
+assert.deepStrictEqual(readAgentUsageCache(agentUsageCachePath, { now: 1_950_000_000_000 }), {
+  savedAt: 1_740_000_000_000,
+  snapshot: cachedAgentUsage,
+});
+assert(!fs.readdirSync(tempDir).some((name) => name.includes("agent-usage-cache.json") && name.endsWith(".tmp")));
+
+const legacyStorage = path.join(tempDir, "legacy-storage");
+const targetStorage = path.join(tempDir, "target-storage");
+fs.mkdirSync(path.join(legacyStorage, "logs"), { recursive: true });
+fs.writeFileSync(path.join(legacyStorage, "config.json"), "{\"providers\":[]}", "utf8");
+fs.writeFileSync(path.join(legacyStorage, "quota-cache.json"), "{}", "utf8");
+const oldLogPath = path.join(legacyStorage, "logs", "old.log");
+fs.writeFileSync(oldLogPath, "old", "utf8");
+fs.utimesSync(oldLogPath, new Date(1_000), new Date(1_000));
+const initializedStorage = initializeApplicationDataDirectory({
+  legacyUserDataPath: legacyStorage,
+  dataDirectory: targetStorage,
+  now: 1_740_000_000_000,
+});
+assert.strictEqual(initializedStorage.dataDirectory, path.resolve(targetStorage));
+assert.strictEqual(initializedStorage.migrated, true);
+assert.strictEqual(fs.existsSync(path.join(targetStorage, "config.json")), true);
+assert.strictEqual(fs.existsSync(path.join(targetStorage, "quota-cache.json")), true);
+assert.strictEqual(fs.existsSync(legacyStorage), false);
+assert.strictEqual(resolveApplicationDataDirectory({
+  legacyUserDataPath: targetStorage,
+  environment: {},
+  platform: "win32",
+  exists: () => true,
+}), DEFAULT_WINDOWS_DATA_DIRECTORY);
+assert.strictEqual(fs.existsSync(path.join(targetStorage, "logs", "old.log")), false);
+assert.strictEqual(resolveApplicationDataDirectory({
+  legacyUserDataPath: targetStorage,
+  environment: {},
+  platform: "win32",
+  exists: () => false,
+}), path.resolve(targetStorage));
+assert.strictEqual(resolveApplicationDataDirectory({
+  legacyUserDataPath: targetStorage,
+  environment: { CODING_PLAN_BAR_DATA_DIR: path.join(tempDir, "override-storage") },
+  platform: "win32",
+  exists: () => false,
+}), path.resolve(path.join(tempDir, "override-storage")));
 
 const cpaFixture = {
   type: "codex",

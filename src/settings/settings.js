@@ -47,6 +47,8 @@ let state = {
     loading: false,
     data: null,
     error: null,
+    stale: false,
+    savedAt: null,
   },
   agentUsageSource: "opencode",
   status: "正在读取设置...",
@@ -208,6 +210,14 @@ if (typeof window.codingPlanBar.onConfigChanged === "function") {
   });
 }
 
+if (typeof window.codingPlanBar.onAgentUsageSnapshot === "function") {
+  window.codingPlanBar.onAgentUsageSnapshot((payload) => {
+    applyAgentUsagePayload(payload);
+    if (state.view === "usage") render();
+    else if (root.childElementCount) refreshAgentUsageNavigation();
+  });
+}
+
 if (typeof window.codingPlanBar.onProbeEvent === "function") {
   window.codingPlanBar.onProbeEvent((payload) => handleProbeEvent(payload));
 }
@@ -239,7 +249,31 @@ if (typeof window.codingPlanBar.getUpdaterState === "function") {
     .catch(() => {});
 }
 
+function normalizeAgentUsagePayload(payload) {
+  const isEnvelope = Boolean(payload && typeof payload === "object" && Object.prototype.hasOwnProperty.call(payload, "data"));
+  if (!isEnvelope) return { data: payload || null, refreshing: false, stale: false, savedAt: null, error: null };
+  return {
+    data: payload.data || null,
+    refreshing: Boolean(payload.refreshing),
+    stale: Boolean(payload.stale),
+    savedAt: Number(payload.savedAt || 0) || null,
+    error: payload.error || null,
+  };
+}
+
+function applyAgentUsagePayload(payload) {
+  const normalized = normalizeAgentUsagePayload(payload);
+  state.agentUsage = { loading: normalized.refreshing, data: normalized.data, error: normalized.error, stale: normalized.stale, savedAt: normalized.savedAt };
+  return normalized;
+}
+
+function refreshAgentUsageNavigation() {
+  const dot = root.querySelector("[data-action='show-usage'] .nav-dot");
+  dot?.classList.toggle("has-alert", Boolean(state.agentUsage.error));
+}
+
 async function load() {
+
   state.status = "正在读取设置...";
   state.statusIsError = false;
   state.statusTone = "loading";
@@ -253,6 +287,7 @@ async function load() {
     state.selectedId = state.config.providers[0]?.id || null;
     state.status = "设置已载入";
     state.statusIsError = false;
+    if (payload.agentUsage) applyAgentUsagePayload(payload.agentUsage);
     state.statusTone = "success";
   } catch (error) {
     state.status = error.message || String(error);
@@ -555,8 +590,17 @@ function renderAgentUsagePage() {
   const refreshedAt = selectedData?.generatedAt || aggregate?.generatedAt;
   const sourceLabel = source === "opencode" ? "OpenCode" : "Codex";
   const description = source === "opencode"
-    ? "汇总本机 OpenCode CLI 的会话、消息、Token 与 provider 记录费用。"
-    : "汇总本机 Codex Agent 的请求、Token 与 API 等价费用，不按账号拆分。";
+    ? "\u6c47\u603b\u672c\u673a OpenCode CLI \u7684\u4f1a\u8bdd\u3001\u6d88\u606f\u3001Token \u4e0e provider \u8bb0\u5f55\u8d39\u7528\u3002"
+    : "\u6c47\u603b\u672c\u673a Codex Agent \u7684\u8bf7\u6c42\u3001Token \u4e0e API \u7b49\u4ef7\u8d39\u7528\uff0c\u4e0d\u6309\u8d26\u53f7\u62c6\u5206\u3002";
+  const sourceError = aggregate?.sourceErrors?.[source] || null;
+  const cacheState = usage.loading
+    ? "\u6b63\u5728\u540e\u53f0\u66f4\u65b0\uff0c\u5f53\u524d\u7ed3\u679c\u53ef\u7ee7\u7eed\u4f7f\u7528"
+    : sourceError
+      ? "\u672c\u6b21\u66f4\u65b0\u672a\u6210\u529f\uff0c\u6b63\u5728\u663e\u793a\u4e0a\u6b21\u53ef\u7528\u7ed3\u679c"
+      : usage.stale || selectedData?.stale
+        ? "\u663e\u793a\u4e0a\u6b21\u7edf\u8ba1\u7ed3\u679c\uff0c\u540e\u53f0\u4f1a\u81ea\u52a8\u5237\u65b0"
+        : "";
+
   let body = "";
 
   if (usage.loading && !aggregate) {
@@ -581,6 +625,7 @@ function renderAgentUsagePage() {
       </div>
     </div>
     <div class="form usage-page">
+      ${cacheState ? `<p class="usage-refresh-note${sourceError ? " is-warning" : ""}"${sourceError ? ` title="${escapeAttr(sourceError)}"` : ""}>${cacheState}</p>` : ""}
       <div class="usage-meta"><span>${escapeHtml(sourceLabel)} 数据更新时间：${escapeHtml(refreshedAt ? new Date(refreshedAt).toLocaleString("zh-CN") : "尚未统计")}</span>${source === "codex" && codex?.lastEventAt ? `<span>最近活动：${escapeHtml(new Date(codex.lastEventAt).toLocaleString("zh-CN"))}</span>` : ""}</div>
       ${body}
     </div>
@@ -672,21 +717,21 @@ function renderUsageWindowCard(label, windowData = {}, featured = false, costLab
   `;
 }
 
-async function loadAgentUsage() {
-  if (state.agentUsage.loading) return;
+async function loadAgentUsage(options = {}) {
+  if (state.agentUsage.loading && !options.force) return;
   state.agentUsage = { ...state.agentUsage, loading: true, error: null };
   if (state.view === "usage") render();
   try {
-    const data = typeof window.codingPlanBar.getAgentUsage === "function"
-      ? await window.codingPlanBar.getAgentUsage()
+    const payload = typeof window.codingPlanBar.getAgentUsage === "function"
+      ? await window.codingPlanBar.getAgentUsage({ force: Boolean(options.force) })
       : {
         generatedAt: Date.now(),
         codex: await window.codingPlanBar.getCodexAgentUsage(),
         opencode: { available: false, generatedAt: Date.now(), windows: {}, models: [], error: "当前版本尚未提供 OpenCode 统计。" },
       };
-    state.agentUsage = { loading: false, data, error: null };
+    applyAgentUsagePayload(payload);
   } catch (error) {
-    state.agentUsage = { ...state.agentUsage, loading: false, error: error.message || String(error) };
+    state.agentUsage = { ...state.agentUsage, loading: false, stale: Boolean(state.agentUsage.data) || state.agentUsage.stale, error: error.message || String(error) };
   }
   if (state.view === "usage") render();
 }
@@ -1791,10 +1836,10 @@ function bindUpdateEvents() {
   root.querySelector("[data-action='show-usage']")?.addEventListener("click", () => {
     state.view = "usage";
     render();
-    if (!state.agentUsage.data && !state.agentUsage.loading) loadAgentUsage();
+    if ((!state.agentUsage.data || state.agentUsage.stale) && !state.agentUsage.loading) loadAgentUsage();
   });
   root.querySelectorAll("[data-action='refresh-agent-usage']").forEach((button) => {
-    button.addEventListener("click", loadAgentUsage);
+    button.addEventListener("click", () => loadAgentUsage({ force: true }));
   });
   root.querySelectorAll("[data-action='set-agent-usage-source']").forEach((button) => {
     button.addEventListener("click", () => {

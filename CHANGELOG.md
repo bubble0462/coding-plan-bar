@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.4] - 2026-07-23
+
+### Added
+
+- 应用启动后立即在后台预热 Codex 与 OpenCode Agent 用量；设置页优先显示最近一次可用汇总，刷新在后台进行。
+- 应用自己的配置、配额缓存、Agent 用量汇总和 Electron 会话缓存默认保存到 `D:\Coding Plan Bar\Data`，并支持 `CODING_PLAN_BAR_DATA_DIR` 覆盖。
+
+### Changed
+
+- Agent 用量缓存只保存聚合后的统计快照（最大 512 KB），不复制原始会话或聊天内容。
+- 每日清理过期临时文件，应用日志最多保留 14 天或 10 MB，并清理 Electron HTTP 缓存。
+- 首次升级会安全迁移旧 `%APPDATA%\Coding Plan Bar` 应用数据；仅复制成功后才删除旧目录，D 盘不可用时自动回退。
+
+### Fixed
+
+- Codex 或 OpenCode 单个来源的本次统计失败时保留上次成功结果，不再让另一个来源或整个 Agent 用量页失效。
+- 已缓存的 Agent 用量在首次打开设置页时立即显示，并以后台刷新状态提示代替整页加载等待。
+
+
 ## [0.4.3] - 2026-07-23
 
 ### Added

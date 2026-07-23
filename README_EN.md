@@ -29,7 +29,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.4.3-x64.exe
+Coding Plan Bar-Setup-0.4.4-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.
@@ -52,11 +52,13 @@ The three shortcut buttons beside "Accounts & Providers" have different purposes
 
 In short, **Latest** and **Import** are CPA account-JSON tools, while **Add** is the provider-configuration tool. Imported accounts appear in the provider list and can be enabled, disabled, reordered, and refreshed independently. Importing the same `accountId` again updates its credentials instead of creating a duplicate. Confirmed imports are saved immediately, so no second save action is required. Only the access token required for quota queries is retained; CPA session and ID tokens are not stored. sub2api and sessions.json files remain accepted through manual import for migration compatibility. The source label follows the imported file format: CPA files display “CPA” and sub2api files display “sub2api”. CPA records misclassified by an older build are corrected automatically without merging or deleting accounts. The Imported Accounts filter includes both CPA and sub2api accounts.
 
-User configuration is stored at:
+Persistent app data is stored by default at:
 
 ```text
-%APPDATA%\Coding Plan Bar\config.json
+D:\Coding Plan Bar\Data
 ```
+
+If D: is unavailable, the app falls back to `%APPDATA%\Coding Plan Bar`. On the first upgrade, existing app data is migrated only after it has been copied successfully. Set `CODING_PLAN_BAR_DATA_DIR` to use a different directory.
 
 ### Token and cost estimates
 
@@ -125,6 +127,7 @@ The installer is written to `release/`.
 - Verify the trustworthiness and key scope of any relay service you configure.
 - Updates are fetched only from this repository's GitHub Release at `bubble0462/coding-plan-bar`; only Windows x64 NSIS installers with a SHA256 digest are accepted, and both size and digest are verified after download.
 
+- The Agent Usage cache stores only one aggregate statistics snapshot (maximum 512 KB); it never copies or uploads raw sessions or chat content. The app clears stale temporary files daily, retains at most 14 days / 10 MB of app logs, and clears the Electron HTTP cache.
 ## Credits
 
 Design and provider-integration ideas were inspired by [codexbar](https://github.com/iamzjt-front-end/codexbar), [CodexBar](https://github.com/steipete/CodexBar), and [cc-switch](https://github.com/farion1231/cc-switch).
