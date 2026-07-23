@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.8] - 2026-07-23
+
+### Changed
+
+- Agent 用量页面逻辑拆到 `settings/agent-usage-view.js`，减小 `settings.js` 体积。
+
+### Fixed
+
+- 截图脚本 `chat:list-codex-models` mock 改为返回完整 `{slug,label}` 列表，避免探测卡片反复加载并在 capture 时刷屏报错。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。
+
 ## [0.4.7] - 2026-07-23
 
 ### Changed

@@ -194,8 +194,29 @@ async function main() {
   ipcMain.handle("quota:refresh", () => {});
   ipcMain.handle("usage:get-codex-agent", () => mockCodexAgentUsage);
   ipcMain.handle("usage:get-agent", () => mockAgentUsageEnvelope);
-  ipcMain.handle("chat:list-codex-models", () => []);
-  ipcMain.handle("chat:probe-codex", () => ({ ok: true, text: "", latencyMs: 0 }));
+  // Must match chat-probe listCodexModels shape ({ slug, label }[]).
+  // An empty array used to leave the probe card in a reload loop during capture.
+  const mockCodexModels = [
+    { slug: "gpt-5.4-nano", label: "gpt-5.4-nano" },
+    { slug: "gpt-5.4-mini", label: "gpt-5.4-mini" },
+    { slug: "gpt-5.4", label: "gpt-5.4" },
+    { slug: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+  ];
+  for (const channel of ["chat:list-codex-models", "chat:probe-codex"]) {
+    try {
+      ipcMain.removeHandler(channel);
+    } catch (_error) {
+      // Channel may not exist yet on first registration.
+    }
+  }
+  ipcMain.handle("chat:list-codex-models", () => mockCodexModels.slice());
+  ipcMain.handle("chat:probe-codex", () => ({
+    ok: true,
+    text: "Capture probe reply.",
+    latencyMs: 42,
+    model: "gpt-5.4-nano",
+    httpStatus: 200,
+  }));
   ipcMain.handle("quota:open-config", () => {});
   ipcMain.handle("quota:hide", () => {});
   ipcMain.handle("quota:keep-open", () => {});
