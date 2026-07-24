@@ -45,7 +45,12 @@ const {
   matchingUsageEvents,
   summarizeCodexUsage,
 } = require("../src/session-usage");
-const { parseOpenCodeStats } = require("../src/opencode-usage");
+const {
+  parseOpenCodeStats,
+  collectOpenCodeTodayFromDatabase,
+  collectOpenCodeAgentUsage,
+  localDayStartMs,
+} = require("../src/opencode-usage");
 const {
   parseVersion,
   normalizeVersionLabel,
@@ -377,6 +382,78 @@ assert.strictEqual(openCodeUsage.summary.costUsd, 1.25);
 assert.strictEqual(openCodeUsage.models.length, 2);
 assert.strictEqual(openCodeUsage.models[0].model, "cpa/gpt-5.6-sol");
 assert.strictEqual(openCodeUsage.models[0].totalTokens, 7_030_000);
+
+// OpenCode "today" must cut at local midnight via the SQLite database, not CLI --days 1.
+{
+  const DatabaseSync = require("node:sqlite").DatabaseSync;
+  const openCodeDbDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-opencode-db-"));
+  const openCodeDbPath = path.join(openCodeDbDir, "opencode.db");
+  const db = new DatabaseSync(openCodeDbPath);
+  db.exec(`
+    CREATE TABLE message (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      time_created INTEGER NOT NULL,
+      time_updated INTEGER NOT NULL,
+      data TEXT NOT NULL
+    );
+  `);
+  const fixedNow = Date.parse("2026-07-24T12:00:00+08:00");
+  const dayStart = localDayStartMs(fixedNow);
+  assert.strictEqual(dayStart, Date.parse("2026-07-24T00:00:00+08:00"));
+  const insert = db.prepare(
+    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+  );
+  const rows = [
+    // Yesterday (must be excluded from calendar today).
+    ["m-old", "s-old", dayStart - 3_600_000, dayStart - 3_600_000, JSON.stringify({
+      role: "assistant",
+      cost: 9.99,
+      tokens: { input: 1_000_000, output: 1_000, reasoning: 0, cache: { read: 50_000_000, write: 0 } },
+      time: { created: dayStart - 3_600_000, completed: dayStart - 3_500_000 },
+      modelID: "old/model",
+    })],
+    // Today completed.
+    ["m-today", "s-today", dayStart + 3_600_000, dayStart + 3_600_000, JSON.stringify({
+      role: "assistant",
+      cost: 1.25,
+      tokens: { input: 2_000, output: 100, reasoning: 50, cache: { read: 8_000, write: 0 } },
+      time: { created: dayStart + 3_600_000, completed: dayStart + 3_700_000 },
+      modelID: "today/model",
+    })],
+    // In-progress stream without completed (must be skipped).
+    ["m-wip", "s-today", dayStart + 4_000_000, dayStart + 4_000_000, JSON.stringify({
+      role: "assistant",
+      cost: 0,
+      tokens: { input: 999_999, output: 1, reasoning: 0, cache: { read: 999_999, write: 0 } },
+      time: { created: dayStart + 4_000_000 },
+      modelID: "wip/model",
+    })],
+  ];
+  for (const row of rows) insert.run(...row);
+  db.close();
+
+  const today = collectOpenCodeTodayFromDatabase({
+    now: fixedNow,
+    dbPath: openCodeDbPath,
+  });
+  assert.strictEqual(today.source, "database");
+  assert.strictEqual(today.summary.calendarDay, true);
+  assert.strictEqual(today.summary.sessions, 1);
+  assert.strictEqual(today.summary.requests, 1);
+  assert.strictEqual(today.summary.inputTokens, 2_000);
+  assert.strictEqual(today.summary.outputTokens, 150);
+  assert.strictEqual(today.summary.cacheReadTokens, 8_000);
+  assert.strictEqual(today.summary.totalTokens, 10_150);
+  assert.strictEqual(today.summary.costUsd, 1.25);
+  assert.strictEqual(today.summary.rangeStartAt, dayStart);
+  global.__openCodeTodayDbSmoke = {
+    fixedNow,
+    openCodeDbPath,
+    openCodeDbDir,
+    openCodeStatsFixture,
+  };
+}
 
 const claudeEvents = parseClaudeJsonl(JSON.stringify({
   type: "assistant",
@@ -1001,6 +1078,29 @@ async function runFetchTimeoutSmoke() {
   }
 }
 
+async function runOpenCodeCalendarTodaySmoke() {
+  const fixture = global.__openCodeTodayDbSmoke;
+  assert.ok(fixture, "OpenCode calendar today fixture missing");
+  try {
+    const collected = await collectOpenCodeAgentUsage({
+      now: fixture.fixedNow,
+      resolveDbPath: () => fixture.openCodeDbPath,
+      runStats: async (days) => {
+        if (days === 1) throw new Error("today must not call CLI --days 1 when DB works");
+        return fixture.openCodeStatsFixture.replace("Days 7", `Days ${days}`);
+      },
+    });
+    assert.strictEqual(collected.todaySource, "database");
+    assert.strictEqual(collected.windows.today.requests, 1);
+    assert.strictEqual(collected.windows.today.totalTokens, 10_150);
+    assert.strictEqual(collected.windows.today.calendarDay, true);
+    assert.strictEqual(collected.windows.sevenDays.sessions, 3);
+  } finally {
+    fs.rmSync(fixture.openCodeDbDir, { recursive: true, force: true });
+    delete global.__openCodeTodayDbSmoke;
+  }
+}
+
 runZhipuRequestSmoke()
   .then(runGrokRefreshSmoke)
   .then(runGrokSourceSmoke)
@@ -1008,6 +1108,7 @@ runZhipuRequestSmoke()
   .then(runSecretStorageSmoke)
   .then(runUpdaterIntegritySmoke)
   .then(runFetchTimeoutSmoke)
+  .then(runOpenCodeCalendarTodaySmoke)
   .then(() => console.log("Smoke tests passed"))
   .catch((error) => {
     console.error(error);

@@ -53,7 +53,7 @@ function renderAgentUsagePage() {
   const refreshedAt = selectedData?.generatedAt || aggregate?.generatedAt;
   const sourceLabel = source === "opencode" ? "OpenCode" : "Codex";
   const description = source === "opencode"
-    ? "汇总本机 OpenCode CLI 的会话、消息、Token 与 provider 记录费用。"
+    ? "汇总本机 OpenCode 会话、消息、Token 与 provider 记录费用。「今天」按本地 0 点起算。"
     : "汇总本机 Codex Agent 的请求、Token 与 API 等价费用，不按账号拆分。";
   const sourceError = aggregate?.sourceErrors?.[source] || null;
   const cacheState = usage.loading
@@ -144,7 +144,7 @@ function renderOpenCodeAgentUsage(data) {
       ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "记录", "separate")}
     </div>
     ${renderUsageModelsSection(models, "模型明细", "最近 30 天，费用来自 OpenCode 的 provider 记录", "记录费用", "最近 30 天没有可统计的 OpenCode 使用记录。")}
-    <p class="usage-note">统计调用本机 <code>opencode stats --pure</code>，不会读取或上传聊天内容。部分 provider 不回传价格时会显示 $0.00，但 Token 与消息数仍会保留。</p>
+    <p class="usage-note">「今天」读取本机 <code>opencode.db</code>，按本地 0 点切割；近 7/30 天仍调用 <code>opencode stats --pure</code>。不读取聊天正文。部分 provider 不回传价格时费用可能为 $0.00。</p>
   `;
 }
 

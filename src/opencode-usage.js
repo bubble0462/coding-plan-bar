@@ -4,31 +4,52 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const OPEN_CODE_WINDOWS = [
-  { key: "today", days: 1 },
+  // "today" is calendar-local midnight → now from opencode.db (not CLI --days 1).
   { key: "sevenDays", days: 7 },
   { key: "thirtyDays", days: 30 },
 ];
 const OPEN_CODE_MODEL_LIMIT = 12;
 const OPEN_CODE_TIMEOUT_MS = 30_000;
+const OPEN_CODE_DB_CANDIDATES = [
+  path.join(os.homedir(), ".local", "share", "opencode", "opencode.db"),
+  path.join(process.env.XDG_DATA_HOME || "", "opencode", "opencode.db"),
+];
 
 async function collectOpenCodeAgentUsage(options = {}) {
   const now = Number(options.now) || Date.now();
   const runStats = options.runStats || runOpenCodeStats;
+  const resolveDbPath = options.resolveDbPath || resolveOpenCodeDatabasePath;
+  const collectToday = options.collectTodayFromDatabase || collectOpenCodeTodayFromDatabase;
 
   try {
-    const outputs = await Promise.all(OPEN_CODE_WINDOWS.map(async ({ key, days }) => {
+    const todayPromise = Promise.resolve()
+      .then(() => collectToday({ now, resolveDbPath }))
+      .catch(async (error) => {
+        // Fall back to rolling 24h CLI stats only when the local DB path is unusable.
+        const output = await runStats(1, 0);
+        const parsed = parseOpenCodeStats(output);
+        return {
+          summary: { ...parsed.summary, calendarDay: false },
+          source: "cli-fallback",
+          error: error?.message || String(error),
+        };
+      });
+    const cliPromises = OPEN_CODE_WINDOWS.map(async ({ key, days }) => {
       const models = key === "thirtyDays" ? OPEN_CODE_MODEL_LIMIT : 0;
       const output = await runStats(days, models);
       return [key, parseOpenCodeStats(output)];
-    }));
-    const windows = Object.fromEntries(outputs.map(([key, parsed]) => [key, parsed.summary]));
-    const thirtyDays = outputs.find(([key]) => key === "thirtyDays")?.[1] || { models: [] };
+    });
+    const [todayResult, ...cliOutputs] = await Promise.all([todayPromise, ...cliPromises]);
+    const windows = Object.fromEntries(cliOutputs.map(([key, parsed]) => [key, parsed.summary]));
+    windows.today = todayResult.summary;
+    const thirtyDays = cliOutputs.find(([key]) => key === "thirtyDays")?.[1] || { models: [] };
 
     return {
       available: true,
       generatedAt: now,
       windows,
       models: thirtyDays.models,
+      todaySource: todayResult.source,
       error: null,
     };
   } catch (error) {
@@ -39,6 +60,130 @@ async function collectOpenCodeAgentUsage(options = {}) {
       models: [],
       error: formatOpenCodeError(error),
     };
+  }
+}
+
+function resolveOpenCodeDatabasePath(options = {}) {
+  const configured = String(options.dbPath || process.env.OPENCODE_DB_PATH || "").trim();
+  if (configured && fs.existsSync(configured)) return configured;
+  for (const candidate of OPEN_CODE_DB_CANDIDATES) {
+    if (candidate && fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function localDayStartMs(now = Date.now()) {
+  const date = new Date(Number(now) || Date.now());
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+/**
+ * Aggregate assistant usage from opencode.db since local midnight.
+ * OpenCode stores Anthropic-style tokens: input is fresh, cache is separate.
+ * Prefers completed messages; incomplete streaming rows are skipped.
+ */
+function collectOpenCodeTodayFromDatabase(options = {}) {
+  const now = Number(options.now) || Date.now();
+  const startMs = Number.isFinite(options.startMs) ? Number(options.startMs) : localDayStartMs(now);
+  const resolveDbPath = options.resolveDbPath || resolveOpenCodeDatabasePath;
+  const dbPath = resolveDbPath(options);
+  if (!dbPath) {
+    const error = new Error("OpenCode database not found");
+    error.code = "OPENCODE_DB_MISSING";
+    throw error;
+  }
+
+  let DatabaseSync;
+  try {
+    ({ DatabaseSync } = require("node:sqlite"));
+  } catch (error) {
+    error.code = "OPENCODE_SQLITE_UNAVAILABLE";
+    throw error;
+  }
+
+  let database;
+  try {
+    database = new DatabaseSync(dbPath, { readOnly: true });
+  } catch (error) {
+    error.code = "OPENCODE_DB_OPEN_FAILED";
+    throw error;
+  }
+
+  try {
+    // Prefilter by row time_created for speed; final cut uses message.time.completed/created.
+    const lowerBound = Math.max(0, startMs - 6 * 60 * 60 * 1000);
+    const rows = database
+      .prepare("SELECT session_id, time_created, data FROM message WHERE time_created >= ?")
+      .all(lowerBound);
+
+    const sessions = new Set();
+    let requests = 0;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheReadTokens = 0;
+    let cacheCreationTokens = 0;
+    let costUsd = 0;
+    let hasCost = false;
+
+    for (const row of rows) {
+      let payload;
+      try {
+        payload = JSON.parse(row.data);
+      } catch (_error) {
+        continue;
+      }
+      if (payload?.role !== "assistant" || !payload.tokens) continue;
+      const time = payload.time || {};
+      if (time.completed == null && time.created == null) continue;
+      // Skip in-progress streams (no completed stamp) so partial tokens are not counted twice.
+      if (time.completed == null) continue;
+      const stamp = Number(time.completed || time.created || row.time_created || 0);
+      if (!Number.isFinite(stamp) || stamp < startMs || stamp > now + 60_000) continue;
+
+      const tokens = payload.tokens || {};
+      const cache = tokens.cache || {};
+      const input = Math.max(0, Number(tokens.input) || 0);
+      const output = Math.max(0, (Number(tokens.output) || 0) + (Number(tokens.reasoning) || 0));
+      const cacheRead = Math.max(0, Number(cache.read) || 0);
+      const cacheWrite = Math.max(0, Number(cache.write) || 0);
+      if (input + output + cacheRead + cacheWrite <= 0) continue;
+
+      requests += 1;
+      sessions.add(String(row.session_id || ""));
+      inputTokens += input;
+      outputTokens += output;
+      cacheReadTokens += cacheRead;
+      cacheCreationTokens += cacheWrite;
+      const cost = Number(payload.cost);
+      if (Number.isFinite(cost) && cost > 0) {
+        costUsd += cost;
+        hasCost = true;
+      }
+    }
+
+    sessions.delete("");
+    const summary = {
+      sessions: sessions.size,
+      requests,
+      inputTokens,
+      outputTokens,
+      cacheReadTokens,
+      cacheCreationTokens,
+      costUsd: hasCost ? costUsd : 0,
+      partialCost: false,
+      totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+      rangeStartAt: startMs,
+      rangeEndAt: now,
+      calendarDay: true,
+    };
+    return { summary, source: "database", dbPath };
+  } finally {
+    try {
+      database.close();
+    } catch (_error) {
+      // Ignore close errors on a read-only handle.
+    }
   }
 }
 
@@ -263,8 +408,11 @@ function formatOpenCodeError(error) {
 module.exports = {
   OPEN_CODE_MODEL_LIMIT,
   collectOpenCodeAgentUsage,
+  collectOpenCodeTodayFromDatabase,
+  localDayStartMs,
   parseCompactMoney,
   parseCompactNumber,
   parseOpenCodeStats,
+  resolveOpenCodeDatabasePath,
   runOpenCodeStats,
 };
