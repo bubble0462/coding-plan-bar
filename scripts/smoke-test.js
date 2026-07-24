@@ -32,7 +32,13 @@ const {
   mergeRendererConfig,
 } = require("../src/config-store");
 const { SECRET_MASK } = require("../src/secret-store");
-const { importAccountsIntoConfig, parseAccountImport, previewAccountsImport } = require("../src/account-importer");
+const {
+  importAccountsIntoConfig,
+  parseAccountImport,
+  previewAccountsImport,
+  isCpaAccountFileName,
+  isCpaAccountShape,
+} = require("../src/account-importer");
 const { classifyFailure } = require("../src/failure-classifier");
 const { parseGrokWebBilling } = require("../src/grok-web-billing");
 const { computePopupHeight } = require("../src/layout");
@@ -170,6 +176,13 @@ const cpaFixture = {
   session_token: "must-not-be-persisted",
   expired: "2027-01-02T03:04:05Z",
 };
+assert.strictEqual(isCpaAccountFileName("cpa@example.com.cpa.2026-07-18.json"), true);
+assert.strictEqual(isCpaAccountFileName("codex-powellssportplake@gmail.com-plus.json"), true);
+assert.strictEqual(isCpaAccountFileName("powellssportplake@gmail.com-plus.json"), true);
+assert.strictEqual(isCpaAccountFileName("random-notes.json"), false);
+assert.strictEqual(isCpaAccountShape(cpaFixture), true);
+assert.strictEqual(isCpaAccountShape({ access_token: "x" }), false);
+
 const parsedCpa = parseAccountImport(cpaFixture, "cpa@example.com.cpa.2026-07-18.json");
 assert.strictEqual(parsedCpa.format, "cpa");
 assert.strictEqual(parsedCpa.accounts.length, 1);
@@ -177,12 +190,17 @@ assert.strictEqual(parsedCpa.accounts[0].accountId, "cpa-account-id");
 assert.strictEqual(parsedCpa.accounts[0].planType, "plus");
 assert.strictEqual(parsedCpa.accounts[0].expiresAt, "2027-01-02T03:04:05.000Z");
 
+const parsedCodexNamedCpa = parseAccountImport(cpaFixture, "codex-powellssportplake@gmail.com-plus.json");
+assert.strictEqual(parsedCodexNamedCpa.format, "cpa");
+assert.strictEqual(parsedCodexNamedCpa.accounts.length, 1);
+
 const cpaPreview = previewAccountsImport({ providers: [] }, cpaFixture, "cpa@example.com.cpa.2026-07-18.json");
 assert.strictEqual(cpaPreview.format, "cpa");
 assert.strictEqual(cpaPreview.importedCount, 1);
 assert(cpaPreview.items[0].identityLabel.includes("CPA accountId"));
 
-const firstCpaImport = importAccountsIntoConfig({ providers: [] }, cpaFixture, "cpa@example.com.cpa.2026-07-18.json");
+const firstCpaImport = importAccountsIntoConfig({ providers: [] }, cpaFixture, "codex-powellssportplake@gmail.com-plus.json");
+assert.strictEqual(firstCpaImport.format, "cpa");
 assert.strictEqual(firstCpaImport.importedCount, 1);
 assert.strictEqual(firstCpaImport.updatedCount, 0);
 assert.strictEqual(firstCpaImport.config.providers[0].importedFrom, "cpa");

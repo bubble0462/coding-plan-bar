@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.13] - 2026-07-24
+
+### Fixed
+
+- 「最新文件」可识别新版 CPA 导出文件名，例如 `codex-name@gmail.com-plus.json`；不再要求文件名必须包含 `cpa`。
+- Downloads 扫描增加近期 JSON 内容识别兜底，避免 CPA 导出改名后找不到。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本。把 CPA 导出 JSON 放到 Downloads 后点「最新文件」即可。
+
 ## [0.4.12] - 2026-07-24
 
 ### Added

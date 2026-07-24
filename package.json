@@ -1,6 +1,6 @@
 {
   "name": "coding-plan-bar",
-  "version": "0.4.12",
+  "version": "0.4.13",
   "productName": "Coding Plan Bar",
   "description": "Windows tray quota monitor for Codex and optional coding-plan providers.",
   "main": "src/main.js",

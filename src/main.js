@@ -23,7 +23,12 @@ const {
   configForRenderer,
   mergeRendererConfig,
 } = require("./config-store");
-const { importAccountsIntoConfig, previewAccountsImport } = require("./account-importer");
+const {
+  importAccountsIntoConfig,
+  previewAccountsImport,
+  isCpaAccountFileName,
+  isCpaAccountShape,
+} = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { calculatePopupPlacement } = require("./popup-placement");
 const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials } = require("./providers");
@@ -616,7 +621,7 @@ async function previewLatestImportFile() {
   if (!filePath) {
     return {
       canceled: true,
-      message: "Downloads 中没有找到 CPA 账号 JSON（例如 name@gmail.cpa.日期.json）",
+      message: "Downloads 中没有找到 CPA 账号 JSON（例如 codex-name@gmail.com-plus.json 或 name@gmail.cpa.日期.json）",
     };
   }
   return {
@@ -628,16 +633,51 @@ async function previewLatestImportFile() {
 function latestDownloadsImportFile() {
   const downloads = app.getPath("downloads");
   if (!downloads || !fs.existsSync(downloads)) return null;
-  const candidates = fs
-    .readdirSync(downloads, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && /(?:^|[._-])cpa(?:[._-].*)?\.json$/i.test(entry.name))
+
+  let entries = [];
+  try {
+    entries = fs.readdirSync(downloads, { withFileTypes: true });
+  } catch (_error) {
+    return null;
+  }
+
+  const files = entries
+    .filter((entry) => entry.isFile() && /\.json$/i.test(entry.name))
     .map((entry) => {
       const filePath = path.join(downloads, entry.name);
-      const stat = fs.statSync(filePath);
-      return { filePath, mtimeMs: stat.mtimeMs };
+      let mtimeMs = 0;
+      let size = 0;
+      try {
+        const stat = fs.statSync(filePath);
+        mtimeMs = stat.mtimeMs;
+        size = stat.size;
+      } catch (_error) {
+        return null;
+      }
+      return { name: entry.name, filePath, mtimeMs, size };
     })
+    .filter(Boolean)
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return candidates[0]?.filePath || null;
+
+  // Fast path: filename already looks like a CPA export.
+  const byName = files.find((file) => isCpaAccountFileName(file.name));
+  if (byName) return byName.filePath;
+
+  // Slow path: sniff recent small JSON files for CPA account shape so exports
+  // without "cpa" in the filename (codex-user@mail.com-plus.json) still work.
+  const maxSniff = 30;
+  const maxBytes = 2 * 1024 * 1024;
+  for (const file of files.slice(0, maxSniff)) {
+    if (!file.size || file.size > maxBytes) continue;
+    try {
+      const raw = fs.readFileSync(file.filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (isCpaAccountShape(parsed) || isCpaAccountFileName(file.name)) return file.filePath;
+    } catch (_error) {
+      // Ignore unreadable / non-JSON files while scanning Downloads.
+    }
+  }
+  return null;
 }
 
 async function importAccountsFromFile(_event, filePath) {

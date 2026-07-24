@@ -494,16 +494,40 @@ function formatLabel(format) {
   return format === "cpa" ? "CPA" : format === "sub2api" ? "sub2api" : format === "sessions" ? "sessions.json" : "账号 JSON";
 }
 
-function isCpaAccount(value, baseName = "") {
+/**
+ * Recognize CPA export filenames. Historical exports used
+ * `name@gmail.cpa.2026-07-18.json`; newer exports often look like
+ * `codex-name@gmail.com-plus.json` without a literal "cpa" token.
+ */
+function isCpaAccountFileName(fileName = "") {
+  const base = path.basename(String(fileName || "")).toLowerCase();
+  if (!base.endsWith(".json")) return false;
+  if (/(?:^|[._-])cpa(?:[._-].*)?\.json$/i.test(base)) return true;
+  if (/^codex[-_].+\.json$/i.test(base)) return true;
+  if (/\.cpa\.json$/i.test(base)) return true;
+  // email + plan-tier exports: user@domain-plus.json / user@domain-team.json
+  if (/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}.*\.(?:plus|team|pro|free|edu)\.json$/i.test(base)) return true;
+  if (/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}.*-(?:plus|team|pro|free|edu)\.json$/i.test(base)) return true;
+  return false;
+}
+
+function isCpaAccountShape(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const cpaFileName = /(?:^|[._-])cpa(?:[._-].*)?\.json$/i.test(baseName);
-  const cpaShape = Boolean(
+  return Boolean(
     value.access_token &&
     value.email &&
     (value.chatgpt_account_id || value.account_id) &&
-    (value.type === "codex" || value.chatgpt_plan_type || value.session_token),
+    (value.type === "codex" || value.chatgpt_plan_type || value.session_token || value.plan_type),
   );
-  return cpaFileName ? Boolean(value.access_token && (value.chatgpt_account_id || value.account_id)) : cpaShape;
+}
+
+function isCpaAccount(value, baseName = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const cpaFileName = isCpaAccountFileName(baseName);
+  if (cpaFileName) {
+    return Boolean(value.access_token && (value.chatgpt_account_id || value.account_id || value.email));
+  }
+  return isCpaAccountShape(value);
 }
 
 function hasToken(value) {
@@ -573,4 +597,7 @@ module.exports = {
   importAccountsIntoConfig,
   parseAccountImport,
   previewAccountsImport,
+  isCpaAccountFileName,
+  isCpaAccountShape,
+  isCpaAccount,
 };

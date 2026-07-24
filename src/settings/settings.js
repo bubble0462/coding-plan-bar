@@ -307,7 +307,7 @@ function render() {
           <div class="sidebar-head">
             <strong>账号与供应商</strong>
             <div class="sidebar-head-actions">
-              <button class="btn small" data-action="latest-import" title="从 Downloads 查找最新的 CPA 账号 JSON 文件">最新文件</button>
+              <button class="btn small" data-action="latest-import" title="从 Downloads 查找最新 CPA 账号 JSON（支持 codex-邮箱-plus.json / name@gmail.cpa.日期.json）">最新文件</button>
               <button class="btn small" data-action="import-accounts">导入</button>
               <button class="btn small primary" data-action="toggle-templates">添加</button>
             </div>
