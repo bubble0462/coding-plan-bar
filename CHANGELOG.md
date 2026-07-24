@@ -1,11 +1,20 @@
 # Changelog
 
+## [0.4.10] - 2026-07-24
+
+### Changed
+
+- 精简 OpenCode Agent 用量页说明文案，去掉多余的「今天」时间口径提示。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。
+
 ## [0.4.9] - 2026-07-24
 
 ### Changed
 
-- OpenCode「今天」改为读取本机 `opencode.db`，按**本地 0 点**切割；近 7/30 天仍用 `opencode stats --pure`。
-- Agent 用量文案说明「今天」为日历日，不再等同于滚动 24 小时。
+- OpenCode「今天」改为读取本机 `opencode.db`，按本地 0 点切割；近 7/30 天仍用 `opencode stats --pure`。
 
 ### Notes
 
