@@ -2,10 +2,14 @@ const fs = require("fs");
 const path = require("path");
 
 const DATA_DIRECTORY_ENV = "CODING_PLAN_BAR_DATA_DIR";
-// Prefer a single tree under D:\Apps together with the portable install.
-const DEFAULT_WINDOWS_DATA_DIRECTORY = "D:\\Apps\\Coding Plan Bar\\Data";
-// Previous default from v0.4.4–0.4.6. Migrated automatically on first launch.
-const PREVIOUS_WINDOWS_DATA_DIRECTORY = "D:\\Coding Plan Bar\\Data";
+// Keep app data on D: next to the install tree, but NEVER inside the install
+// directory itself — NSIS upgrade/reinstall wipes the install folder.
+const DEFAULT_WINDOWS_DATA_DIRECTORY = "D:\\Apps\\Coding Plan Bar Data";
+// Historical locations that may still hold config after path changes.
+const PREVIOUS_WINDOWS_DATA_DIRECTORIES = [
+  "D:\\Apps\\Coding Plan Bar\\Data",
+  "D:\\Coding Plan Bar\\Data",
+];
 const STALE_TEMP_FILE_AGE_MS = 24 * 60 * 60 * 1000;
 const LOG_RETENTION_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const LOG_RETENTION_BYTES = 10 * 1024 * 1024;
@@ -33,13 +37,21 @@ function initializeApplicationDataDirectory(options = {}) {
   if (!legacyInput || !dataInput) throw new Error("Missing application data directory");
   const legacyUserDataPath = path.resolve(legacyInput);
   const dataDirectory = path.resolve(dataInput);
-  // `previousWindowsDataDirectory: null` disables the automatic previous-D:
-  // migration (used by unit tests). Omitting the option keeps the default.
-  const previousWindowsDataDirectory = Object.prototype.hasOwnProperty.call(options, "previousWindowsDataDirectory")
-    ? (options.previousWindowsDataDirectory
-      ? path.resolve(options.previousWindowsDataDirectory)
-      : null)
-    : path.resolve(PREVIOUS_WINDOWS_DATA_DIRECTORY);
+
+  // `previousWindowsDataDirectories: null` disables auto previous-path
+  // migration (tests). Omitting the option uses the default historical list.
+  let previousWindowsDataDirectories;
+  if (Object.prototype.hasOwnProperty.call(options, "previousWindowsDataDirectories")) {
+    previousWindowsDataDirectories = Array.isArray(options.previousWindowsDataDirectories)
+      ? options.previousWindowsDataDirectories.map((item) => path.resolve(item))
+      : [];
+  } else if (Object.prototype.hasOwnProperty.call(options, "previousWindowsDataDirectory")) {
+    previousWindowsDataDirectories = options.previousWindowsDataDirectory
+      ? [path.resolve(options.previousWindowsDataDirectory)]
+      : [];
+  } else {
+    previousWindowsDataDirectories = PREVIOUS_WINDOWS_DATA_DIRECTORIES.map((item) => path.resolve(item));
+  }
 
   fs.mkdirSync(dataDirectory, { recursive: true });
   let migrated = false;
@@ -47,11 +59,8 @@ function initializeApplicationDataDirectory(options = {}) {
   let legacyCleanupError = null;
   const migrationSources = [];
   if (!options.skipMigration) {
-    // Prefer the richer previous D: data set when both APPDATA and the old
-    // D:\Coding Plan Bar\Data exist; otherwise fall back to APPDATA.
-    const candidates = [];
-    if (previousWindowsDataDirectory) candidates.push(previousWindowsDataDirectory);
-    candidates.push(legacyUserDataPath);
+    // Prefer historical D: data sets (newest-path first), then APPDATA.
+    const candidates = [...previousWindowsDataDirectories, legacyUserDataPath];
     for (const source of candidates) {
       if (samePath(source, dataDirectory)) continue;
       if (!fs.existsSync(source)) continue;
@@ -65,11 +74,14 @@ function initializeApplicationDataDirectory(options = {}) {
     const removeLegacyDirectory = options.removeLegacyDirectory || ((directory) => {
       fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2, retryDelay: 80 });
     });
-    // Copy previous D: first so config.json / caches win over older APPDATA copies.
+    // Prefer richer configs: copy install-internal Data / old D: Data before APPDATA.
+    // Within previous paths, keep the declared order (install Data first).
     const ordered = migrationSources.slice().sort((left, right) => {
-      const leftIsPrevious = samePath(left, previousWindowsDataDirectory) ? 0 : 1;
-      const rightIsPrevious = samePath(right, previousWindowsDataDirectory) ? 0 : 1;
-      return leftIsPrevious - rightIsPrevious;
+      const leftRank = previousWindowsDataDirectories.findIndex((item) => samePath(item, left));
+      const rightRank = previousWindowsDataDirectories.findIndex((item) => samePath(item, right));
+      const leftScore = leftRank >= 0 ? leftRank : 1000;
+      const rightScore = rightRank >= 0 ? rightRank : 1000;
+      return leftScore - rightScore;
     });
     try {
       for (const source of ordered) copy(source, dataDirectory);
@@ -81,10 +93,19 @@ function initializeApplicationDataDirectory(options = {}) {
     }
     if (migrated) {
       for (const source of ordered) {
+        // Never delete the Electron install directory parent; only remove
+        // known historical data folders after a successful copy.
+        if (samePath(source, legacyUserDataPath)) {
+          try {
+            removeLegacyDirectory(source);
+          } catch (error) {
+            legacyCleanupError = error.message || String(error);
+          }
+          continue;
+        }
         try {
           removeLegacyDirectory(source);
         } catch (error) {
-          // Copied data is ready even when a file handle blocks deletion.
           legacyCleanupError = error.message || String(error);
         }
       }
@@ -216,7 +237,9 @@ function samePath(left, right) {
 module.exports = {
   DATA_DIRECTORY_ENV,
   DEFAULT_WINDOWS_DATA_DIRECTORY,
-  PREVIOUS_WINDOWS_DATA_DIRECTORY,
+  PREVIOUS_WINDOWS_DATA_DIRECTORIES,
+  // Back-compat alias used by older tests/docs.
+  PREVIOUS_WINDOWS_DATA_DIRECTORY: PREVIOUS_WINDOWS_DATA_DIRECTORIES[1],
   LOG_RETENTION_AGE_MS,
   LOG_RETENTION_BYTES,
   cleanupApplicationDataDirectory,

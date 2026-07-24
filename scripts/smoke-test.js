@@ -122,21 +122,27 @@ assert.strictEqual(resolveApplicationDataDirectory({
   exists: () => true,
 }), DEFAULT_WINDOWS_DATA_DIRECTORY);
 
-// Previous D:\Coding Plan Bar\Data must migrate into the new default under D:\Apps.
+// Historical install-internal / old D: data must migrate into the new default
+// (outside the install directory so NSIS upgrades cannot wipe accounts).
 const previousStorage = path.join(tempDir, "previous-d-storage");
+const installInternalStorage = path.join(tempDir, "install-internal-data");
 const appsStorage = path.join(tempDir, "apps-storage");
 fs.mkdirSync(previousStorage, { recursive: true });
-fs.writeFileSync(path.join(previousStorage, "config.json"), "{\"providers\":[]}\n", "utf8");
-fs.writeFileSync(path.join(previousStorage, "agent-usage-cache.json"), "{\"savedAt\":1}\n", "utf8");
+fs.mkdirSync(installInternalStorage, { recursive: true });
+fs.writeFileSync(path.join(previousStorage, "quota-cache.json"), "{}\n", "utf8");
+fs.writeFileSync(path.join(installInternalStorage, "config.json"), "{\"providers\":[{\"id\":\"glm\"}]}\n", "utf8");
+fs.writeFileSync(path.join(installInternalStorage, "agent-usage-cache.json"), "{\"savedAt\":1}\n", "utf8");
 const previousMigrated = initializeApplicationDataDirectory({
   legacyUserDataPath: path.join(tempDir, "empty-appdata"),
   dataDirectory: appsStorage,
-  previousWindowsDataDirectory: previousStorage,
+  previousWindowsDataDirectories: [installInternalStorage, previousStorage],
 });
 assert.strictEqual(previousMigrated.migrated, true);
 assert.strictEqual(fs.existsSync(path.join(appsStorage, "config.json")), true);
 assert.strictEqual(fs.existsSync(path.join(appsStorage, "agent-usage-cache.json")), true);
+assert.strictEqual(fs.existsSync(path.join(appsStorage, "quota-cache.json")), true);
 assert.strictEqual(fs.existsSync(previousStorage), false);
+assert.strictEqual(fs.existsSync(installInternalStorage), false);
 assert.strictEqual(fs.existsSync(path.join(targetStorage, "logs", "old.log")), false);
 assert.strictEqual(resolveApplicationDataDirectory({
   legacyUserDataPath: targetStorage,

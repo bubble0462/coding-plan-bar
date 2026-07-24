@@ -55,10 +55,10 @@ In short, **Latest** and **Import** are CPA account-JSON tools, while **Add** is
 Persistent app data is stored by default at:
 
 ```text
-D:\Apps\Coding Plan Bar\Data
+D:\Apps\Coding Plan Bar Data
 ```
 
-This sits next to the install directory `D:\Apps\Coding Plan Bar`. If D: is unavailable, the app falls back to `%APPDATA%\Coding Plan Bar`. On upgrade it migrates from the old `D:\Coding Plan Bar\Data` path and from `%APPDATA%` (never overwriting existing files). Set `CODING_PLAN_BAR_DATA_DIR` to use a different directory.
+This is a sibling of the install directory `D:\Apps\Coding Plan Bar` (not inside it), so NSIS upgrades cannot wipe accounts. If D: is unavailable, the app falls back to `%APPDATA%\Coding Plan Bar`. On upgrade it migrates from `D:\Apps\Coding Plan Bar\Data`, `D:\Coding Plan Bar\Data`, and `%APPDATA%` (never overwriting existing files). Set `CODING_PLAN_BAR_DATA_DIR` to use a different directory.
 
 ### Token and cost estimates
 

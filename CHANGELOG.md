@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.11] - 2026-07-24
+
+### Fixed
+
+- 应用数据目录移出安装目录：默认改为 `D:\Apps\Coding Plan Bar Data`，避免 NSIS 升级/重装清空账号配置。
+- 启动时自动迁移旧路径 `D:\Apps\Coding Plan Bar\Data`、`D:\Coding Plan Bar\Data` 与 `%APPDATA%` 中的配置（不覆盖已有文件）。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本。若账号仍缺失，可从备份恢复 `config.json` 到新数据目录。
+
 ## [0.4.10] - 2026-07-24
 
 ### Changed
