@@ -2,6 +2,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
+const { calculateCostUsd } = require("./model-pricing");
 
 const OPEN_CODE_WINDOWS = [
   // "today" is calendar-local midnight → now from opencode.db (not CLI --days 1).
@@ -40,15 +41,21 @@ async function collectOpenCodeAgentUsage(options = {}) {
       return [key, parseOpenCodeStats(output)];
     });
     const [todayResult, ...cliOutputs] = await Promise.all([todayPromise, ...cliPromises]);
-    const windows = Object.fromEntries(cliOutputs.map(([key, parsed]) => [key, parsed.summary]));
-    windows.today = todayResult.summary;
+    const windows = Object.fromEntries(cliOutputs.map(([key, parsed]) => [key, applyEstimatedCostToSummary(parsed.summary)]));
+    windows.today = applyEstimatedCostToSummary(todayResult.summary);
     const thirtyDays = cliOutputs.find(([key]) => key === "thirtyDays")?.[1] || { models: [] };
+    const models = applyEstimatedCostsToModels(thirtyDays.models || []);
+    // Prefer the sum of priced model estimates for the 30-day card when OpenCode
+    // recorded $0 for subscription / CPA providers.
+    if (models.length) {
+      windows.thirtyDays = mergeSummaryWithModelEstimates(windows.thirtyDays, models);
+    }
 
     return {
       available: true,
       generatedAt: now,
       windows,
-      models: thirtyDays.models,
+      models,
       todaySource: todayResult.source,
       error: null,
     };
@@ -365,7 +372,88 @@ function parseOpenCodeModels(lines) {
     else if (cost != null) current.costUsd = cost;
   }
   commit();
+  // Keep provider-recorded costs only here; public-API estimates are applied once
+  // in collectOpenCodeAgentUsage so costSource is not rewritten to "recorded".
   return models.sort((left, right) => right.totalTokens - left.totalTokens || right.requests - left.requests);
+}
+
+/**
+ * OpenCode records provider cost when available; CPA / coding-plan / free models
+ * often report $0. Fill gaps with public API list-price estimates (Anthropic-style:
+ * input is fresh tokens, cache is separate).
+ */
+function applyEstimatedCostsToModels(models, now = Date.now()) {
+  return (models || []).map((item) => {
+    const estimated = estimateOpenCodeUsageCost(item, now);
+    const recorded = Number(item?.costUsd);
+    const hasRecorded = Number.isFinite(recorded) && recorded > 0;
+    if (hasRecorded) {
+      return {
+        ...item,
+        costUsd: recorded,
+        estimatedCostUsd: estimated,
+        partialCost: false,
+        costSource: "recorded",
+      };
+    }
+    if (estimated != null) {
+      return {
+        ...item,
+        costUsd: estimated,
+        estimatedCostUsd: estimated,
+        partialCost: false,
+        costSource: "estimated",
+      };
+    }
+    return {
+      ...item,
+      costUsd: null,
+      estimatedCostUsd: null,
+      partialCost: false,
+      costSource: "unpriced",
+    };
+  });
+}
+
+function applyEstimatedCostToSummary(summary) {
+  if (!summary || typeof summary !== "object") return summary;
+  const recorded = Number(summary.costUsd);
+  if (Number.isFinite(recorded) && recorded > 0) {
+    return { ...summary, costSource: "recorded", partialCost: Boolean(summary.partialCost) };
+  }
+  // Aggregate window rows without per-model breakdown stay unpriced rather than $0.00
+  // when OpenCode reported a zero total (typical for subscription providers).
+  if (Number.isFinite(recorded) && recorded === 0) {
+    return { ...summary, costUsd: null, costSource: "unpriced", partialCost: false };
+  }
+  return { ...summary, costSource: summary.costSource || "recorded" };
+}
+
+function mergeSummaryWithModelEstimates(summary, models) {
+  const base = summary || {};
+  const priced = (models || []).filter((item) => item.costUsd != null && Number.isFinite(Number(item.costUsd)));
+  if (!priced.length) return applyEstimatedCostToSummary(base);
+  const estimatedTotal = priced.reduce((sum, item) => sum + Number(item.costUsd), 0);
+  const partial = priced.length < (models || []).length;
+  return {
+    ...base,
+    costUsd: estimatedTotal,
+    partialCost: partial,
+    costSource: "estimated",
+  };
+}
+
+function estimateOpenCodeUsageCost(usage, now = Date.now()) {
+  return calculateCostUsd({
+    model: usage?.model,
+    inputTokens: usage?.inputTokens,
+    outputTokens: usage?.outputTokens,
+    cacheReadTokens: usage?.cacheReadTokens,
+    cacheCreationTokens: usage?.cacheCreationTokens,
+    // OpenCode / Anthropic-style: cache is not included in input.
+    cacheIncludedInInput: false,
+    now,
+  });
 }
 
 function isOpenCodeModelId(value) {
@@ -407,8 +495,10 @@ function formatOpenCodeError(error) {
 }
 module.exports = {
   OPEN_CODE_MODEL_LIMIT,
+  applyEstimatedCostsToModels,
   collectOpenCodeAgentUsage,
   collectOpenCodeTodayFromDatabase,
+  estimateOpenCodeUsageCost,
   localDayStartMs,
   parseCompactMoney,
   parseCompactNumber,

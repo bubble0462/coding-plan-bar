@@ -139,12 +139,12 @@ function renderOpenCodeAgentUsage(data) {
   const models = Array.isArray(data.models) ? data.models : [];
   return `
     <div class="usage-window-grid is-opencode">
-      ${renderUsageWindowCard("今天", data.windows?.today, false, "记录", "separate")}
-      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "记录", "separate")}
-      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "记录", "separate")}
+      ${renderUsageWindowCard("今天", data.windows?.today, false, "估算", "separate")}
+      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "估算", "separate")}
+      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "估算", "separate")}
     </div>
-    ${renderUsageModelsSection(models, "模型明细", "最近 30 天，费用来自 OpenCode 的 provider 记录", "记录费用", "最近 30 天没有可统计的 OpenCode 使用记录。")}
-    <p class="usage-note">统计读取本机 OpenCode 数据，不读取或上传聊天正文。部分 provider 不回传价格时费用可能为 $0.00，但 Token 与消息数仍会保留。</p>
+    ${renderUsageModelsSection(models, "模型明细", "最近 30 天；有 provider 记录费用时优先使用，否则按公开 API 单价估算", "估算费用", "最近 30 天没有可统计的 OpenCode 使用记录。")}
+    <p class="usage-note">统计读取本机 OpenCode 数据，不读取或上传聊天正文。费用优先用 provider 记录；为 $0 或缺失时按公开标准 API 单价估算，不等于订阅账单。</p>
   `;
 }
 

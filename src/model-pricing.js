@@ -57,6 +57,17 @@ const MODEL_PRICING = [
   [/^minimax-m2\.7(?:-|$)/, price(0.3, 1.2, 0.06)],
   [/^minimax-m2\.5(?:-|$)/, price(0.15, 0.95, 0.03)],
   [/^minimax-m2(?:-|$)/, price(0.27, 0.95, 0.03)],
+
+  // xAI Grok public API list prices (approximate standard tiers).
+  [/^grok-4\.5(?:-|$)/, price(3, 15, 0.75)],
+  [/^grok-4(?:-|$)/, price(3, 15, 0.75)],
+  [/^grok-3-mini(?:-|$)/, price(0.3, 0.5, 0.075)],
+  [/^grok-3(?:-|$)/, price(3, 15, 0.75)],
+
+  // Google Gemini public API list prices (flash / pro common IDs).
+  [/^gemini-(?:3(?:\.\d+)?|2\.5)-flash(?:-|$)/, price(0.3, 2.5, 0.03)],
+  [/^gemini-(?:3(?:\.\d+)?|2\.5)-pro(?:-|$)/, price(1.25, 10, 0.125)],
+  [/^gemini-2\.0-flash(?:-|$)/, price(0.1, 0.4, 0.025)],
 ];
 
 function price(input, output, cacheRead = input, cacheCreation = input, metadata = {}) {

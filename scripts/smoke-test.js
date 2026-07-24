@@ -388,6 +388,15 @@ assert.strictEqual(openCodeUsage.summary.costUsd, 1.25);
 assert.strictEqual(openCodeUsage.models.length, 2);
 assert.strictEqual(openCodeUsage.models[0].model, "cpa/gpt-5.6-sol");
 assert.strictEqual(openCodeUsage.models[0].totalTokens, 7_030_000);
+// Raw parse keeps provider $0; estimation is applied in collectOpenCodeAgentUsage.
+assert.strictEqual(openCodeUsage.models[0].costUsd, 0);
+assert.strictEqual(openCodeUsage.models[1].costUsd, 1.25);
+const { applyEstimatedCostsToModels } = require("../src/opencode-usage");
+const pricedModels = applyEstimatedCostsToModels(openCodeUsage.models);
+assert.strictEqual(pricedModels[0].costSource, "estimated");
+assert(pricedModels[0].costUsd > 0);
+assert.strictEqual(pricedModels[1].costSource, "recorded");
+assert.strictEqual(pricedModels[1].costUsd, 1.25);
 
 // OpenCode "today" must cut at local midnight via the SQLite database, not CLI --days 1.
 {
@@ -1101,6 +1110,12 @@ async function runOpenCodeCalendarTodaySmoke() {
     assert.strictEqual(collected.windows.today.totalTokens, 10_150);
     assert.strictEqual(collected.windows.today.calendarDay, true);
     assert.strictEqual(collected.windows.sevenDays.sessions, 3);
+    // 30-day model list should carry estimated costs for zero-recorded CPA rows.
+    assert.strictEqual(collected.models[0].model, "cpa/gpt-5.6-sol");
+    assert.strictEqual(collected.models[0].costSource, "estimated");
+    assert(collected.models[0].costUsd > 0);
+    assert.strictEqual(collected.windows.thirtyDays.costSource, "estimated");
+    assert(collected.windows.thirtyDays.costUsd > 1.25);
   } finally {
     fs.rmSync(fixture.openCodeDbDir, { recursive: true, force: true });
     delete global.__openCodeTodayDbSmoke;
