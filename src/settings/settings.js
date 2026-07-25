@@ -492,7 +492,7 @@ function providerNeedsAttention(provider) {
     ["error", "expired", "missing", "danger"].includes(runtime?.status) ||
     Boolean(runtime?.failure) ||
     Boolean(expiry?.expired || expiry?.soon) ||
-    maxUsage >= 75
+    maxUsage >= 90
   );
 }
 
@@ -747,10 +747,6 @@ function healthRow(provider, runtime) {
     tone = "warn";
     label = "token 即将过期";
     action = `约 ${expiry.relative} 后过期`;
-  } else if (maxUsage >= 75 || status === "warn") {
-    tone = "warn";
-    label = "额度使用偏高";
-    action = "建议关注剩余额度";
   }
   const source = provider.importedFrom ? `${provider.importedFrom} 导入` : KIND_LABELS[provider.kind] || provider.kind;
   const detail = [source, provider.accountEmail, expiry ? `过期：${expiry.absolute}` : null, runtime?.message].filter(Boolean).join(" · ");

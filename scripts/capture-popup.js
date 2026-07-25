@@ -420,6 +420,14 @@ async function main() {
       statusText: '接近上限',
       tiers: [{ name: 'monthly', label: '月额度', utilization: 93 }],
     }, 0, false, false, false));
+    const quotaWatchCard = providerCardFromMarkup(renderProvider({
+      id: 'quota-watch-fixture',
+      name: 'Quota Watch Fixture',
+      kind: 'official-subscription',
+      status: 'warn',
+      statusText: '使用偏高',
+      tiers: [{ name: 'monthly', label: '月额度', utilization: 75 }],
+    }, 0, false, false, false));
     const serviceErrorCard = providerCardFromMarkup(renderProvider({
       id: 'service-error-fixture',
       name: 'Service Error Fixture',
@@ -441,9 +449,15 @@ async function main() {
       attentionFocusLabel: focusedCard?.getAttribute('aria-label') || '',
       quotaRiskSeparated: Boolean(
         quotaRiskCard?.classList.contains('is-quota-danger') &&
+        quotaRiskCard.dataset.needsAttention === 'true' &&
         !quotaRiskCard.classList.contains('is-service-attention') &&
         quotaRiskCard.querySelector('.status-pill')?.textContent === '可用' &&
         quotaRiskCard.querySelector('.tier.is-quota-danger .tier-risk-label')?.textContent === '接近上限'
+      ),
+      quotaWatchIsVisualOnly: Boolean(
+        quotaWatchCard?.classList.contains('is-quota-watch') &&
+        quotaWatchCard.dataset.needsAttention === 'false' &&
+        quotaWatchCard.querySelector('.tier.is-quota-watch .tier-risk-label')?.textContent === '需要关注'
       ),
       serviceErrorSeparated: Boolean(
         serviceErrorCard?.classList.contains('is-service-attention') &&
@@ -462,6 +476,9 @@ async function main() {
   }
   if (!assertions.quotaRiskSeparated) {
     throw new Error('Popup quota risk must not present a healthy service as a service error');
+  }
+  if (!assertions.quotaWatchIsVisualOnly) {
+    throw new Error('Popup quota watch state must remain visual without becoming actionable');
   }
   if (!assertions.serviceErrorSeparated) {
     throw new Error('Popup service error must retain a distinct card-level warning');

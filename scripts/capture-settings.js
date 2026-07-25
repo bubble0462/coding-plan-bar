@@ -71,6 +71,29 @@ const sampleConfig = {
   ],
 };
 
+const healthThresholdSnapshot = {
+  updatedAt: Date.parse("2026-07-25T10:00:00+08:00"),
+  refreshIntervalSeconds: 300,
+  providers: [
+    {
+      id: "codex",
+      name: "Codex",
+      kind: "official-subscription",
+      status: "warn",
+      statusText: "使用偏高",
+      tiers: [{ name: "weekly_limit", label: "周额度", utilization: 70 }],
+    },
+    {
+      id: "deepseek",
+      name: "DeepSeek",
+      kind: "balance",
+      status: "danger",
+      statusText: "接近上限",
+      tiers: [{ name: "monthly", label: "月额度", utilization: 90 }],
+    },
+  ],
+};
+
 const sampleImportJson = {
   type: "codex",
   account_id: "acct-cpa-sample",
@@ -169,6 +192,7 @@ async function main() {
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
     templates: providerTemplates(),
     agentUsage: mockAgentUsageEnvelope,
+    snapshot: showHealth ? healthThresholdSnapshot : undefined,
   }));
   ipcMain.handle("config:save", (_event, config) => ({
     config,
@@ -411,12 +435,18 @@ async function main() {
       const text = hero.textContent || "";
       const refreshActions = document.querySelectorAll('[data-action="refresh-quota"]');
       if (refreshActions.length !== 1) return false;
-      if (text.includes("全部正常")) {
-        return text.includes("已检查") && text.includes("上次刷新");
-      }
-      return text.includes("需要处理");
+      const rows = [...document.querySelectorAll(".health-row")];
+      const codexItem = document.querySelector('.provider-item[data-id="codex"]');
+      const deepseekItem = document.querySelector('.provider-item[data-id="deepseek"]');
+      return text.includes("1 个项目需要处理") &&
+        rows.length === 1 &&
+        (rows[0].textContent || "").includes("DeepSeek") &&
+        !(rows[0].textContent || "").includes("Codex") &&
+        codexItem?.querySelector(".provider-badge")?.textContent === "关注" &&
+        !codexItem.classList.contains("is-attention") &&
+        deepseekItem?.classList.contains("is-attention");
     })()`);
-    if (!healthSummary) throw new Error("Health page did not show actionable or freshness summary");
+    if (!healthSummary) throw new Error("Health page quota threshold regression failed");
   }
 
   if (showBackup) {

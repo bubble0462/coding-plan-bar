@@ -458,7 +458,6 @@ function providerAlertClass(provider) {
   if (providerServiceClass(provider)) return "is-attention";
   const risk = providerQuotaRisk(provider);
   if (risk === "danger") return "is-attention";
-  if (risk === "watch") return "is-watch";
   return "";
 }
 
