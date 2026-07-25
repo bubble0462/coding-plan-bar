@@ -416,7 +416,7 @@ assert(pricedModels[0].costUsd > 0);
 assert.strictEqual(pricedModels[1].costSource, "recorded");
 assert.strictEqual(pricedModels[1].costUsd, 1.25);
 
-// OpenCode "today" must cut at local midnight via the SQLite database, not CLI --days 1.
+// OpenCode windows must come from opencode.db with per-model public API estimates.
 {
   const DatabaseSync = require("node:sqlite").DatabaseSync;
   const openCodeDbDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-opencode-db-"));
@@ -437,29 +437,49 @@ assert.strictEqual(pricedModels[1].costUsd, 1.25);
   const insert = db.prepare(
     "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
   );
+  const threeDaysAgo = dayStart - 3 * 24 * 60 * 60 * 1000;
   const rows = [
-    // Yesterday (must be excluded from calendar today).
-    ["m-old", "s-old", dayStart - 3_600_000, dayStart - 3_600_000, JSON.stringify({
+    // Outside 7d window but inside 30d.
+    ["m-old", "s-old", threeDaysAgo - 20 * 24 * 60 * 60 * 1000, threeDaysAgo - 20 * 24 * 60 * 60 * 1000, JSON.stringify({
       role: "assistant",
-      cost: 9.99,
-      tokens: { input: 1_000_000, output: 1_000, reasoning: 0, cache: { read: 50_000_000, write: 0 } },
-      time: { created: dayStart - 3_600_000, completed: dayStart - 3_500_000 },
-      modelID: "old/model",
+      cost: 0,
+      tokens: { input: 100_000, output: 1_000, reasoning: 0, cache: { read: 200_000, write: 0 } },
+      time: {
+        created: threeDaysAgo - 20 * 24 * 60 * 60 * 1000,
+        completed: threeDaysAgo - 20 * 24 * 60 * 60 * 1000 + 1_000,
+      },
+      modelID: "cpa/gpt-5.6-sol",
     })],
-    // Today completed.
+    // Yesterday (excluded from calendar today, included in 7d).
+    ["m-yest", "s-yest", dayStart - 3_600_000, dayStart - 3_600_000, JSON.stringify({
+      role: "assistant",
+      cost: 0,
+      tokens: { input: 1_000_000, output: 1_000, reasoning: 0, cache: { read: 2_000_000, write: 0 } },
+      time: { created: dayStart - 3_600_000, completed: dayStart - 3_500_000 },
+      modelID: "cpa/gpt-5.6-sol",
+    })],
+    // Today completed with provider-recorded cost.
     ["m-today", "s-today", dayStart + 3_600_000, dayStart + 3_600_000, JSON.stringify({
       role: "assistant",
       cost: 1.25,
       tokens: { input: 2_000, output: 100, reasoning: 50, cache: { read: 8_000, write: 0 } },
       time: { created: dayStart + 3_600_000, completed: dayStart + 3_700_000 },
-      modelID: "today/model",
+      modelID: "cpa/gemini-3.6-flash-high",
+    })],
+    // Today completed needing public API estimate (recorded $0).
+    ["m-today-sol", "s-today", dayStart + 4_000_000, dayStart + 4_000_000, JSON.stringify({
+      role: "assistant",
+      cost: 0,
+      tokens: { input: 10_000, output: 500, reasoning: 0, cache: { read: 20_000, write: 0 } },
+      time: { created: dayStart + 4_000_000, completed: dayStart + 4_100_000 },
+      modelID: "cpa/gpt-5.6-sol",
     })],
     // In-progress stream without completed (must be skipped).
-    ["m-wip", "s-today", dayStart + 4_000_000, dayStart + 4_000_000, JSON.stringify({
+    ["m-wip", "s-today", dayStart + 5_000_000, dayStart + 5_000_000, JSON.stringify({
       role: "assistant",
       cost: 0,
       tokens: { input: 999_999, output: 1, reasoning: 0, cache: { read: 999_999, write: 0 } },
-      time: { created: dayStart + 4_000_000 },
+      time: { created: dayStart + 5_000_000 },
       modelID: "wip/model",
     })],
   ];
@@ -473,12 +493,13 @@ assert.strictEqual(pricedModels[1].costUsd, 1.25);
   assert.strictEqual(today.source, "database");
   assert.strictEqual(today.summary.calendarDay, true);
   assert.strictEqual(today.summary.sessions, 1);
-  assert.strictEqual(today.summary.requests, 1);
-  assert.strictEqual(today.summary.inputTokens, 2_000);
-  assert.strictEqual(today.summary.outputTokens, 150);
-  assert.strictEqual(today.summary.cacheReadTokens, 8_000);
-  assert.strictEqual(today.summary.totalTokens, 10_150);
-  assert.strictEqual(today.summary.costUsd, 1.25);
+  assert.strictEqual(today.summary.requests, 2);
+  assert.strictEqual(today.summary.inputTokens, 12_000);
+  assert.strictEqual(today.summary.outputTokens, 650);
+  assert.strictEqual(today.summary.cacheReadTokens, 28_000);
+  assert.strictEqual(today.summary.totalTokens, 40_650);
+  assert.strictEqual(today.summary.costSource, "estimated");
+  assert(today.summary.costUsd > 1.25);
   assert.strictEqual(today.summary.rangeStartAt, dayStart);
   global.__openCodeTodayDbSmoke = {
     fixedNow,
@@ -1118,22 +1139,38 @@ async function runOpenCodeCalendarTodaySmoke() {
     const collected = await collectOpenCodeAgentUsage({
       now: fixture.fixedNow,
       resolveDbPath: () => fixture.openCodeDbPath,
-      runStats: async (days) => {
-        if (days === 1) throw new Error("today must not call CLI --days 1 when DB works");
-        return fixture.openCodeStatsFixture.replace("Days 7", `Days ${days}`);
+      runStats: async () => {
+        throw new Error("DB path available — CLI stats must not be required");
       },
     });
     assert.strictEqual(collected.todaySource, "database");
-    assert.strictEqual(collected.windows.today.requests, 1);
-    assert.strictEqual(collected.windows.today.totalTokens, 10_150);
+    assert.strictEqual(collected.source, "database");
+    assert.strictEqual(collected.windows.today.requests, 2);
+    assert.strictEqual(collected.windows.today.totalTokens, 40_650);
     assert.strictEqual(collected.windows.today.calendarDay, true);
-    assert.strictEqual(collected.windows.sevenDays.sessions, 3);
-    // 30-day model list should carry estimated costs for zero-recorded CPA rows.
-    assert.strictEqual(collected.models[0].model, "cpa/gpt-5.6-sol");
-    assert.strictEqual(collected.models[0].costSource, "estimated");
-    assert(collected.models[0].costUsd > 0);
+    assert.strictEqual(collected.windows.today.costSource, "estimated");
+    assert(collected.windows.today.costUsd > 1.25);
+
+    // 7d includes yesterday + today; excludes 20d-old row.
+    assert.strictEqual(collected.windows.sevenDays.sessions, 2);
+    assert.strictEqual(collected.windows.sevenDays.requests, 3);
+    assert.strictEqual(collected.windows.sevenDays.costSource, "estimated");
+    assert(collected.windows.sevenDays.costUsd > collected.windows.today.costUsd);
+
+    // 30d includes all completed rows and per-model public API estimates.
+    assert.strictEqual(collected.windows.thirtyDays.sessions, 3);
+    assert.strictEqual(collected.windows.thirtyDays.requests, 4);
     assert.strictEqual(collected.windows.thirtyDays.costSource, "estimated");
-    assert(collected.windows.thirtyDays.costUsd > 1.25);
+    assert(collected.windows.thirtyDays.costUsd >= collected.windows.sevenDays.costUsd);
+
+    const sol = collected.models.find((item) => item.model === "cpa/gpt-5.6-sol");
+    assert.ok(sol);
+    assert.strictEqual(sol.costSource, "estimated");
+    assert(sol.costUsd > 0);
+    const gemini = collected.models.find((item) => item.model === "cpa/gemini-3.6-flash-high");
+    assert.ok(gemini);
+    assert.strictEqual(gemini.costSource, "recorded");
+    assert.strictEqual(gemini.costUsd, 1.25);
   } finally {
     fs.rmSync(fixture.openCodeDbDir, { recursive: true, force: true });
     delete global.__openCodeTodayDbSmoke;

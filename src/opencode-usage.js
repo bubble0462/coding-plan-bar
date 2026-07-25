@@ -4,11 +4,6 @@ const path = require("path");
 const { spawn } = require("child_process");
 const { calculateCostUsd } = require("./model-pricing");
 
-const OPEN_CODE_WINDOWS = [
-  // "today" is calendar-local midnight → now from opencode.db (not CLI --days 1).
-  { key: "sevenDays", days: 7 },
-  { key: "thirtyDays", days: 30 },
-];
 const OPEN_CODE_MODEL_LIMIT = 12;
 const OPEN_CODE_TIMEOUT_MS = 30_000;
 const OPEN_CODE_DB_CANDIDATES = [
@@ -16,58 +11,103 @@ const OPEN_CODE_DB_CANDIDATES = [
   path.join(process.env.XDG_DATA_HOME || "", "opencode", "opencode.db"),
 ];
 
+/**
+ * Collect OpenCode usage for today / 7d / 30d.
+ *
+ * Prefer the local opencode.db so every window can be cut consistently and
+ * priced per model via public API list prices. CLI stats remain a fallback
+ * when the database is missing or unreadable.
+ */
 async function collectOpenCodeAgentUsage(options = {}) {
   const now = Number(options.now) || Date.now();
   const runStats = options.runStats || runOpenCodeStats;
   const resolveDbPath = options.resolveDbPath || resolveOpenCodeDatabasePath;
-  const collectToday = options.collectTodayFromDatabase || collectOpenCodeTodayFromDatabase;
+  const collectFromDatabase = options.collectFromDatabase || collectOpenCodeUsageFromDatabase;
 
   try {
-    const todayPromise = Promise.resolve()
-      .then(() => collectToday({ now, resolveDbPath }))
-      .catch(async (error) => {
-        // Fall back to rolling 24h CLI stats only when the local DB path is unusable.
-        const output = await runStats(1, 0);
-        const parsed = parseOpenCodeStats(output);
-        return {
-          summary: { ...parsed.summary, calendarDay: false },
-          source: "cli-fallback",
-          error: error?.message || String(error),
-        };
+    const dbPath = resolveDbPath(options);
+    if (dbPath) {
+      const dayStart = localDayStartMs(now);
+      const sevenStart = now - 7 * 24 * 60 * 60 * 1000;
+      const thirtyStart = now - 30 * 24 * 60 * 60 * 1000;
+      // One scan from the earliest bound; derive all windows in memory.
+      const scanned = collectFromDatabase({
+        now,
+        startMs: thirtyStart,
+        dbPath,
+        resolveDbPath: () => dbPath,
       });
-    const cliPromises = OPEN_CODE_WINDOWS.map(async ({ key, days }) => {
-      const models = key === "thirtyDays" ? OPEN_CODE_MODEL_LIMIT : 0;
-      const output = await runStats(days, models);
-      return [key, parseOpenCodeStats(output)];
-    });
-    const [todayResult, ...cliOutputs] = await Promise.all([todayPromise, ...cliPromises]);
-    const windows = Object.fromEntries(cliOutputs.map(([key, parsed]) => [key, applyEstimatedCostToSummary(parsed.summary)]));
-    windows.today = applyEstimatedCostToSummary(todayResult.summary);
-    const thirtyDays = cliOutputs.find(([key]) => key === "thirtyDays")?.[1] || { models: [] };
-    const models = applyEstimatedCostsToModels(thirtyDays.models || []);
-    // Prefer the sum of priced model estimates for the 30-day card when OpenCode
-    // recorded $0 for subscription / CPA providers.
-    if (models.length) {
-      windows.thirtyDays = mergeSummaryWithModelEstimates(windows.thirtyDays, models);
+      const today = sliceOpenCodeAggregate(scanned, dayStart, now, { calendarDay: true });
+      const sevenDays = sliceOpenCodeAggregate(scanned, sevenStart, now, { calendarDay: false });
+      const thirtyDays = sliceOpenCodeAggregate(scanned, thirtyStart, now, { calendarDay: false });
+      // sliceOpenCodeAggregate already applies public-API estimates once.
+      const models = (thirtyDays.models || []).slice(0, OPEN_CODE_MODEL_LIMIT);
+
+      return {
+        available: true,
+        generatedAt: now,
+        windows: {
+          today: today.summary,
+          sevenDays: sevenDays.summary,
+          thirtyDays: thirtyDays.summary,
+        },
+        models,
+        todaySource: "database",
+        source: "database",
+        error: null,
+      };
     }
 
-    return {
-      available: true,
-      generatedAt: now,
-      windows,
-      models,
-      todaySource: todayResult.source,
-      error: null,
-    };
+    return collectOpenCodeAgentUsageFromCli({ now, runStats });
   } catch (error) {
-    return {
-      available: false,
-      generatedAt: now,
-      windows: {},
-      models: [],
-      error: formatOpenCodeError(error),
-    };
+    try {
+      return await collectOpenCodeAgentUsageFromCli({ now, runStats, fallbackError: error });
+    } catch (cliError) {
+      return {
+        available: false,
+        generatedAt: now,
+        windows: {},
+        models: [],
+        error: formatOpenCodeError(cliError),
+      };
+    }
   }
+}
+
+async function collectOpenCodeAgentUsageFromCli(options = {}) {
+  const now = Number(options.now) || Date.now();
+  const runStats = options.runStats || runOpenCodeStats;
+  const windowsSpec = [
+    { key: "today", days: 1 },
+    { key: "sevenDays", days: 7 },
+    { key: "thirtyDays", days: 30 },
+  ];
+  const outputs = await Promise.all(windowsSpec.map(async ({ key, days }) => {
+    const models = key === "thirtyDays" ? OPEN_CODE_MODEL_LIMIT : 0;
+    const output = await runStats(days, models);
+    return [key, parseOpenCodeStats(output)];
+  }));
+  const windows = {};
+  for (const [key, parsed] of outputs) {
+    windows[key] = applyEstimatedCostToSummary(parsed.summary);
+    if (key === "today") windows[key] = { ...windows[key], calendarDay: false };
+  }
+  const thirty = outputs.find(([key]) => key === "thirtyDays")?.[1] || { models: [] };
+  const models = applyEstimatedCostsToModels(thirty.models || []);
+  if (models.length) {
+    windows.thirtyDays = mergeSummaryWithModelEstimates(windows.thirtyDays, models);
+    windows.sevenDays = mergeSummaryWithModelEstimates(windows.sevenDays, models);
+    // today has no model breakdown from CLI without --models; keep summary-only.
+  }
+  return {
+    available: true,
+    generatedAt: now,
+    windows,
+    models,
+    todaySource: "cli-fallback",
+    source: "cli-fallback",
+    error: null,
+  };
 }
 
 function resolveOpenCodeDatabasePath(options = {}) {
@@ -86,11 +126,10 @@ function localDayStartMs(now = Date.now()) {
 }
 
 /**
- * Aggregate assistant usage from opencode.db since local midnight.
- * OpenCode stores Anthropic-style tokens: input is fresh, cache is separate.
- * Prefers completed messages; incomplete streaming rows are skipped.
+ * Scan completed assistant messages from opencode.db since startMs.
+ * Returns raw per-message events for further window slicing.
  */
-function collectOpenCodeTodayFromDatabase(options = {}) {
+function collectOpenCodeUsageFromDatabase(options = {}) {
   const now = Number(options.now) || Date.now();
   const startMs = Number.isFinite(options.startMs) ? Number(options.startMs) : localDayStartMs(now);
   const resolveDbPath = options.resolveDbPath || resolveOpenCodeDatabasePath;
@@ -118,21 +157,13 @@ function collectOpenCodeTodayFromDatabase(options = {}) {
   }
 
   try {
-    // Prefilter by row time_created for speed; final cut uses message.time.completed/created.
+    // Prefilter by row time_created for speed; final cut uses message.time.completed.
     const lowerBound = Math.max(0, startMs - 6 * 60 * 60 * 1000);
     const rows = database
       .prepare("SELECT session_id, time_created, data FROM message WHERE time_created >= ?")
       .all(lowerBound);
 
-    const sessions = new Set();
-    let requests = 0;
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let cacheReadTokens = 0;
-    let cacheCreationTokens = 0;
-    let costUsd = 0;
-    let hasCost = false;
-
+    const events = [];
     for (const row of rows) {
       let payload;
       try {
@@ -142,8 +173,6 @@ function collectOpenCodeTodayFromDatabase(options = {}) {
       }
       if (payload?.role !== "assistant" || !payload.tokens) continue;
       const time = payload.time || {};
-      if (time.completed == null && time.created == null) continue;
-      // Skip in-progress streams (no completed stamp) so partial tokens are not counted twice.
       if (time.completed == null) continue;
       const stamp = Number(time.completed || time.created || row.time_created || 0);
       if (!Number.isFinite(stamp) || stamp < startMs || stamp > now + 60_000) continue;
@@ -156,35 +185,21 @@ function collectOpenCodeTodayFromDatabase(options = {}) {
       const cacheWrite = Math.max(0, Number(cache.write) || 0);
       if (input + output + cacheRead + cacheWrite <= 0) continue;
 
-      requests += 1;
-      sessions.add(String(row.session_id || ""));
-      inputTokens += input;
-      outputTokens += output;
-      cacheReadTokens += cacheRead;
-      cacheCreationTokens += cacheWrite;
-      const cost = Number(payload.cost);
-      if (Number.isFinite(cost) && cost > 0) {
-        costUsd += cost;
-        hasCost = true;
-      }
+      const recordedCost = Number(payload.cost);
+      events.push({
+        sessionId: String(row.session_id || ""),
+        stamp,
+        model: String(payload.modelID || payload.model || "unknown"),
+        providerId: payload.providerID || null,
+        inputTokens: input,
+        outputTokens: output,
+        cacheReadTokens: cacheRead,
+        cacheCreationTokens: cacheWrite,
+        recordedCostUsd: Number.isFinite(recordedCost) && recordedCost > 0 ? recordedCost : 0,
+      });
     }
 
-    sessions.delete("");
-    const summary = {
-      sessions: sessions.size,
-      requests,
-      inputTokens,
-      outputTokens,
-      cacheReadTokens,
-      cacheCreationTokens,
-      costUsd: hasCost ? costUsd : 0,
-      partialCost: false,
-      totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
-      rangeStartAt: startMs,
-      rangeEndAt: now,
-      calendarDay: true,
-    };
-    return { summary, source: "database", dbPath };
+    return { events, dbPath, startMs, now, source: "database" };
   } finally {
     try {
       database.close();
@@ -192,6 +207,94 @@ function collectOpenCodeTodayFromDatabase(options = {}) {
       // Ignore close errors on a read-only handle.
     }
   }
+}
+
+/** Back-compat wrapper used by older tests. */
+function collectOpenCodeTodayFromDatabase(options = {}) {
+  const now = Number(options.now) || Date.now();
+  const startMs = Number.isFinite(options.startMs) ? Number(options.startMs) : localDayStartMs(now);
+  const scanned = collectOpenCodeUsageFromDatabase({ ...options, now, startMs });
+  const sliced = sliceOpenCodeAggregate(scanned, startMs, now, { calendarDay: true });
+  return {
+    summary: sliced.summary,
+    models: sliced.models,
+    source: "database",
+    dbPath: scanned.dbPath,
+  };
+}
+
+function sliceOpenCodeAggregate(scanned, startMs, endMs, flags = {}) {
+  const events = (scanned.events || []).filter((event) => event.stamp >= startMs && event.stamp <= endMs + 60_000);
+  const sessions = new Set();
+  const byModel = new Map();
+  let requests = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheCreationTokens = 0;
+  let recordedCostUsd = 0;
+
+  for (const event of events) {
+    requests += 1;
+    if (event.sessionId) sessions.add(event.sessionId);
+    inputTokens += event.inputTokens;
+    outputTokens += event.outputTokens;
+    cacheReadTokens += event.cacheReadTokens;
+    cacheCreationTokens += event.cacheCreationTokens;
+    recordedCostUsd += event.recordedCostUsd || 0;
+
+    const key = event.model || "unknown";
+    const current = byModel.get(key) || {
+      model: key,
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      recordedCostUsd: 0,
+      costUsd: 0,
+      partialCost: false,
+    };
+    current.requests += 1;
+    current.inputTokens += event.inputTokens;
+    current.outputTokens += event.outputTokens;
+    current.cacheReadTokens += event.cacheReadTokens;
+    current.cacheCreationTokens += event.cacheCreationTokens;
+    current.recordedCostUsd += event.recordedCostUsd || 0;
+    byModel.set(key, current);
+  }
+
+  const rawModels = [...byModel.values()].map((item) => ({
+    ...item,
+    totalTokens: item.inputTokens + item.outputTokens + item.cacheReadTokens + item.cacheCreationTokens,
+    // Feed recorded cost into estimator; $0 falls through to public API pricing.
+    costUsd: item.recordedCostUsd > 0 ? item.recordedCostUsd : 0,
+  }));
+  const models = applyEstimatedCostsToModels(rawModels)
+    .sort((left, right) => right.totalTokens - left.totalTokens || right.requests - left.requests);
+
+  const priced = models.filter((item) => item.costUsd != null && Number.isFinite(Number(item.costUsd)));
+  const estimatedTotal = priced.reduce((sum, item) => sum + Number(item.costUsd), 0);
+  const partialCost = priced.length > 0 && priced.length < models.length;
+  const hasPriced = priced.length > 0;
+
+  const summary = {
+    sessions: sessions.size,
+    requests,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+    costUsd: hasPriced ? estimatedTotal : recordedCostUsd > 0 ? recordedCostUsd : null,
+    partialCost: hasPriced ? partialCost : false,
+    costSource: hasPriced ? "estimated" : recordedCostUsd > 0 ? "recorded" : "unpriced",
+    rangeStartAt: startMs,
+    rangeEndAt: endMs,
+    calendarDay: Boolean(flags.calendarDay),
+  };
+
+  return { summary, models };
 }
 
 async function runOpenCodeStats(days, models = 0, options = {}) {
@@ -372,8 +475,6 @@ function parseOpenCodeModels(lines) {
     else if (cost != null) current.costUsd = cost;
   }
   commit();
-  // Keep provider-recorded costs only here; public-API estimates are applied once
-  // in collectOpenCodeAgentUsage so costSource is not rewritten to "recorded".
   return models.sort((left, right) => right.totalTokens - left.totalTokens || right.requests - left.requests);
 }
 
@@ -421,8 +522,6 @@ function applyEstimatedCostToSummary(summary) {
   if (Number.isFinite(recorded) && recorded > 0) {
     return { ...summary, costSource: "recorded", partialCost: Boolean(summary.partialCost) };
   }
-  // Aggregate window rows without per-model breakdown stay unpriced rather than $0.00
-  // when OpenCode reported a zero total (typical for subscription providers).
   if (Number.isFinite(recorded) && recorded === 0) {
     return { ...summary, costUsd: null, costSource: "unpriced", partialCost: false };
   }
@@ -488,16 +587,21 @@ function quoteWindowsArgument(value) {
 function formatOpenCodeError(error) {
   const detail = `${error?.message || ""}\n${error?.stderr || ""}`.toLowerCase();
   if (error?.code === "ENOENT" || /not recognized|not found|is not recognized/.test(detail)) {
-    return "\u672a\u68c0\u6d4b\u5230 OpenCode CLI\u3002\u8bf7\u5b89\u88c5 OpenCode \u540e\u91cd\u65b0\u7edf\u8ba1\u3002";
+    return "未检测到 OpenCode CLI。请安装 OpenCode 后重新统计。";
   }
-  if (error?.code === "ETIMEDOUT") return "OpenCode \u7edf\u8ba1\u8d85\u65f6\uff0c\u8bf7\u786e\u8ba4 OpenCode \u53ef\u4ee5\u6b63\u5e38\u8fd0\u884c\u540e\u91cd\u8bd5\u3002";
-  return "OpenCode \u7edf\u8ba1\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u672c\u673a OpenCode CLI \u53ef\u4ee5\u6b63\u5e38\u8fd0\u884c\u540e\u91cd\u8bd5\u3002";
+  if (error?.code === "ETIMEDOUT") return "OpenCode 统计超时，请确认 OpenCode 可以正常运行后重试。";
+  if (error?.code === "OPENCODE_DB_MISSING" || error?.code === "OPENCODE_DB_OPEN_FAILED") {
+    return "无法读取本机 OpenCode 数据库，请确认 OpenCode 已产生使用记录后重试。";
+  }
+  return "OpenCode 统计失败，请确认本机 OpenCode 可以正常运行后重试。";
 }
+
 module.exports = {
   OPEN_CODE_MODEL_LIMIT,
   applyEstimatedCostsToModels,
   collectOpenCodeAgentUsage,
   collectOpenCodeTodayFromDatabase,
+  collectOpenCodeUsageFromDatabase,
   estimateOpenCodeUsageCost,
   localDayStartMs,
   parseCompactMoney,
@@ -505,4 +609,5 @@ module.exports = {
   parseOpenCodeStats,
   resolveOpenCodeDatabasePath,
   runOpenCodeStats,
+  sliceOpenCodeAggregate,
 };

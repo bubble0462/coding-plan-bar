@@ -143,8 +143,8 @@ function renderOpenCodeAgentUsage(data) {
       ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "估算", "separate")}
       ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "估算", "separate")}
     </div>
-    ${renderUsageModelsSection(models, "模型明细", "最近 30 天；有 provider 记录费用时优先使用，否则按公开 API 单价估算", "估算费用", "最近 30 天没有可统计的 OpenCode 使用记录。")}
-    <p class="usage-note">统计读取本机 OpenCode 数据，不读取或上传聊天正文。费用优先用 provider 记录；为 $0 或缺失时按公开标准 API 单价估算，不等于订阅账单。</p>
+    ${renderUsageModelsSection(models, "模型明细", "最近 30 天；按模型 Token × 公开 API 单价估算（有 provider 记录费用时优先）", "估算费用", "最近 30 天没有可统计的 OpenCode 使用记录。")}
+    <p class="usage-note">今天 / 7 天 / 30 天均从本机 OpenCode 数据库按模型汇总并估算费用，不读取聊天正文。不等于订阅账单。</p>
   `;
 }
 
