@@ -46,11 +46,11 @@ Coding Plan Bar-Setup-0.4.4-x64.exe
 
 设置页左侧“账号与供应商”标题旁有三个快捷按钮：
 
-- **最新**：自动查找 Downloads 文件夹中最近生成的 CPA 账号 JSON（例如 `name@gmail.cpa.日期.json`），生成预览后导入账户。
-- **导入**：打开统一导入卡片，可拖入 CPA JSON、通过文件选择器选择文件，或直接粘贴 JSON 内容；预览确认后立即加密保存账户。
+- **最新**：自动查找 Downloads 文件夹中最近生成的 Claude 或 CPA 账号 JSON，生成预览后导入账户。
+- **导入**：打开统一导入卡片，可拖入 Claude/CPA JSON、通过文件选择器选择文件，或直接粘贴 JSON 内容；预览确认后立即加密保存账户。
 - **添加**：打开供应商模板选择器，用于新增和配置供应商。这是三个按钮中唯一用于添加供应商的按钮，不负责导入账户 JSON。
 
-“最新”和“导入”服务于 CPA 账户 JSON 导入；导入完成后，账户会出现在供应商列表中，并可单独启用、停用、排序和刷新额度。再次导入相同 `accountId` 会更新凭证，不会重复创建账户。确认导入会直接写入本机配置，无需再次点击保存。应用仅保存额度查询所需的 access token，不保存 CPA 文件中的 session token 或 ID token；导入预览也不会展示任何凭证原文。sub2api 与 sessions.json 仍可手动导入，便于迁移已有备份。应用会根据导入文件名保留来源：CPA 文件显示“CPA”，sub2api 文件显示“sub2api”；旧版本误标的 CPA 记录会在升级后自动修正，不会合并或删除账号。账号列表中的“导入账号”筛选会同时显示 CPA 与 sub2api 账号。
+“最新”和“导入”支持 Claude 与 CPA 账户 JSON。Claude 账号按邮箱更新，CPA 账号按 `accountId` 更新，不会与同邮箱的不同平台账号合并。确认导入会直接写入本机配置，无需再次点击保存。应用仅保存并使用额度查询所需的 access token，不保存 Claude refresh token、CPA session token 或 ID token；access token 使用 Windows DPAPI 加密，导入预览也不会展示凭证原文。sub2api 与 sessions.json 仍可手动导入，便于迁移已有备份。“导入账号”筛选包含 Claude、CPA 与 sub2api 账号。
 
 应用数据默认保存在：
 

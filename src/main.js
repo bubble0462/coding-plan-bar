@@ -28,6 +28,8 @@ const {
   previewAccountsImport,
   isCpaAccountFileName,
   isCpaAccountShape,
+  isClaudeAccountFileName,
+  isClaudeAccountShape,
 } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { calculatePopupPlacement } = require("./popup-placement");
@@ -594,7 +596,7 @@ function openConfigJson() {
 
 async function chooseImportAccountsFile() {
   const result = await dialog.showOpenDialog(settingsWindow || undefined, {
-    title: "导入 CPA 账号 JSON",
+    title: "导入账号 JSON",
     properties: ["openFile"],
     filters: [
       { name: "JSON 文件", extensions: ["json"] },
@@ -621,7 +623,7 @@ async function previewLatestImportFile() {
   if (!filePath) {
     return {
       canceled: true,
-      message: "Downloads 中没有找到 CPA 账号 JSON（例如 codex-name@gmail.com-plus.json 或 name@gmail.cpa.日期.json）",
+      message: "Downloads 中没有找到 Claude 或 CPA 账号 JSON",
     };
   }
   return {
@@ -659,12 +661,12 @@ function latestDownloadsImportFile() {
     .filter(Boolean)
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-  // Fast path: filename already looks like a CPA export.
-  const byName = files.find((file) => isCpaAccountFileName(file.name));
+  // Fast path: filename already looks like a supported account export.
+  const byName = files.find((file) => isClaudeAccountFileName(file.name) || isCpaAccountFileName(file.name));
   if (byName) return byName.filePath;
 
-  // Slow path: sniff recent small JSON files for CPA account shape so exports
-  // without "cpa" in the filename (codex-user@mail.com-plus.json) still work.
+  // Slow path: sniff recent small JSON files so exports without a recognized
+  // filename can still be found safely.
   const maxSniff = 30;
   const maxBytes = 2 * 1024 * 1024;
   for (const file of files.slice(0, maxSniff)) {
@@ -672,7 +674,7 @@ function latestDownloadsImportFile() {
     try {
       const raw = fs.readFileSync(file.filePath, "utf8");
       const parsed = JSON.parse(raw);
-      if (isCpaAccountShape(parsed) || isCpaAccountFileName(file.name)) return file.filePath;
+      if (isClaudeAccountShape(parsed) || isCpaAccountShape(parsed)) return file.filePath;
     } catch (_error) {
       // Ignore unreadable / non-JSON files while scanning Downloads.
     }

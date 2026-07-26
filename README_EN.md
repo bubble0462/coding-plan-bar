@@ -46,11 +46,11 @@ Quit any running older version before installing. The installer supports a custo
 
 The three shortcut buttons beside "Accounts & Providers" have different purposes:
 
-- **Latest**: finds the newest CPA account JSON in Downloads (for example, `name@gmail.cpa.date.json`) and prepares it for import.
-- **Import**: opens one import card that accepts a dropped CPA JSON file, a file selected from disk, or pasted JSON content. Confirming the preview encrypts and saves the account immediately.
+- **Latest**: finds the newest Claude or CPA account JSON in Downloads and prepares it for import.
+- **Import**: opens one import card that accepts a dropped Claude/CPA JSON file, a file selected from disk, or pasted JSON content. Confirming the preview encrypts and saves the account immediately.
 - **Add**: opens the provider template picker for creating and configuring a provider. It is the only one of the three buttons that adds a provider; it does not import account JSON.
 
-In short, **Latest** and **Import** are CPA account-JSON tools, while **Add** is the provider-configuration tool. Imported accounts appear in the provider list and can be enabled, disabled, reordered, and refreshed independently. Importing the same `accountId` again updates its credentials instead of creating a duplicate. Confirmed imports are saved immediately, so no second save action is required. Only the access token required for quota queries is retained; CPA session and ID tokens are not stored. sub2api and sessions.json files remain accepted through manual import for migration compatibility. The source label follows the imported file format: CPA files display “CPA” and sub2api files display “sub2api”. CPA records misclassified by an older build are corrected automatically without merging or deleting accounts. The Imported Accounts filter includes both CPA and sub2api accounts.
+**Latest** and **Import** support Claude and CPA account JSON files, while **Add** opens provider templates. Claude accounts update by email and CPA accounts update by `accountId`; accounts from different services are never merged just because they share an email. Confirmed imports are saved immediately. Only the access token required for quota queries is retained and encrypted with Windows DPAPI; Claude refresh tokens, CPA session tokens, and ID tokens are not stored or shown in previews. sub2api and sessions.json remain supported for migration. The Imported Accounts filter includes Claude, CPA, and sub2api accounts.
 
 Persistent app data is stored by default at:
 

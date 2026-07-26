@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.16] - 2026-07-26
+
+### Added
+
+- 支持导入 CPA 导出的 Claude OAuth 账号 JSON，例如 `claude-user@example.com.json`，导入后可独立查看 Claude 官方订阅额度。
+- 「最新文件」、选择文件、拖放和粘贴 JSON 均支持 Claude 账号格式；同一邮箱再次导入会更新账号，不会与同邮箱 Codex 账号合并。
+
+### Security
+
+- Claude 导入仅保存额度查询所需的 access token，并使用 Windows DPAPI 加密；refresh token 和 ID token 不保存、不展示。
+- 已过期的 Claude access token 会直接标记为过期，不再发送额度查询请求。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本。拿到新的 Claude 账号 JSON 后，可放入 Downloads 点击「最新文件」，或通过「导入」选择、拖放或粘贴。
+
 ## [0.4.15] - 2026-07-25
 
 ### Changed

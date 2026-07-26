@@ -72,7 +72,7 @@ function emptyImportResult(config, parsed) {
     updatedCount: 0,
     skippedCount: parsed.skippedCount,
     format: parsed.format,
-    message: parsed.skippedCount > 0 ? "没有找到可导入的 OpenAI OAuth 账号" : "文件中没有账号数据",
+    message: parsed.skippedCount > 0 ? "没有找到可导入的 OAuth 账号" : "文件中没有账号数据",
   };
 }
 
@@ -154,6 +154,7 @@ function collectCandidates(value) {
 
 function detectFormat(value, sourcePath = "") {
   const base = path.basename(sourcePath || "").toLowerCase();
+  if (isClaudeAccount(value, base)) return "claude";
   if (isCpaAccount(value, base)) return "cpa";
   if (base.includes("sub2api") || (value && typeof value === "object" && Array.isArray(value.accounts) && value.exported_at)) {
     return "sub2api";
@@ -171,8 +172,9 @@ function normalizeImportedAccount(candidate, format) {
   const user = candidate.user && typeof candidate.user === "object" ? candidate.user : {};
   const account = candidate.account && typeof candidate.account === "object" ? candidate.account : {};
 
-  const platform = String(candidate.platform || credentials.platform || candidate.authProvider || "openai").toLowerCase();
-  if (platform && !["openai", "chatgpt", "codex"].includes(platform)) return null;
+  const platform = String(candidate.platform || credentials.platform || candidate.authProvider || (format === "claude" ? "claude" : "openai")).toLowerCase();
+  const supportedPlatforms = format === "claude" ? ["anthropic", "claude"] : ["openai", "chatgpt", "codex"];
+  if (platform && !supportedPlatforms.includes(platform)) return null;
 
   const accessToken = firstString([
     credentials.access_token,
@@ -223,10 +225,11 @@ function normalizeImportedAccount(candidate, format) {
     candidate.planType,
     candidate.plan_type,
   ]);
-  const name = firstString([candidate.name, email, userId, accountId]) || "OpenAI OAuth";
+  const name = firstString([candidate.name, email, userId, accountId]) || (format === "claude" ? "Claude OAuth" : "OpenAI OAuth");
 
   return {
     format,
+    tool: format === "claude" ? "claude" : "codex",
     name,
     email,
     accountId,
@@ -238,15 +241,16 @@ function normalizeImportedAccount(candidate, format) {
 }
 
 function accountToProvider(account, sourcePath) {
-  const identity = account.email || account.name || account.accountId || account.userId || "openai-account";
+  const tool = account.tool || (account.format === "claude" ? "claude" : "codex");
+  const identity = account.email || account.name || account.accountId || account.userId || `${tool}-account`;
   const importKey = importedAccountKey(account);
-  const idBase = `openai-${slug(identity) || tokenHash(account.accessToken).slice(0, 8)}`;
-  const displayName = account.email || account.name || `OpenAI OAuth ${account.accountId ? shortId(account.accountId) : ""}`.trim();
+  const idBase = `${tool}-${slug(identity) || tokenHash(account.accessToken).slice(0, 8)}`;
+  const displayName = account.email || account.name || `${tool === "claude" ? "Claude" : "OpenAI"} OAuth ${account.accountId ? shortId(account.accountId) : ""}`.trim();
   return {
     id: idBase,
     name: displayName,
     kind: "official-subscription",
-    tool: "codex",
+    tool,
     enabled: true,
     accessToken: account.accessToken,
     accountId: account.accountId || undefined,
@@ -263,6 +267,7 @@ function accountToProvider(account, sourcePath) {
 
 function sameImportedAccount(existing, incoming) {
   if (!existing || !incoming) return false;
+  if ((existing.tool || "codex") !== (incoming.tool || "codex")) return false;
 
   const existingSub2api = sub2apiIdentity(existing);
   const incomingSub2api = sub2apiIdentity(incoming);
@@ -307,7 +312,7 @@ function hasSameSub2apiAccountDifferentRecord(providers, incoming) {
 }
 
 function providerDisplayNameWithIdentity(provider) {
-  const baseName = provider.accountEmail || provider.name || "OpenAI OAuth";
+  const baseName = provider.accountEmail || provider.name || (provider.tool === "claude" ? "Claude OAuth" : "OpenAI OAuth");
   const suffix = provider.importedFrom === "sub2api" ? shortToken(provider.importKey) : shortId(provider.accountId);
   return baseName.includes(suffix) ? baseName : `${baseName} · ${suffix}`;
 }
@@ -373,6 +378,11 @@ function importHistoryEntry(parsed, applied, sourcePath) {
 }
 
 function importedAccountKey(account) {
+  if (account.format === "claude") {
+    if (account.email) return `claude:${canonicalEmail(account.email)}`;
+    if (account.userId) return `claude:${account.userId}`;
+    return `claude:${tokenHash(account.accessToken)}`;
+  }
   if (account.format === "sub2api") return `sub2api:${sub2apiRecordKey(account)}`;
   if (account.accountId) return `openai:${account.accountId}`;
   if (account.email) return `openai:${canonicalEmail(account.email)}`;
@@ -429,6 +439,9 @@ function refreshPreviewNames(items, providers) {
 }
 
 function previewIdentity(account, provider) {
+  if (account.format === "claude" || provider.importedFrom === "claude") {
+    return { method: account.email || provider.accountEmail ? "email" : "token", label: account.email || provider.accountEmail ? "Claude 邮箱" : "Claude token 指纹" };
+  }
   if (account.format === "cpa" || provider.importedFrom === "cpa") {
     return { method: "accountId", label: `CPA accountId · ${shortId(account.accountId || provider.accountId)}` };
   }
@@ -464,6 +477,7 @@ function updateReason(existing, incoming) {
 }
 
 function identityReason(provider) {
+  if (provider.importedFrom === "claude") return "新的 Claude 邮箱，将新增官方订阅账号";
   if (provider.importedFrom === "cpa") return "新的 CPA accountId，将新增官方订阅账号";
   if (provider.importedFrom === "sub2api") return "新的 sub2api 独立额度条目，将新增账号";
   if (provider.accountId) return "新的 accountId，将新增官方订阅账号";
@@ -491,7 +505,30 @@ function importMessage(format, importedCount, updatedCount, skippedCount) {
 }
 
 function formatLabel(format) {
-  return format === "cpa" ? "CPA" : format === "sub2api" ? "sub2api" : format === "sessions" ? "sessions.json" : "账号 JSON";
+  return format === "claude" ? "Claude" : format === "cpa" ? "CPA" : format === "sub2api" ? "sub2api" : format === "sessions" ? "sessions.json" : "账号 JSON";
+}
+
+function isClaudeAccountFileName(fileName = "") {
+  const base = path.basename(String(fileName || "")).toLowerCase();
+  return /^claude[._-].+\.json$/i.test(base);
+}
+
+function isClaudeAccountShape(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const provider = String(value.type || value.platform || value.authProvider || "").toLowerCase();
+  return Boolean(
+    value.access_token &&
+    value.email &&
+    ["anthropic", "claude"].includes(provider),
+  );
+}
+
+function isClaudeAccount(value, baseName = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (isClaudeAccountShape(value)) return true;
+  const provider = String(value.type || value.platform || value.authProvider || "").toLowerCase();
+  if (provider && !["anthropic", "claude"].includes(provider)) return false;
+  return isClaudeAccountFileName(baseName) && Boolean(value.access_token && value.email);
 }
 
 /**
@@ -600,4 +637,7 @@ module.exports = {
   isCpaAccountFileName,
   isCpaAccountShape,
   isCpaAccount,
+  isClaudeAccountFileName,
+  isClaudeAccountShape,
+  isClaudeAccount,
 };

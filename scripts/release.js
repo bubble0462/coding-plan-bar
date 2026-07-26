@@ -98,6 +98,7 @@ function main() {
   run("npm", ["run", "screenshot:reorder"]);
   run("npm", ["run", "screenshot:settings:import-drop"]);
   run("npm", ["run", "screenshot:settings:import-paste"]);
+  run("npm", ["run", "screenshot:settings:import-claude"]);
   run("npm", ["run", "screenshot:settings:dirty"]);
   run("npm", ["run", "screenshot:settings:usage"]);
   run("npm", ["run", "dist"]);

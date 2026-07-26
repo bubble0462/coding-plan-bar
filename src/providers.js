@@ -294,7 +294,15 @@ function readCodexCredentials(provider) {
 
 function readClaudeCredentials(provider) {
   if (provider.accessToken) {
-    return { accessToken: provider.accessToken, status: "valid", message: null };
+    if (isRedactedSecret(provider.accessToken)) {
+      return { accessToken: null, status: "missing", message: "token 已脱敏，请从本机配置重新读取" };
+    }
+    const expired = provider.expiresAt ? isExpired(provider.expiresAt) : false;
+    return {
+      accessToken: expired ? null : provider.accessToken,
+      status: expired ? "expired" : "valid",
+      message: expired ? "导入的 Claude OAuth token 已过期" : provider.accountEmail || null,
+    };
   }
 
   const credPath = provider.credentialsPath || path.join(os.homedir(), ".claude", ".credentials.json");
@@ -1525,6 +1533,7 @@ module.exports = {
   windowSecondsToTierName,
   writeJsonFileAtomic,
   readCodexCredentials,
+  readClaudeCredentials,
   queryGrokQuota,
   normalizeGrokBilling,
   queryZhipuCoding,

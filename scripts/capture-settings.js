@@ -11,6 +11,7 @@ const showImport = process.argv.includes("--import");
 const showImportSource = process.argv.includes("--import-source");
 const showImportDrop = process.argv.includes("--import-drop");
 const showImportPaste = process.argv.includes("--import-paste");
+const showImportClaude = process.argv.includes("--import-claude");
 const showDirty = process.argv.includes("--dirty");
 const showHealth = process.argv.includes("--health");
 const showBackup = process.argv.includes("--backup");
@@ -33,6 +34,8 @@ const outputPath = path.join(
               ? "settings-screenshot-import-drop.png"
               : showImportPaste
                 ? "settings-screenshot-import-paste.png"
+              : showImportClaude
+                ? "settings-screenshot-import-claude.png"
               : showDirty
                 ? "settings-screenshot-dirty.png"
                 : showHealth
@@ -106,7 +109,20 @@ const sampleImportJson = {
   session_token: "sample-session-token-not-persisted",
   expired: "2027-01-01T00:00:00Z",
 };
+const sampleClaudeImportJson = {
+  type: "claude",
+  access_token: "sample-claude-access-token-not-for-network-use",
+  refresh_token: "sample-refresh-token-must-not-render",
+  id_token: "sample-id-token-must-not-render",
+  disabled: false,
+  email: "demo.claude@example.com",
+  expired: "2027-01-01T00:00:00Z",
+};
 const sampleImportPath = path.join(__dirname, "..", "tmp", "demo.cpa.2026-07-18.json");
+const activeImportJson = showImportClaude ? sampleClaudeImportJson : sampleImportJson;
+const activeImportPath = showImportClaude
+  ? path.join(__dirname, "..", "tmp", "claude-demo.claude@example.com.json")
+  : sampleImportPath;
 
 // Mock updater state injected into the settings page. For --update we report a
 // newer release is available so the screenshot exercises the download path.
@@ -200,19 +216,19 @@ async function main() {
   }));
   ipcMain.handle("config:open-json", () => {});
   ipcMain.handle("config:choose-import-accounts", () => ({
-    ...previewAccountsImport(sampleConfig, sampleImportJson, sampleImportPath),
-    filePath: sampleImportPath,
+    ...previewAccountsImport(sampleConfig, activeImportJson, activeImportPath),
+    filePath: activeImportPath,
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
   }));
   ipcMain.handle("config:preview-import-file", () => ({
-    ...previewAccountsImport(sampleConfig, sampleImportJson, sampleImportPath),
-    filePath: sampleImportPath,
+    ...previewAccountsImport(sampleConfig, activeImportJson, activeImportPath),
+    filePath: activeImportPath,
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
   }));
   ipcMain.handle("config:import-accounts", () => ({
-    ...importAccountsIntoConfig(sampleConfig, sampleImportJson, sampleImportPath),
+    ...importAccountsIntoConfig(sampleConfig, activeImportJson, activeImportPath),
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
-    filePath: sampleImportPath,
+    filePath: activeImportPath,
   }));
   ipcMain.handle("config:preview-import", (_event, raw) => previewAccountsImport(sampleConfig, JSON.parse(raw), "pasted-json"));
   ipcMain.handle("quota:refresh", () => {});
@@ -262,9 +278,9 @@ async function main() {
   const window = new BrowserWindow({
     width: 940,
     height: 660,
-    show: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup || showUsage,
-    x: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup || showUsage ? -2200 : undefined,
-    y: showTemplates || showUpdate || showReorder || showImport || showHealth || showBackup || showUsage ? 80 : undefined,
+    show: showTemplates || showUpdate || showReorder || showImport || showImportClaude || showHealth || showBackup || showUsage,
+    x: showTemplates || showUpdate || showReorder || showImport || showImportClaude || showHealth || showBackup || showUsage ? -2200 : undefined,
+    y: showTemplates || showUpdate || showReorder || showImport || showImportClaude || showHealth || showBackup || showUsage ? 80 : undefined,
     frame: true,
     backgroundColor: "#f6f8fb",
     webPreferences: {
@@ -467,7 +483,7 @@ async function main() {
     if (!rendered) throw new Error("Backup page did not render expected controls");
   }
 
-  if (showImport || showImportSource || showImportDrop || showImportPaste) {
+  if (showImport || showImportSource || showImportDrop || showImportPaste || showImportClaude) {
     window.showInactive();
     await wait(120);
     await window.webContents.executeJavaScript(`
@@ -484,6 +500,7 @@ async function main() {
         text.includes("粘贴内容") &&
         latest.textContent.includes("最新文件") &&
         latest.title.includes("Downloads") &&
+        latest.title.includes("Claude") &&
         latest.title.includes("CPA");
     })()`);
     if (!sourceRendered) throw new Error("Unified import source dialog did not render expected controls");
@@ -506,7 +523,7 @@ async function main() {
     if (!dropped) throw new Error("Dropped JSON file did not open the import preview");
   }
 
-  if (showImport) {
+  if (showImport || showImportClaude) {
     await window.webContents.executeJavaScript(`
       document.querySelector('[data-action="choose-import-file"]')?.click();
     `);
@@ -522,14 +539,18 @@ async function main() {
     })()`);
   }
 
-  if (showImport || showImportPaste) {
+  if (showImport || showImportPaste || showImportClaude) {
     await wait(450);
     const rendered = await window.webContents.executeJavaScript(
       `(() => {
         const popover = document.querySelector(".import-popover");
         if (!popover) return false;
         const text = popover.textContent || "";
-        return text.includes("导入账号预览") && text.includes("检测账号") && text.includes("新增") && text.includes("CPA accountId");
+        const expectedIdentity = ${JSON.stringify(showImportClaude ? "Claude 邮箱" : "CPA accountId")};
+        const secretsHidden = !text.includes("sample-claude-access-token") &&
+          !text.includes("sample-refresh-token") &&
+          !text.includes("sample-id-token");
+        return text.includes("导入账号预览") && text.includes("检测账号") && text.includes("新增") && text.includes(expectedIdentity) && secretsHidden;
       })()`,
     );
     if (!rendered) throw new Error("Import preview did not render expected summary");
@@ -538,19 +559,20 @@ async function main() {
       if (!popover) return { hasFocus: false };
       const target = popover.querySelector("[data-action='confirm-import-preview']:not([disabled])") || popover.querySelector(".icon-close");
       target?.focus();
-      const cpaLabels = [...popover.querySelectorAll('.import-row small')]
-        .filter((node) => node.textContent.includes('CPA accountId'));
+      const expectedIdentity = ${JSON.stringify(showImportClaude ? "Claude 邮箱" : "CPA accountId")};
+      const identityLabels = [...popover.querySelectorAll('.import-row small')]
+        .filter((node) => node.textContent.includes(expectedIdentity));
       const zeroStats = [...popover.querySelectorAll('.import-summary > div')]
         .filter((node) => node.querySelector('strong')?.textContent.trim() === '0');
       return {
         hasFocus: popover.contains(document.activeElement),
-        cpaLabelCount: cpaLabels.length,
+        identityLabelCount: identityLabels.length,
         zeroStatsMuted: zeroStats.length > 0 && zeroStats.every((node) => node.classList.contains('is-zero')),
       };
     })()`);
     if (!importFocus.hasFocus) throw new Error("Import preview did not receive keyboard focus");
-    if (importFocus.cpaLabelCount !== 1) {
-      throw new Error(`Import preview did not show one CPA identity label: ${JSON.stringify(importFocus)}`);
+    if (importFocus.identityLabelCount !== 1) {
+      throw new Error(`Import preview did not show one expected identity label: ${JSON.stringify(importFocus)}`);
     }
     if (!importFocus.zeroStatsMuted) {
       throw new Error(`Import preview zero statistics were not visually muted: ${JSON.stringify(importFocus)}`);

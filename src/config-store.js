@@ -76,10 +76,11 @@ function normalizeAutoUpdate(autoUpdate) {
 
 function inferImportedFrom(importedFrom, importPath) {
   const fileName = path.basename(String(importPath || "")).toLowerCase();
-  const { isCpaAccountFileName } = require("./account-importer");
+  const { isCpaAccountFileName, isClaudeAccountFileName } = require("./account-importer");
+  if (isClaudeAccountFileName(fileName)) return "claude";
   if (isCpaAccountFileName(fileName)) return "cpa";
   if (/(?:^|[._-])sub2api(?:[._-].*)?\.json$/i.test(fileName)) return "sub2api";
-  if (importedFrom === "cpa" || importedFrom === "sub2api") return importedFrom;
+  if (["claude", "cpa", "sub2api"].includes(importedFrom)) return importedFrom;
   return importedFrom || undefined;
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "coding-plan-bar",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "productName": "Coding Plan Bar",
   "description": "Windows tray quota monitor for Codex and optional coding-plan providers.",
   "main": "src/main.js",
@@ -21,6 +21,7 @@
     "screenshot:settings:import-source": "electron scripts/capture-settings.js --import-source",
     "screenshot:settings:import-drop": "electron scripts/capture-settings.js --import-drop",
     "screenshot:settings:import-paste": "electron scripts/capture-settings.js --import-paste",
+    "screenshot:settings:import-claude": "electron scripts/capture-settings.js --import-claude",
     "screenshot:settings:dirty": "electron scripts/capture-settings.js --dirty",
     "screenshot:settings:health": "electron scripts/capture-settings.js --health",
     "screenshot:settings:backup": "electron scripts/capture-settings.js --backup",

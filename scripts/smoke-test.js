@@ -13,6 +13,7 @@ const {
   normalizeGrokBilling,
   queryZhipuCoding,
   readCodexCredentials,
+  readClaudeCredentials,
   refreshProviders,
 } = require("../src/providers");
 const {
@@ -38,6 +39,8 @@ const {
   previewAccountsImport,
   isCpaAccountFileName,
   isCpaAccountShape,
+  isClaudeAccountFileName,
+  isClaudeAccountShape,
 } = require("../src/account-importer");
 const { classifyFailure } = require("../src/failure-classifier");
 const { parseGrokWebBilling } = require("../src/grok-web-billing");
@@ -217,6 +220,103 @@ assert.strictEqual(secondCpaImport.importedCount, 0);
 assert.strictEqual(secondCpaImport.updatedCount, 1);
 assert.strictEqual(secondCpaImport.config.providers.length, 1);
 assert.strictEqual(secondCpaImport.config.providers[0].accessToken, "cpa-access-token-v2");
+
+const claudeFixture = {
+  type: "claude",
+  access_token: "claude-access-token-v1",
+  refresh_token: "must-not-be-persisted",
+  id_token: "must-not-be-persisted",
+  disabled: false,
+  email: "claude@example.com",
+  expired: "2099-07-26T21:03:08+08:00",
+  last_refresh: "2099-07-26T13:03:08+08:00",
+};
+assert.strictEqual(isClaudeAccountFileName("claude-claude@example.com.json"), true);
+assert.strictEqual(isClaudeAccountFileName("claude_example.json"), true);
+assert.strictEqual(isClaudeAccountFileName("notes-claude-export.json"), false);
+assert.strictEqual(isClaudeAccountFileName("codex-example@gmail.com-plus.json"), false);
+assert.strictEqual(isClaudeAccountShape(claudeFixture), true);
+assert.strictEqual(isClaudeAccountShape({ ...claudeFixture, type: "anthropic" }), true);
+assert.strictEqual(isClaudeAccountShape({ type: "claude", access_token: "x" }), false);
+const wrongTypeClaudeName = parseAccountImport({ ...claudeFixture, type: "codex" }, "claude-wrong-type.json");
+assert.strictEqual(wrongTypeClaudeName.format, "accounts");
+assert.strictEqual(wrongTypeClaudeName.accounts[0].tool, "codex");
+
+const parsedClaude = parseAccountImport(claudeFixture, "claude-claude@example.com.json");
+assert.strictEqual(parsedClaude.format, "claude");
+assert.strictEqual(parsedClaude.accounts.length, 1);
+assert.strictEqual(parsedClaude.accounts[0].tool, "claude");
+assert.strictEqual(parsedClaude.accounts[0].email, "claude@example.com");
+assert.strictEqual(parsedClaude.accounts[0].expiresAt, "2099-07-26T13:03:08.000Z");
+
+const claudePreview = previewAccountsImport({ providers: [] }, claudeFixture, "claude-claude@example.com.json");
+assert.strictEqual(claudePreview.format, "claude");
+assert.strictEqual(claudePreview.importedCount, 1);
+assert.strictEqual(claudePreview.items[0].identityLabel, "Claude 邮箱");
+assert.strictEqual(JSON.stringify(claudePreview).includes("claude-access-token-v1"), false);
+assert.strictEqual(JSON.stringify(claudePreview).includes("must-not-be-persisted"), false);
+
+const firstClaudeImport = importAccountsIntoConfig({ providers: [] }, claudeFixture, "claude-claude@example.com.json");
+assert.strictEqual(firstClaudeImport.format, "claude");
+assert.strictEqual(firstClaudeImport.importedCount, 1);
+assert.strictEqual(firstClaudeImport.updatedCount, 0);
+assert.strictEqual(firstClaudeImport.config.providers[0].tool, "claude");
+assert.strictEqual(firstClaudeImport.config.providers[0].importedFrom, "claude");
+assert.strictEqual(firstClaudeImport.config.providers[0].accessToken, "claude-access-token-v1");
+assert.strictEqual(firstClaudeImport.config.providers[0].refreshToken, undefined);
+assert.strictEqual(firstClaudeImport.config.providers[0].idToken, undefined);
+assert.strictEqual(normalizeConfig({
+  providers: [{ ...firstClaudeImport.config.providers[0], importPath: "pasted-json" }],
+}).providers[0].importedFrom, "claude");
+
+const secondClaudeImport = importAccountsIntoConfig(
+  firstClaudeImport.config,
+  { ...claudeFixture, access_token: "claude-access-token-v2" },
+  "claude-claude@example.com.json",
+);
+assert.strictEqual(secondClaudeImport.importedCount, 0);
+assert.strictEqual(secondClaudeImport.updatedCount, 1);
+assert.strictEqual(secondClaudeImport.config.providers.length, 1);
+assert.strictEqual(secondClaudeImport.config.providers[0].accessToken, "claude-access-token-v2");
+
+const sameEmailAcrossServices = importAccountsIntoConfig(
+  {
+    providers: [{
+      id: "openai-claude-at-example-com",
+      name: "claude@example.com",
+      kind: "official-subscription",
+      tool: "codex",
+      accessToken: "codex-token",
+      accountEmail: "claude@example.com",
+      importedFrom: "cpa",
+      importKey: "openai:codex-account-id",
+    }],
+  },
+  claudeFixture,
+  "claude-claude@example.com.json",
+);
+assert.strictEqual(sameEmailAcrossServices.importedCount, 1);
+assert.strictEqual(sameEmailAcrossServices.updatedCount, 0);
+assert.deepStrictEqual(sameEmailAcrossServices.config.providers.map((provider) => provider.tool), ["codex", "claude"]);
+
+assert.deepStrictEqual(readClaudeCredentials({
+  accessToken: "expired-claude-token",
+  accountEmail: "claude@example.com",
+  expiresAt: "2000-01-01T00:00:00.000Z",
+}), {
+  accessToken: null,
+  status: "expired",
+  message: "导入的 Claude OAuth token 已过期",
+});
+assert.deepStrictEqual(readClaudeCredentials({
+  accessToken: "valid-claude-token",
+  accountEmail: "claude@example.com",
+  expiresAt: "2099-01-01T00:00:00.000Z",
+}), {
+  accessToken: "valid-claude-token",
+  status: "valid",
+  message: "claude@example.com",
+});
 
 const legacySub2api = parseAccountImport(
   { exported_at: "2026-07-01T00:00:00Z", accounts: [{ credentials: { access_token: "legacy-token" } }] },
@@ -969,6 +1069,7 @@ async function runIncrementalRefreshSmoke() {
 async function runSecretStorageSmoke() {
   const secretDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-secret-"));
   const secretPath = path.join(secretDir, "config.json");
+  const claudeSecretPath = path.join(secretDir, "claude-config.json");
   const brokenPath = path.join(secretDir, "broken.json");
   const fakeSafeStorage = {
     isEncryptionAvailable: () => true,
@@ -1003,6 +1104,17 @@ async function runSecretStorageSmoke() {
       mergeRendererConfig(rendererConfig, revealed).providers[0].apiKey,
       "super-secret-key",
     );
+
+    writeConfigFile(claudeSecretPath, firstClaudeImport.config);
+    const storedClaude = fs.readFileSync(claudeSecretPath, "utf8");
+    assert(!storedClaude.includes("claude-access-token-v1"));
+    assert(!storedClaude.includes("must-not-be-persisted"));
+    assert(storedClaude.includes("accessTokenEncrypted"));
+    const revealedClaude = readConfigFile(claudeSecretPath);
+    assert.strictEqual(revealedClaude.providers[0].accessToken, "claude-access-token-v1");
+    assert.strictEqual(revealedClaude.providers[0].tool, "claude");
+    assert.strictEqual(revealedClaude.providers[0].importedFrom, "claude");
+    assert.strictEqual(configForRenderer(revealedClaude).providers[0].accessToken, SECRET_MASK);
 
     // One undecryptable credential must not crash boot, and its ciphertext
     // must survive a subsequent write so peers remain intact.
