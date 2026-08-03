@@ -9,6 +9,7 @@ const debugLayout = process.argv.includes("--debug-layout");
 const balanceOnly = process.argv.includes("--balance-only");
 const reorderTest = process.argv.includes("--reorder");
 const grokOnly = process.argv.includes("--grok");
+const darkMode = process.argv.includes("--dark");
 const providerCount = countArg ? Number(countArg.split("=")[1]) : null;
 const providerSequence = sequenceArg
   ? sequenceArg
@@ -28,7 +29,7 @@ const outputSuffix = balanceOnly
   : Number.isFinite(providerCount)
     ? `-${providerCount}`
     : "";
-const outputPath = path.join(__dirname, "..", "tmp", `popup-screenshot${outputSuffix}.png`);
+const outputPath = path.join(__dirname, "..", "tmp", `popup-screenshot${outputSuffix}${darkMode ? "-dark" : ""}.png`);
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-capture-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
 
@@ -218,6 +219,7 @@ function sampleSnapshotFor(count) {
     updatedAt: now - 42_000,
     elapsedMs: 386,
     refreshIntervalSeconds: 300,
+    theme: darkMode ? "dark" : "light",
     errorCount: providers.filter((provider) => provider.status === "danger" || provider.status === "error").length,
     providers,
   };
@@ -464,6 +466,7 @@ async function main() {
         !serviceErrorCard.classList.contains('is-quota-danger')
       ),
       resetCreditsText: document.querySelector('.provider[data-provider-id="codex"] .reset-credits-row strong')?.textContent || '',
+      rootTheme: document.documentElement.dataset.theme || '',
     };
   })()`);
   if (assertions.refreshHasBusy === 'missing') throw new Error('Popup refresh control was not rendered');
@@ -485,6 +488,9 @@ async function main() {
   }
   if (!grokOnly && !/剩余\s*5\s*次/.test(assertions.resetCreditsText)) {
     throw new Error(`Popup codex reset credits row was not rendered: ${JSON.stringify(assertions.resetCreditsText)}`);
+  }
+  if (darkMode && assertions.rootTheme !== "dark") {
+    throw new Error(`Popup dark theme was not applied to root element: ${JSON.stringify(assertions.rootTheme)}`);
   }
 
   app.exit(0);

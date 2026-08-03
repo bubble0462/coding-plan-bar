@@ -114,6 +114,7 @@ function render(isDataRefresh = false) {
   shell.classList.toggle("is-loading", Boolean(snapshot.loading));
   shell.classList.toggle("density-compact", snapshot.panelDensity === "compact");
   shell.classList.toggle("density-comfortable", snapshot.panelDensity !== "compact");
+  document.documentElement.dataset.theme = snapshot.theme === "dark" ? "dark" : "light";
 
   const status = root.querySelector("[data-role='refresh-status']");
   if (status) status.textContent = snapshot.loading ? "正在刷新..." : formatUpdated(snapshot.updatedAt);

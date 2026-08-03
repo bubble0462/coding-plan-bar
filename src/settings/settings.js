@@ -19,6 +19,7 @@ let state = {
     refreshIntervalSeconds: 300,
     showOnHover: true,
     panelDensity: "comfortable",
+    theme: "light",
     privacy: {
       suppressAdvancedJsonWarning: false,
       suppressBackupWarning: false,
@@ -262,6 +263,7 @@ async function load() {
     state.config = sanitizeConfig(cloneConfig(payload.config));
     state.snapshot = payload.snapshot || state.snapshot;
     state.templates = payload.templates || [];
+    applyTheme();
     state.selectedId = state.config.providers[0]?.id || null;
     state.status = "设置已载入";
     state.statusIsError = false;
@@ -290,6 +292,7 @@ function refreshUpdaterNavigation() {
 
 function render() {
   syncSelectedProviderWithFilters();
+  applyTheme();
   const selected = selectedProvider();
   const enterClass = hasRenderedSettingsShell ? "" : "is-entering";
   root.innerHTML = `
@@ -799,6 +802,7 @@ function renderBackupPage() {
       </div>
       ${renderProxySection()}
       ${renderDensitySection()}
+      ${renderThemeSection()}
       <div class="section">
         <div class="section-title">
           <strong>最近导入</strong>
@@ -863,6 +867,21 @@ function renderDensitySection() {
       <div class="segmented">
         <button class="segment ${state.config.panelDensity !== "compact" ? "is-active" : ""}" data-action="set-density" data-density="comfortable">舒适</button>
         <button class="segment ${state.config.panelDensity === "compact" ? "is-active" : ""}" data-action="set-density" data-density="compact">紧凑</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderThemeSection() {
+  return `
+    <div class="section theme-section">
+      <div class="section-title">
+        <strong>外观主题</strong>
+        <span>切换面板和设置窗口的配色。</span>
+      </div>
+      <div class="segmented">
+        <button class="segment ${state.config.theme !== "dark" ? "is-active" : ""}" data-action="set-theme" data-theme="light">浅色</button>
+        <button class="segment ${state.config.theme === "dark" ? "is-active" : ""}" data-action="set-theme" data-theme="dark">深色</button>
       </div>
     </div>
   `;
@@ -1412,6 +1431,9 @@ function bindEvents() {
   root.querySelector("[data-action='refresh-quota']")?.addEventListener("click", () => window.codingPlanBar.refresh());
   root.querySelectorAll("[data-action='set-density']").forEach((button) => {
     button.addEventListener("click", () => setPanelDensity(button.dataset.density));
+  });
+  root.querySelectorAll("[data-action='set-theme']").forEach((button) => {
+    button.addEventListener("click", () => setTheme(button.dataset.theme));
   });
   root.querySelectorAll("[data-action='set-proxy-mode']").forEach((button) => {
     button.addEventListener("click", () => setProxyMode(button.dataset.mode));
@@ -2272,6 +2294,17 @@ function setPanelDensity(value) {
   render();
 }
 
+function setTheme(value) {
+  state.config.theme = value === "dark" ? "dark" : "light";
+  applyTheme();
+  markDirty();
+  render();
+}
+
+function applyTheme() {
+  document.documentElement.dataset.theme = state.config.theme === "dark" ? "dark" : "light";
+}
+
 function setProxyMode(value) {
   const mode = value === "direct" || value === "manual" ? value : "system";
   const previous = state.config.proxy || { mode: "system", url: "" };
@@ -2664,6 +2697,7 @@ function cloneConfig(config) {
     refreshIntervalSeconds: Number(config.refreshIntervalSeconds || 300),
     showOnHover: config.showOnHover !== false,
     panelDensity: config.panelDensity === "compact" ? "compact" : "comfortable",
+    theme: config.theme === "dark" ? "dark" : "light",
     privacy: {
       suppressAdvancedJsonWarning: Boolean((config.privacy || {}).suppressAdvancedJsonWarning),
       suppressBackupWarning: Boolean((config.privacy || {}).suppressBackupWarning),

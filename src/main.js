@@ -90,6 +90,7 @@ let currentState = {
   updatedAt: null,
   refreshIntervalSeconds: 300,
   panelDensity: "comfortable",
+  theme: "light",
   errorCount: 0,
   providers: [],
 };
@@ -438,6 +439,7 @@ async function refreshAllNow(reason = "timer") {
       elapsedMs: Date.now() - startedAt,
       refreshIntervalSeconds: config.refreshIntervalSeconds,
       panelDensity: config.panelDensity,
+      theme: config.theme,
       errorCount,
       providers,
     };

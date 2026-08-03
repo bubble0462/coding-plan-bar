@@ -16,35 +16,37 @@ const showDirty = process.argv.includes("--dirty");
 const showHealth = process.argv.includes("--health");
 const showBackup = process.argv.includes("--backup");
 const showUsage = process.argv.includes("--usage");
+const darkMode = process.argv.includes("--dark");
+const baseOutputName = showTemplates
+  ? "settings-screenshot-templates"
+  : showUpdate
+    ? "settings-screenshot-update"
+    : showReorder
+      ? "settings-screenshot-reorder"
+      : showImport
+        ? "settings-screenshot-import"
+        : showImportSource
+          ? "settings-screenshot-import-source"
+          : showImportDrop
+            ? "settings-screenshot-import-drop"
+            : showImportPaste
+              ? "settings-screenshot-import-paste"
+            : showImportClaude
+              ? "settings-screenshot-import-claude"
+            : showDirty
+              ? "settings-screenshot-dirty"
+              : showHealth
+                ? "settings-screenshot-health"
+                : showBackup
+                  ? "settings-screenshot-backup"
+                  : showUsage
+                    ? "settings-screenshot-usage"
+                    : "settings-screenshot";
 const outputPath = path.join(
   __dirname,
   "..",
   "tmp",
-  showTemplates
-    ? "settings-screenshot-templates.png"
-    : showUpdate
-      ? "settings-screenshot-update.png"
-      : showReorder
-        ? "settings-screenshot-reorder.png"
-        : showImport
-          ? "settings-screenshot-import.png"
-          : showImportSource
-            ? "settings-screenshot-import-source.png"
-            : showImportDrop
-              ? "settings-screenshot-import-drop.png"
-              : showImportPaste
-                ? "settings-screenshot-import-paste.png"
-              : showImportClaude
-                ? "settings-screenshot-import-claude.png"
-              : showDirty
-                ? "settings-screenshot-dirty.png"
-                : showHealth
-                  ? "settings-screenshot-health.png"
-                  : showBackup
-                    ? "settings-screenshot-backup.png"
-                    : showUsage
-                      ? "settings-screenshot-usage.png"
-                      : "settings-screenshot.png",
+  `${baseOutputName}${darkMode ? "-dark" : ""}.png`,
 );
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-settings-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
@@ -52,6 +54,8 @@ app.setPath("userData", captureUserDataPath);
 const sampleConfig = {
   refreshIntervalSeconds: 300,
   showOnHover: true,
+  panelDensity: "comfortable",
+  theme: darkMode ? "dark" : "light",
   autoUpdate: { enabled: true },
   providers: [
     {
@@ -282,7 +286,7 @@ async function main() {
     x: showTemplates || showUpdate || showReorder || showImport || showImportClaude || showHealth || showBackup || showUsage ? -2200 : undefined,
     y: showTemplates || showUpdate || showReorder || showImport || showImportClaude || showHealth || showBackup || showUsage ? 80 : undefined,
     frame: true,
-    backgroundColor: "#f6f8fb",
+    backgroundColor: darkMode ? "#0f172a" : "#f6f8fb",
     webPreferences: {
       preload: path.join(__dirname, "..", "src", "preload.js"),
       contextIsolation: true,
@@ -713,6 +717,13 @@ async function main() {
     if (!controlAssertions.hasSelectTrigger) throw new Error("Custom select trigger was not rendered");
     if (!controlAssertions.hasSelectAriaControls) throw new Error("Custom select trigger must expose aria-controls");
     if (!controlAssertions.switchFocusRuleExists) throw new Error("Switch must declare a visible focus ring");
+  }
+
+  if (darkMode) {
+    const rootTheme = await window.webContents.executeJavaScript(`document.documentElement.dataset.theme || ''`);
+    if (rootTheme !== "dark") {
+      throw new Error(`Settings dark theme was not applied to root element: ${JSON.stringify(rootTheme)}`);
+    }
   }
 
   app.exit(0);

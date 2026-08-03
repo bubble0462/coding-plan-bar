@@ -28,6 +28,7 @@ function normalizeConfig(config) {
     refreshIntervalSeconds: Number(config.refreshIntervalSeconds || 300),
     showOnHover: config.showOnHover !== false,
     panelDensity: normalizePanelDensity(config.panelDensity),
+    theme: normalizeTheme(config.theme),
     privacy: normalizePrivacy(config.privacy),
     proxy: normalizeProxy(config.proxy),
     autoUpdate: normalizeAutoUpdate(config.autoUpdate),
@@ -38,6 +39,10 @@ function normalizeConfig(config) {
 
 function normalizePanelDensity(value) {
   return value === "compact" ? "compact" : "comfortable";
+}
+
+function normalizeTheme(value) {
+  return value === "dark" ? "dark" : "light";
 }
 
 function normalizePrivacy(privacy) {
