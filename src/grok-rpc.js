@@ -123,9 +123,17 @@ async function fetchGrokBillingViaCli(options = {}) {
   }
 }
 
+let resolvedGrokExecutable = null;
+let hasResolvedGrokExecutable = false;
+
 function resolveGrokExecutable(options = {}) {
   const env = options.env || process.env;
   if (env.GROK_CLI_PATH) return env.GROK_CLI_PATH;
+  // Memoize the resolved path on the production path (no injected env/impl).
+  // Grok install locations don't move; a not-found result stays uncached so a
+  // later install is picked up.
+  const canUseCache = !options.env && !options.execFileSyncImpl;
+  if (canUseCache && hasResolvedGrokExecutable) return resolvedGrokExecutable;
   const command = process.platform === "win32" ? "where.exe" : "which";
   try {
     const lookup = options.execFileSyncImpl || execFileSync;
@@ -135,7 +143,12 @@ function resolveGrokExecutable(options = {}) {
       timeout: 2000,
       stdio: ["ignore", "pipe", "ignore"],
     });
-    return String(output || "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) || null;
+    const found = String(output || "").split(/\r?\n/).map((line) => line.trim()).find(Boolean) || null;
+    if (canUseCache && found) {
+      hasResolvedGrokExecutable = true;
+      resolvedGrokExecutable = found;
+    }
+    return found;
   } catch (_error) {
     return null;
   }
