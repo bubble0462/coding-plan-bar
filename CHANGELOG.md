@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.20] - 2026-08-09
+
+### Added
+
+- 「Agent 用量」新增 Claude Code 统计：可在 Codex 与 Claude Code 之间切换，统计本机 `~/.claude/projects` 的今天、最近 7 天和最近 30 天的请求、Token、会话和模型费用。缓存 Token 按 Anthropic 计费方式单独统计。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。Claude Code 用量只读取本地 JSONL 会话日志，不上传任何内容；费用按公开 API 单价估算，不代表订阅账单。
+
 ## [0.4.19] - 2026-08-03
 
 ### Removed

@@ -37,7 +37,7 @@ const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials 
 const { classifyFailure } = require("./failure-classifier");
 const { listCodexModels, probeCodexStream } = require("./chat-probe");
 const { applyProxySettings } = require("./proxy");
-const { collectCodexAgentUsage } = require("./session-usage");
+const { collectCodexAgentUsage, collectClaudeAgentUsage } = require("./session-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
   DEFAULT_TTL_MS,
@@ -1025,22 +1025,29 @@ function refreshAgentUsage(reason = "scheduled") {
 async function refreshAgentUsageNow() {
   const config = readConfigFile(configPath);
   const startedAt = Date.now();
-  const codexResult = await Promise.allSettled([
+  const [codexResult, claudeResult] = await Promise.allSettled([
     collectCodexAgentUsage(config.providers || [], startedAt),
+    collectClaudeAgentUsage(config.providers || [], startedAt),
   ]);
-  const candidateCodex = codexResult[0].status === "fulfilled"
-    ? codexResult[0].value
-    : createCodexUsageFailure(codexResult[0].reason, startedAt);
+  const candidateCodex = codexResult.status === "fulfilled"
+    ? codexResult.value
+    : createCodexUsageFailure(codexResult.reason, startedAt);
+  const candidateClaude = claudeResult.status === "fulfilled"
+    ? claudeResult.value
+    : createClaudeUsageFailure(claudeResult.reason, startedAt);
   const sourceErrors = {};
   const previous = agentUsageSnapshot || {};
   const codex = mergeAgentUsageSource("codex", previous.codex, candidateCodex, sourceErrors);
+  const claude = mergeAgentUsageSource("claude", previous.claude, candidateClaude, sourceErrors);
   const snapshot = {
     generatedAt: Date.now(),
     codex,
+    claude,
     sourceErrors,
     refreshElapsedMs: Date.now() - startedAt,
   };
-  const hasFreshSource = isUsableAgentUsageSource("codex", candidateCodex);
+  const hasFreshSource = isUsableAgentUsageSource("codex", candidateCodex) ||
+    isUsableAgentUsageSource("claude", candidateClaude);
   agentUsageSnapshot = snapshot;
   agentUsageLastError = hasFreshSource ? null : Object.values(sourceErrors).join(" ") || null;
 
@@ -1062,6 +1069,17 @@ function createCodexUsageFailure(error, generatedAt) {
     daily: [],
     models: [],
     error: `Codex usage collection failed: ${error?.message || String(error)}`,
+  };
+}
+
+function createClaudeUsageFailure(error, generatedAt) {
+  return {
+    generatedAt,
+    lastEventAt: null,
+    windows: {},
+    daily: [],
+    models: [],
+    error: `Claude usage collection failed: ${error?.message || String(error)}`,
   };
 }
 

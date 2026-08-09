@@ -3200,6 +3200,46 @@ button {
   gap: 8px;
 }
 
+.agent-source-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  padding: 3px;
+}
+
+.agent-source-button {
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 160ms var(--ease-out), border-color 160ms var(--ease-out), color 160ms var(--ease-out);
+}
+
+.agent-source-button:hover {
+  background: var(--panel);
+  border-color: var(--border-light);
+  color: var(--text);
+}
+
+.agent-source-button:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.agent-source-button.is-active {
+  border-color: var(--blue-active);
+  background: var(--blue-softer);
+  color: var(--blue);
+}
+
 .usage-unavailable {
   min-height: 148px;
   place-items: start;

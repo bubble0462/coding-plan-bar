@@ -175,9 +175,31 @@ const mockCodexAgentUsage = {
   ],
 };
 
+const mockClaudeAgentUsage = {
+  generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
+  lastEventAt: Date.parse("2026-07-19T11:46:00+08:00"),
+  windows: {
+    today: { requests: 58, sessions: 4, inputTokens: 980000, outputTokens: 42100, cacheReadTokens: 8200000, cacheCreationTokens: 120000, totalTokens: 9342100, costUsd: 6.18, partialCost: false },
+    sevenDays: { requests: 742, sessions: 22, inputTokens: 12400000, outputTokens: 682000, cacheReadTokens: 98000000, cacheCreationTokens: 1400000, totalTokens: 112522000, costUsd: 78.44, partialCost: true },
+    thirtyDays: { requests: 2810, sessions: 88, inputTokens: 41000000, outputTokens: 2100000, cacheReadTokens: 318000000, cacheCreationTokens: 4600000, totalTokens: 365700000, costUsd: 248.92, partialCost: true },
+  },
+  daily: [
+    { date: "2026-07-13", totalTokens: 38400000 }, { date: "2026-07-14", totalTokens: 52100000 },
+    { date: "2026-07-15", totalTokens: 29800000 }, { date: "2026-07-16", totalTokens: 61200000 },
+    { date: "2026-07-17", totalTokens: 44600000 }, { date: "2026-07-18", totalTokens: 58800000 },
+    { date: "2026-07-19", totalTokens: 9342100 },
+  ],
+  models: [
+    { model: "claude-opus-4-8", requests: 1240, totalTokens: 210400000, costUsd: 188.42, partialCost: false },
+    { model: "claude-sonnet-4-6", requests: 1022, totalTokens: 98300000, costUsd: 42.18, partialCost: false },
+    { model: "claude-haiku-4-5", requests: 548, totalTokens: 57000000, costUsd: 18.32, partialCost: true },
+  ],
+};
+
 const mockAgentUsage = {
   generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
   codex: mockCodexAgentUsage,
+  claude: mockClaudeAgentUsage,
 };
 const mockAgentUsageEnvelope = {
   data: mockAgentUsage,
@@ -402,6 +424,15 @@ async function main() {
       `Boolean(document.querySelector(".usage-loading"))`,
     );
     if (usageLoading) throw new Error("Cached agent usage rendered a blocking loading state");
+
+    await window.webContents.executeJavaScript(`document.querySelector('[data-action="set-agent-usage-source"][data-source="claude"]')?.click()`);
+    await wait(120);
+    const claudeRendered = await window.webContents.executeJavaScript(`(() => {
+      const page = document.querySelector(".usage-page");
+      const text = page?.textContent || "";
+      return text.includes("claude-opus-4-8") && text.includes("365.7M");
+    })()`);
+    if (!claudeRendered) throw new Error("Agent usage did not switch to Claude Code statistics");
   }
 
   if (showHealth) {

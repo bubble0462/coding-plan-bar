@@ -49,10 +49,11 @@ const { normalizeModelId, findModelPricing, calculateCostUsd } = require("../src
 const {
   parseCodexJsonl,
   parseClaudeJsonl,
+  collectClaudeAgentUsage,
   aggregateTierUsage,
   matchesProvider,
   matchingUsageEvents,
-  summarizeCodexUsage,
+  summarizeAgentUsage,
 } = require("../src/session-usage");
 const {
   parseVersion,
@@ -475,7 +476,7 @@ const olderCodexEvent = {
   timestampMs: usageNow - 15 * 24 * 60 * 60 * 1000,
   timestamp: new Date(usageNow - 15 * 24 * 60 * 60 * 1000).toISOString(),
 };
-const agentUsage = summarizeCodexUsage([...codexEvents, ...forkedCodexEvents, olderCodexEvent], usageNow);
+const agentUsage = summarizeAgentUsage([...codexEvents, ...forkedCodexEvents, olderCodexEvent], "codex", usageNow);
 assert.strictEqual(agentUsage.windows.today.requests, 3);
 assert.strictEqual(agentUsage.windows.sevenDays.requests, 3);
 assert.strictEqual(agentUsage.windows.thirtyDays.requests, 4);
@@ -1119,6 +1120,39 @@ async function runFetchTimeoutSmoke() {
   }
 }
 
+async function runClaudeAgentUsageSmoke() {
+  // collectClaudeAgentUsage must read ~/.claude/projects, parse assistant
+  // usage events, and produce the same window/model shape as Codex.
+  const fixedNow = Date.parse("2026-07-19T12:00:00+08:00");
+  const result = await collectClaudeAgentUsage([], fixedNow);
+  assert.ok(result && typeof result === "object", "Claude agent usage result missing");
+  assert.strictEqual(typeof result.generatedAt, "number");
+  assert.ok(result.windows && result.windows.today && result.windows.sevenDays && result.windows.thirtyDays, "Claude windows missing");
+  assert.ok(Array.isArray(result.daily), "Claude daily array missing");
+  assert.ok(Array.isArray(result.models), "Claude models array missing");
+  // Window shape parity with Codex (required by the shared renderer).
+  for (const window of [result.windows.today, result.windows.sevenDays, result.windows.thirtyDays]) {
+    for (const key of ["requests", "sessions", "inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens", "totalTokens"]) {
+      assert.strictEqual(typeof window[key], "number", `Claude window missing ${key}`);
+    }
+    assert.ok(window.costUsd === null || typeof window.costUsd === "number", "Claude window costUsd invalid");
+    assert.strictEqual(typeof window.partialCost, "boolean", "Claude window partialCost invalid");
+  }
+  // summarizeAgentUsage with the claude source must not mix in codex events.
+  const mixed = summarizeAgentUsage(
+    [
+      { source: "codex", model: "gpt-5", timestampMs: fixedNow, inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 110, costUsd: 0.01, id: "codex:1", sessionId: "s1" },
+      { source: "claude", model: "claude-sonnet-4", timestampMs: fixedNow, inputTokens: 200, outputTokens: 20, cacheReadTokens: 50, cacheCreationTokens: 5, totalTokens: 275, costUsd: 0.02, id: "claude:1", sessionId: "s2" },
+    ],
+    "claude",
+    fixedNow,
+  );
+  assert.strictEqual(mixed.windows.thirtyDays.requests, 1, "Claude summarize leaked a codex event");
+  assert.strictEqual(mixed.windows.thirtyDays.inputTokens, 200);
+  assert.strictEqual(mixed.windows.thirtyDays.cacheReadTokens, 50);
+  assert.strictEqual(mixed.windows.thirtyDays.sessions, 1);
+}
+
 runZhipuRequestSmoke()
   .then(runGrokRefreshSmoke)
   .then(runGrokSourceSmoke)
@@ -1126,6 +1160,7 @@ runZhipuRequestSmoke()
   .then(runSecretStorageSmoke)
   .then(runUpdaterIntegritySmoke)
   .then(runFetchTimeoutSmoke)
+  .then(runClaudeAgentUsageSmoke)
   .then(() => console.log("Smoke tests passed"))
   .catch((error) => {
     console.error(error);

@@ -27,7 +27,17 @@ async function collectCodexAgentUsage(providers = [], now = Date.now()) {
   const groups = await Promise.all(
     [...requirements.codexDirs].map((dir) => readSessionTree(dir, "codex", now, activeFileKeys)),
   );
-  return summarizeCodexUsage(dedupeEvents(groups.flat()), now);
+  return summarizeAgentUsage(dedupeEvents(groups.flat()), "codex", now);
+}
+
+async function collectClaudeAgentUsage(providers = [], now = Date.now()) {
+  const requirements = usageRequirements(providers);
+  requirements.claudeDirs.add(path.join(os.homedir(), ".claude"));
+  const activeFileKeys = new Set();
+  const groups = await Promise.all(
+    [...requirements.claudeDirs].map((dir) => readSessionTree(dir, "claude", now, activeFileKeys)),
+  );
+  return summarizeAgentUsage(dedupeEvents(groups.flat()), "claude", now);
 }
 
 function usageRequirements(providers) {
@@ -214,6 +224,7 @@ function parseClaudeJsonl(content, fileKey = "claude") {
     events.push(usageEvent({
       id: `claude:${message.id || `${path.basename(fileKey)}:${fallbackIndex}`}`,
       source: "claude",
+      sessionId: value.sessionId || null,
       model: normalizeModelId(message.model),
       accountEmail: firstString([value.account_email, value.accountEmail, value.email, value.user_email, value.userEmail]),
       timestamp: value.timestamp,
@@ -325,18 +336,18 @@ function matchesProvider(provider, event) {
   return false;
 }
 
-function summarizeCodexUsage(events, now = Date.now()) {
-  const codexEvents = (events || []).filter((event) => event.source === "codex" && event.timestampMs > 0);
+function summarizeAgentUsage(events, source, now = Date.now()) {
+  const sourceEvents = (events || []).filter((event) => event.source === source && event.timestampMs > 0);
   const todayStart = startOfLocalDay(now);
   const sevenDayStart = startOfLocalDay(now - 6 * 24 * 60 * 60 * 1000);
   const thirtyDayStart = startOfLocalDay(now - 29 * 24 * 60 * 60 * 1000);
   const windows = {
-    today: summarizeUsageWindow(codexEvents, todayStart, now),
-    sevenDays: summarizeUsageWindow(codexEvents, sevenDayStart, now),
-    thirtyDays: summarizeUsageWindow(codexEvents, thirtyDayStart, now),
+    today: summarizeUsageWindow(sourceEvents, todayStart, now),
+    sevenDays: summarizeUsageWindow(sourceEvents, sevenDayStart, now),
+    thirtyDays: summarizeUsageWindow(sourceEvents, thirtyDayStart, now),
   };
 
-  const thirtyDayEvents = codexEvents.filter((event) => event.timestampMs >= thirtyDayStart && event.timestampMs <= now + 60_000);
+  const thirtyDayEvents = sourceEvents.filter((event) => event.timestampMs >= thirtyDayStart && event.timestampMs <= now + 60_000);
   const byModel = new Map();
   for (const event of thirtyDayEvents) {
     const key = event.model || "unknown";
@@ -355,13 +366,13 @@ function summarizeCodexUsage(events, now = Date.now()) {
     dayEnd.setDate(dayEnd.getDate() + 1);
     daily.push({
       date: localDateKey(dayStart),
-      ...summarizeUsageWindow(codexEvents, dayStart, Math.min(now, dayEnd.getTime() - 1)),
+      ...summarizeUsageWindow(sourceEvents, dayStart, Math.min(now, dayEnd.getTime() - 1)),
     });
   }
 
   return {
     generatedAt: now,
-    lastEventAt: codexEvents.reduce((latest, event) => Math.max(latest, event.timestampMs), 0) || null,
+    lastEventAt: sourceEvents.reduce((latest, event) => Math.max(latest, event.timestampMs), 0) || null,
     windows,
     daily,
     models,
@@ -533,6 +544,7 @@ async function mapLimit(items, limit, worker) {
 module.exports = {
   collectLocalUsage,
   collectCodexAgentUsage,
+  collectClaudeAgentUsage,
   parseCodexJsonl,
   parseClaudeJsonl,
   attachUsageToProvider,
@@ -540,6 +552,6 @@ module.exports = {
   aggregateWindowUsage,
   matchesProvider,
   matchingUsageEvents,
-  summarizeCodexUsage,
+  summarizeAgentUsage,
   tierDurationMs,
 };
