@@ -69,8 +69,7 @@ function isAgentUsageSnapshot(value) {
     value &&
     typeof value === "object" &&
     ((value.codex && typeof value.codex === "object") ||
-      (value.claude && typeof value.claude === "object") ||
-      (value.zcode && typeof value.zcode === "object")),
+      (value.claude && typeof value.claude === "object")),
   );
 }
 

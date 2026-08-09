@@ -40,16 +40,6 @@ async function collectClaudeAgentUsage(providers = [], now = Date.now()) {
   return summarizeAgentUsage(dedupeEvents(groups.flat()), "claude", now);
 }
 
-async function collectZcodeAgentUsage(providers = [], now = Date.now()) {
-  void providers;
-  const zcodeDir = path.join(os.homedir(), ".zcode");
-  const activeFileKeys = new Set();
-  const groups = await Promise.all(
-    [zcodeDir].map((dir) => readSessionTree(dir, "zcode", now, activeFileKeys)),
-  );
-  return summarizeAgentUsage(dedupeEvents(groups.flat()), "zcode", now);
-}
-
 function usageRequirements(providers) {
   const codexDirs = new Set();
   const claudeDirs = new Set();
@@ -81,9 +71,7 @@ function usageRequirements(providers) {
 async function readSessionTree(rootDir, source, now, activeFileKeys) {
   const scanRoots = source === "codex"
     ? [path.join(rootDir, "sessions"), path.join(rootDir, "archived_sessions")]
-    : source === "zcode"
-      ? [path.join(rootDir, "cli", "agents")]
-      : [path.join(rootDir, "projects")];
+    : [path.join(rootDir, "projects")];
   const cutoff = now - MAX_WINDOW_MS;
   const files = [];
   for (const scanRoot of scanRoots) await collectRecentJsonl(scanRoot, cutoff, files);
@@ -124,9 +112,7 @@ async function readUsageFile(file, source, activeFileKeys) {
     const content = await fsp.readFile(file.path, "utf8");
     const events = source === "codex"
       ? parseCodexJsonl(content, file.path)
-      : source === "zcode"
-        ? parseZcodeJsonl(content, file.path)
-        : parseClaudeJsonl(content, file.path);
+      : parseClaudeJsonl(content, file.path);
     fileCache.set(key, { mtimeMs: file.mtimeMs, size: file.size, events });
     return events;
   } catch (_error) {
@@ -241,51 +227,6 @@ function parseClaudeJsonl(content, fileKey = "claude") {
       sessionId: value.sessionId || null,
       model: normalizeModelId(message.model),
       accountEmail: firstString([value.account_email, value.accountEmail, value.email, value.user_email, value.userEmail]),
-      timestamp: value.timestamp,
-      ...tokens,
-    }));
-  }
-  return events;
-}
-
-function parseZcodeJsonl(content, fileKey = "zcode") {
-  const lines = String(content || "").split(/\r?\n/);
-  // ZCode transcripts split model info and usage across event types: the model
-  // name lives on `model_request` events, per-call token usage on
-  // `model_complete` events. Each agent transcript uses a single model, so we
-  // resolve it from the first model_request and apply it to every completion.
-  let model = "unknown";
-  let sessionId = null;
-  for (const line of lines) {
-    if (!line || !line.includes('"model_request"')) continue;
-    const value = safeJson(line);
-    if (value?.type !== "model_request") continue;
-    if (value.payload?.model) model = normalizeModelId(value.payload.model);
-    sessionId = value.sessionId || sessionId;
-    break;
-  }
-  const events = [];
-  let fallbackIndex = 0;
-  for (const line of lines) {
-    if (!line || !line.includes('"model_complete"')) continue;
-    const value = safeJson(line);
-    if (value?.type !== "model_complete") continue;
-    const usage = value.payload?.usage;
-    if (!usage) continue;
-    const tokens = {
-      inputTokens: numberOrZero(usage.inputTokens),
-      outputTokens: numberOrZero(usage.outputTokens),
-      cacheReadTokens: numberOrZero(usage.cacheReadTokens),
-      cacheCreationTokens: numberOrZero(usage.cacheWriteTokens),
-    };
-    if (!hasTokens(tokens)) continue;
-    fallbackIndex += 1;
-    sessionId = value.sessionId || sessionId;
-    events.push(usageEvent({
-      id: `zcode:${value.id || `${path.basename(fileKey)}:${fallbackIndex}`}`,
-      source: "zcode",
-      sessionId: sessionId || path.basename(fileKey, path.extname(fileKey)),
-      model,
       timestamp: value.timestamp,
       ...tokens,
     }));
@@ -604,10 +545,8 @@ module.exports = {
   collectLocalUsage,
   collectCodexAgentUsage,
   collectClaudeAgentUsage,
-  collectZcodeAgentUsage,
   parseCodexJsonl,
   parseClaudeJsonl,
-  parseZcodeJsonl,
   attachUsageToProvider,
   aggregateTierUsage,
   aggregateWindowUsage,

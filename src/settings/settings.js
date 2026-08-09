@@ -1687,8 +1687,7 @@ function bindUpdateEvents() {
   });
   root.querySelectorAll("[data-action='set-agent-usage-source']").forEach((button) => {
     button.addEventListener("click", () => {
-      const next = button.dataset.source;
-      state.agentUsageSource = next === "claude" || next === "zcode" ? next : "codex";
+      state.agentUsageSource = button.dataset.source === "claude" ? "claude" : "codex";
       render();
     });
   });

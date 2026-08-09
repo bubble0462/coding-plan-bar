@@ -49,9 +49,7 @@ const { normalizeModelId, findModelPricing, calculateCostUsd } = require("../src
 const {
   parseCodexJsonl,
   parseClaudeJsonl,
-  parseZcodeJsonl,
   collectClaudeAgentUsage,
-  collectZcodeAgentUsage,
   aggregateTierUsage,
   matchesProvider,
   matchingUsageEvents,
@@ -1155,48 +1153,6 @@ async function runClaudeAgentUsageSmoke() {
   assert.strictEqual(mixed.windows.thirtyDays.sessions, 1);
 }
 
-async function runZcodeAgentUsageSmoke() {
-  // parseZcodeJsonl resolves the model from model_request and pairs it with
-  // model_complete usage, producing the standard event shape.
-  const transcript = [
-    JSON.stringify({ id: "req-1", sessionId: "sess-a", turnId: "t1", type: "model_request", timestamp: "2026-08-09T01:00:00.000Z", payload: { model: "builtin:bigmodel-coding-plan/GLM-5.2" } }),
-    JSON.stringify({ id: "comp-1", sessionId: "sess-a", turnId: "t1", type: "model_complete", timestamp: "2026-08-09T01:00:05.000Z", payload: { usage: { inputTokens: 1200, outputTokens: 80, totalTokens: 1280, cacheReadTokens: 600, cacheWriteTokens: 40 } } }),
-    JSON.stringify({ id: "comp-2", sessionId: "sess-a", turnId: "t1", type: "model_complete", timestamp: "2026-08-09T01:00:10.000Z", payload: { usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 } } }),
-    JSON.stringify({ id: "noise", type: "text", timestamp: "2026-08-09T01:00:11.000Z", payload: { content: "no usage here" } }),
-  ].join("\n");
-  const events = parseZcodeJsonl(transcript, "agent_x/transcript.jsonl");
-  assert.strictEqual(events.length, 1, "parseZcodeJsonl should skip zero-token completions");
-  assert.strictEqual(events[0].source, "zcode");
-  assert.strictEqual(events[0].model, "glm-5.2");
-  assert.strictEqual(events[0].sessionId, "sess-a");
-  assert.strictEqual(events[0].inputTokens, 1200);
-  assert.strictEqual(events[0].cacheReadTokens, 600);
-  assert.strictEqual(events[0].cacheCreationTokens, 40);
-  // totalTokens = input + output + cacheCreation + cacheRead (separate mode).
-  assert.strictEqual(events[0].totalTokens, 1920);
-  assert.ok(events[0].costUsd > 0, "ZCode glm-5.2 event should be priced");
-
-  // summarizeAgentUsage must not leak codex/claude events into the zcode source.
-  const fixedNow = Date.parse("2026-08-09T12:00:00+08:00");
-  const mixed = summarizeAgentUsage(
-    [
-      { source: "codex", model: "gpt-5", timestampMs: fixedNow, inputTokens: 100, outputTokens: 10, cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: 110, costUsd: 0.01, id: "codex:1", sessionId: "s1" },
-      { source: "zcode", model: "glm-5.2", timestampMs: fixedNow, inputTokens: 200, outputTokens: 20, cacheReadTokens: 50, cacheCreationTokens: 5, totalTokens: 275, costUsd: 0.02, id: "zcode:1", sessionId: "s2" },
-    ],
-    "zcode",
-    fixedNow,
-  );
-  assert.strictEqual(mixed.windows.thirtyDays.requests, 1, "ZCode summarize leaked a codex event");
-  assert.strictEqual(mixed.windows.thirtyDays.inputTokens, 200);
-  assert.strictEqual(mixed.windows.thirtyDays.cacheReadTokens, 50);
-
-  // collectZcodeAgentUsage reads ~/.zcode/cli/agents on the real machine.
-  const collected = await collectZcodeAgentUsage([], fixedNow);
-  assert.ok(collected && typeof collected === "object", "ZCode agent usage result missing");
-  assert.ok(collected.windows && collected.windows.today && collected.windows.sevenDays && collected.windows.thirtyDays, "ZCode windows missing");
-  assert.ok(Array.isArray(collected.models), "ZCode models array missing");
-}
-
 runZhipuRequestSmoke()
   .then(runGrokRefreshSmoke)
   .then(runGrokSourceSmoke)
@@ -1205,7 +1161,6 @@ runZhipuRequestSmoke()
   .then(runUpdaterIntegritySmoke)
   .then(runFetchTimeoutSmoke)
   .then(runClaudeAgentUsageSmoke)
-  .then(runZcodeAgentUsageSmoke)
   .then(() => console.log("Smoke tests passed"))
   .catch((error) => {
     console.error(error);
