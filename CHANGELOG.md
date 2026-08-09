@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.23] - 2026-08-09
+
+### Removed
+
+- 移除 ZCode 用量统计。「Agent 用量」恢复为 Codex 与 Claude Code 两档。原因是 ZCode 本地日志（cli/agents 的子代理 transcript + cli/rollout 的主会话 model-io）只覆盖部分用量，与服务端统计相差较大，无法准确反映实际消耗。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。Codex 与 Claude Code 的用量统计不受影响。
+
+## [0.4.22] - 2026-08-09
+
+### Added
+
+- 「Agent 用量」新增 ZCode 统计：可在 Codex、Claude Code 与 ZCode 之间切换，统计本机 `~/.zcode/cli/agents` 的今天、最近 7 天和最近 30 天的请求、Token、会话和模型费用。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。ZCode 用量只读取本地 JSONL 会话日志，不上传任何内容；费用按公开 API 单价估算，不代表订阅账单。
+
 ## [0.4.21] - 2026-08-09
 
 ### Fixed
