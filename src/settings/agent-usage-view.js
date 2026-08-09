@@ -1,7 +1,7 @@
 /* eslint-disable no-unused-vars -- globals consumed by settings.js */
 /* global formatUsageInteger, formatUsageTokens, formatUsageMoney, escapeHtml, escapeAttr, computeCacheShare, state, root, render */
 /* exported normalizeAgentUsagePayload, applyAgentUsagePayload, refreshAgentUsageNavigation,
-   renderAgentUsagePage, renderCodexAgentUsage, renderClaudeAgentUsage,
+   renderAgentUsagePage, renderCodexAgentUsage, renderClaudeAgentUsage, renderZcodeAgentUsage,
    renderUsageModelsSection, renderUsageWindowCard, loadAgentUsage */
 
 /**
@@ -46,13 +46,14 @@ function refreshAgentUsageNavigation() {
 function renderAgentUsagePage() {
   const usage = state.agentUsage;
   const aggregate = usage.data;
-  const source = state.agentUsageSource === "claude" ? "claude" : "codex";
+  const source = state.agentUsageSource === "claude" ? "claude" : state.agentUsageSource === "zcode" ? "zcode" : "codex";
   const codex = aggregate?.codex || (aggregate?.windows ? aggregate : null);
   const claude = aggregate?.claude || null;
-  const selectedData = source === "claude" ? claude : codex;
+  const zcode = aggregate?.zcode || null;
+  const selectedData = source === "claude" ? claude : source === "zcode" ? zcode : codex;
   const refreshedAt = selectedData?.generatedAt || aggregate?.generatedAt;
   const sourceError = aggregate?.sourceErrors?.[source] || null;
-  const sourceLabel = source === "claude" ? "Claude Code" : "Codex";
+  const sourceLabel = source === "claude" ? "Claude Code" : source === "zcode" ? "ZCode" : "Codex";
   const cacheState = usage.loading
     ? "正在后台更新，当前结果可继续使用"
     : sourceError
@@ -69,6 +70,8 @@ function renderAgentUsagePage() {
     body = `<div class="usage-error"><strong>统计失败</strong><p>${escapeHtml(usage.error)}</p><button class="btn" data-action="refresh-agent-usage">重试</button></div>`;
   } else if (source === "claude") {
     body = renderClaudeAgentUsage(claude);
+  } else if (source === "zcode") {
+    body = renderZcodeAgentUsage(zcode);
   } else {
     body = renderCodexAgentUsage(codex);
   }
@@ -80,6 +83,7 @@ function renderAgentUsagePage() {
         <div class="agent-source-switch" role="group" aria-label="Agent 用量来源">
           <button class="agent-source-button ${source === "codex" ? "is-active" : ""}" type="button" data-action="set-agent-usage-source" data-source="codex" aria-pressed="${source === "codex"}" title="Codex 用量">Codex</button>
           <button class="agent-source-button ${source === "claude" ? "is-active" : ""}" type="button" data-action="set-agent-usage-source" data-source="claude" aria-pressed="${source === "claude"}" title="Claude Code 用量">Claude Code</button>
+          <button class="agent-source-button ${source === "zcode" ? "is-active" : ""}" type="button" data-action="set-agent-usage-source" data-source="zcode" aria-pressed="${source === "zcode"}" title="ZCode 用量">ZCode</button>
         </div>
         <button class="btn" data-action="refresh-agent-usage" ${usage.loading ? "disabled" : ""}>${usage.loading ? "统计中…" : "重新统计"}</button>
       </div>
@@ -157,6 +161,40 @@ function renderClaudeAgentUsage(data) {
     </section>
     ${renderUsageModelsSection(models, "模型明细", "最近 30 天，费用按公开 API 单价估算", "估算费用", "最近 30 天没有可统计的 Claude Code 会话。")}
     <p class="usage-note">统计来自本机 ~/.claude/projects 的 JSONL 会话日志，不代表订阅账单；未知模型不会计入金额，但 Token 仍会保留。缓存 Token 单独计费。</p>
+  `;
+}
+
+function renderZcodeAgentUsage(data) {
+  if (!data) return `<div class="usage-error"><strong>ZCode 数据不可用</strong><p>请重新统计本机 ZCode 会话用量。</p></div>`;
+  if (data.error) return `<div class="usage-error usage-unavailable"><strong>ZCode 统计不可用</strong><p>${escapeHtml(data.error)}</p><button class="btn" data-action="refresh-agent-usage">重新统计</button></div>`;
+  const daily = Array.isArray(data.daily) ? data.daily : [];
+  const models = Array.isArray(data.models) ? data.models : [];
+  const maxDaily = Math.max(1, ...daily.map((item) => Number(item.totalTokens || 0)));
+  return `
+    <div class="usage-window-grid is-zcode">
+      ${renderUsageWindowCard("今天", data.windows?.today, false, "估算", "separate")}
+      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "估算", "separate")}
+      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "估算", "separate")}
+    </div>
+    <section class="usage-section">
+      <div class="usage-section-head">
+        <div><strong>近 7 天趋势</strong><span>柱高按每日 Token 总量计算</span></div>
+        <span class="usage-legend"><i></i>Token</span>
+      </div>
+      <div class="usage-chart" role="img" aria-label="近 7 天 ZCode Token 使用趋势">
+        ${daily.map((item) => {
+          const height = Math.max(item.totalTokens ? 8 : 2, Math.round(Number(item.totalTokens || 0) / maxDaily * 100));
+          const day = new Date(`${item.date}T00:00:00`).toLocaleDateString("zh-CN", { weekday: "short" });
+          return `<div class="usage-day" title="${escapeAttr(item.date)} · ${escapeAttr(formatUsageTokens(item.totalTokens))} Token">
+            <span class="usage-day-value">${escapeHtml(formatUsageTokens(item.totalTokens))}</span>
+            <span class="usage-day-track"><i style="height:${height}%"></i></span>
+            <span class="usage-day-label">${escapeHtml(day)}</span>
+          </div>`;
+        }).join("")}
+      </div>
+    </section>
+    ${renderUsageModelsSection(models, "模型明细", "最近 30 天，费用按公开 API 单价估算", "估算费用", "最近 30 天没有可统计的 ZCode 会话。")}
+    <p class="usage-note">统计来自本机 ~/.zcode/cli/agents 的 JSONL 会话日志，不代表订阅账单；未知模型不会计入金额，但 Token 仍会保留。缓存 Token 单独计费。</p>
   `;
 }
 

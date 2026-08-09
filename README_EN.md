@@ -11,7 +11,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Lives in the Windows system tray; hover or click to open the quota panel.
 - Shows five-hour limits, weekly limits, reset countdowns, and account balances.
 - Shows request counts and token totals per quota window, with model-aware estimated cost in USD.
-- The Settings page includes **Agent Usage**: switch between local Codex and Claude Code usage — today, the last 7 days, the last 30 days, requests, tokens, sessions, and model-level cost.
+- The Settings page includes **Agent Usage**: switch between local Codex, Claude Code, and ZCode usage — today, the last 7 days, the last 30 days, requests, tokens, sessions, and model-level cost.
 - Balance cards can show today's requests, tokens, and spend returned by the endpoint; DeepSeek uses seven-day local-log statistics.
 - Automatically fits up to three providers and switches to a scrollable fixed height for four or more.
 - Graphical provider management without manually editing JSON.

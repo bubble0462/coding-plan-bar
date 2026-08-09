@@ -37,7 +37,7 @@ const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials 
 const { classifyFailure } = require("./failure-classifier");
 const { listCodexModels, probeCodexStream } = require("./chat-probe");
 const { applyProxySettings } = require("./proxy");
-const { collectCodexAgentUsage, collectClaudeAgentUsage } = require("./session-usage");
+const { collectCodexAgentUsage, collectClaudeAgentUsage, collectZcodeAgentUsage } = require("./session-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
   DEFAULT_TTL_MS,
@@ -1025,9 +1025,10 @@ function refreshAgentUsage(reason = "scheduled") {
 async function refreshAgentUsageNow() {
   const config = readConfigFile(configPath);
   const startedAt = Date.now();
-  const [codexResult, claudeResult] = await Promise.allSettled([
+  const [codexResult, claudeResult, zcodeResult] = await Promise.allSettled([
     collectCodexAgentUsage(config.providers || [], startedAt),
     collectClaudeAgentUsage(config.providers || [], startedAt),
+    collectZcodeAgentUsage(config.providers || [], startedAt),
   ]);
   const candidateCodex = codexResult.status === "fulfilled"
     ? codexResult.value
@@ -1035,19 +1036,25 @@ async function refreshAgentUsageNow() {
   const candidateClaude = claudeResult.status === "fulfilled"
     ? claudeResult.value
     : createClaudeUsageFailure(claudeResult.reason, startedAt);
+  const candidateZcode = zcodeResult.status === "fulfilled"
+    ? zcodeResult.value
+    : createZcodeUsageFailure(zcodeResult.reason, startedAt);
   const sourceErrors = {};
   const previous = agentUsageSnapshot || {};
   const codex = mergeAgentUsageSource("codex", previous.codex, candidateCodex, sourceErrors);
   const claude = mergeAgentUsageSource("claude", previous.claude, candidateClaude, sourceErrors);
+  const zcode = mergeAgentUsageSource("zcode", previous.zcode, candidateZcode, sourceErrors);
   const snapshot = {
     generatedAt: Date.now(),
     codex,
     claude,
+    zcode,
     sourceErrors,
     refreshElapsedMs: Date.now() - startedAt,
   };
   const hasFreshSource = isUsableAgentUsageSource("codex", candidateCodex) ||
-    isUsableAgentUsageSource("claude", candidateClaude);
+    isUsableAgentUsageSource("claude", candidateClaude) ||
+    isUsableAgentUsageSource("zcode", candidateZcode);
   agentUsageSnapshot = snapshot;
   agentUsageLastError = hasFreshSource ? null : Object.values(sourceErrors).join(" ") || null;
 
@@ -1080,6 +1087,17 @@ function createClaudeUsageFailure(error, generatedAt) {
     daily: [],
     models: [],
     error: `Claude usage collection failed: ${error?.message || String(error)}`,
+  };
+}
+
+function createZcodeUsageFailure(error, generatedAt) {
+  return {
+    generatedAt,
+    lastEventAt: null,
+    windows: {},
+    daily: [],
+    models: [],
+    error: `ZCode usage collection failed: ${error?.message || String(error)}`,
   };
 }
 

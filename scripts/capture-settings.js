@@ -196,10 +196,32 @@ const mockClaudeAgentUsage = {
   ],
 };
 
+const mockZcodeAgentUsage = {
+  generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
+  lastEventAt: Date.parse("2026-07-19T11:44:00+08:00"),
+  windows: {
+    today: { requests: 142, sessions: 5, inputTokens: 3100000, outputTokens: 96000, cacheReadTokens: 28400000, cacheCreationTokens: 220000, totalTokens: 31716000, costUsd: 14.06, partialCost: false },
+    sevenDays: { requests: 1180, sessions: 28, inputTokens: 28400000, outputTokens: 892000, cacheReadTokens: 248000000, cacheCreationTokens: 1900000, totalTokens: 273192000, costUsd: 132.18, partialCost: true },
+    thirtyDays: { requests: 4210, sessions: 96, inputTokens: 96000000, outputTokens: 3100000, cacheReadTokens: 812000000, cacheCreationTokens: 6400000, totalTokens: 917500000, costUsd: 442.7, partialCost: true },
+  },
+  daily: [
+    { date: "2026-07-13", totalTokens: 62100000 }, { date: "2026-07-14", totalTokens: 88000000 },
+    { date: "2026-07-15", totalTokens: 54000000 }, { date: "2026-07-16", totalTokens: 99000000 },
+    { date: "2026-07-17", totalTokens: 71200000 }, { date: "2026-07-18", totalTokens: 86000000 },
+    { date: "2026-07-19", totalTokens: 31716000 },
+  ],
+  models: [
+    { model: "glm-5.2", requests: 2480, totalTokens: 612400000, costUsd: 318.44, partialCost: false },
+    { model: "gpt-5.6-sol", requests: 1018, totalTokens: 184200000, costUsd: 88.21, partialCost: false },
+    { model: "deepseek-v4-flash", requests: 712, totalTokens: 120900000, costUsd: 36.05, partialCost: true },
+  ],
+};
+
 const mockAgentUsage = {
   generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
   codex: mockCodexAgentUsage,
   claude: mockClaudeAgentUsage,
+  zcode: mockZcodeAgentUsage,
 };
 const mockAgentUsageEnvelope = {
   data: mockAgentUsage,
@@ -433,6 +455,15 @@ async function main() {
       return text.includes("claude-opus-4-8") && text.includes("365.7M");
     })()`);
     if (!claudeRendered) throw new Error("Agent usage did not switch to Claude Code statistics");
+
+    await window.webContents.executeJavaScript(`document.querySelector('[data-action="set-agent-usage-source"][data-source="zcode"]')?.click()`);
+    await wait(120);
+    const zcodeRendered = await window.webContents.executeJavaScript(`(() => {
+      const page = document.querySelector(".usage-page");
+      const text = page?.textContent || "";
+      return text.includes("glm-5.2") && text.includes("917.5M");
+    })()`);
+    if (!zcodeRendered) throw new Error("Agent usage did not switch to ZCode statistics");
   }
 
   if (showHealth) {
