@@ -38,7 +38,6 @@ const { classifyFailure } = require("./failure-classifier");
 const { listCodexModels, probeCodexStream } = require("./chat-probe");
 const { applyProxySettings } = require("./proxy");
 const { collectCodexAgentUsage } = require("./session-usage");
-const { collectOpenCodeAgentUsage } = require("./opencode-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
 const {
   DEFAULT_TTL_MS,
@@ -1026,29 +1025,22 @@ function refreshAgentUsage(reason = "scheduled") {
 async function refreshAgentUsageNow() {
   const config = readConfigFile(configPath);
   const startedAt = Date.now();
-  const [codexResult, openCodeResult] = await Promise.allSettled([
+  const codexResult = await Promise.allSettled([
     collectCodexAgentUsage(config.providers || [], startedAt),
-    collectOpenCodeAgentUsage({ now: startedAt }),
   ]);
-  const candidateCodex = codexResult.status === "fulfilled"
-    ? codexResult.value
-    : createCodexUsageFailure(codexResult.reason, startedAt);
-  const candidateOpenCode = openCodeResult.status === "fulfilled"
-    ? openCodeResult.value
-    : createOpenCodeUsageFailure(openCodeResult.reason, startedAt);
+  const candidateCodex = codexResult[0].status === "fulfilled"
+    ? codexResult[0].value
+    : createCodexUsageFailure(codexResult[0].reason, startedAt);
   const sourceErrors = {};
   const previous = agentUsageSnapshot || {};
   const codex = mergeAgentUsageSource("codex", previous.codex, candidateCodex, sourceErrors);
-  const opencode = mergeAgentUsageSource("opencode", previous.opencode, candidateOpenCode, sourceErrors);
   const snapshot = {
     generatedAt: Date.now(),
     codex,
-    opencode,
     sourceErrors,
     refreshElapsedMs: Date.now() - startedAt,
   };
-  const hasFreshSource = isUsableAgentUsageSource("codex", candidateCodex) ||
-    isUsableAgentUsageSource("opencode", candidateOpenCode);
+  const hasFreshSource = isUsableAgentUsageSource("codex", candidateCodex);
   agentUsageSnapshot = snapshot;
   agentUsageLastError = hasFreshSource ? null : Object.values(sourceErrors).join(" ") || null;
 
@@ -1073,16 +1065,6 @@ function createCodexUsageFailure(error, generatedAt) {
   };
 }
 
-function createOpenCodeUsageFailure(error, generatedAt) {
-  return {
-    available: false,
-    generatedAt,
-    windows: {},
-    models: [],
-    error: `OpenCode usage collection failed: ${error?.message || String(error)}`,
-  };
-}
-
 function mergeAgentUsageSource(source, previous, candidate, sourceErrors) {
   if (isUsableAgentUsageSource(source, candidate)) return candidate;
   const message = candidate?.error || `${source} usage collection failed.`;
@@ -1095,7 +1077,7 @@ function mergeAgentUsageSource(source, previous, candidate, sourceErrors) {
 
 function isUsableAgentUsageSource(source, value) {
   if (!value || typeof value !== "object" || value.error) return false;
-  return source !== "opencode" || value.available !== false;
+  return true;
 }
 
 function agentUsagePayload() {

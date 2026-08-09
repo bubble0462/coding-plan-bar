@@ -178,20 +178,6 @@ const mockCodexAgentUsage = {
 const mockAgentUsage = {
   generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
   codex: mockCodexAgentUsage,
-  opencode: {
-    available: true,
-    generatedAt: Date.parse("2026-07-19T11:50:00+08:00"),
-    windows: {
-      today: { requests: 96, sessions: 3, inputTokens: 2500000, outputTokens: 89000, cacheReadTokens: 21500000, cacheCreationTokens: 0, totalTokens: 24089000, costUsd: 0.22, partialCost: false },
-      sevenDays: { requests: 603, sessions: 18, inputTokens: 7300000, outputTokens: 242000, cacheReadTokens: 67600000, cacheCreationTokens: 0, totalTokens: 75142000, costUsd: 0.22, partialCost: false },
-      thirtyDays: { requests: 1339, sessions: 42, inputTokens: 11900000, outputTokens: 485300, cacheReadTokens: 110000000, cacheCreationTokens: 0, totalTokens: 122385300, costUsd: 0.22, partialCost: false },
-    },
-    models: [
-      { model: "cpa/gpt-5.6-sol", requests: 663, inputTokens: 8200000, outputTokens: 793300, cacheReadTokens: 72400000, cacheCreationTokens: 0, totalTokens: 81393300, costUsd: 0, partialCost: false },
-      { model: "zhipuai-coding-plan/glm-5.2", requests: 312, inputTokens: 2400000, outputTokens: 103000, cacheReadTokens: 28500000, cacheCreationTokens: 0, totalTokens: 31003000, costUsd: 0.22, partialCost: false },
-    ],
-    error: null,
-  },
 };
 const mockAgentUsageEnvelope = {
   data: mockAgentUsage,
@@ -405,30 +391,17 @@ async function main() {
       document.querySelector('[data-action="show-usage"]')?.click();
     `);
     await wait(260);
-    const openCodeRendered = await window.webContents.executeJavaScript(`(() => {
+    const codexRendered = await window.webContents.executeJavaScript(`(() => {
       const page = document.querySelector(".usage-page");
-      const active = document.querySelector('[data-action="set-agent-usage-source"][data-source="opencode"]');
       const text = page?.textContent || "";
-      return Boolean(active?.classList.contains("is-active")) && text.includes("OpenCode") && text.includes("cpa/gpt-5.6-sol") && text.includes("记录费用");
+      return text.includes("gpt-5.6-sol") && text.includes("1.25B");
     })()`);
-    if (!openCodeRendered) throw new Error("Agent usage did not default to OpenCode");
+    if (!codexRendered) throw new Error("Agent usage did not render Codex statistics");
 
     const usageLoading = await window.webContents.executeJavaScript(
       `Boolean(document.querySelector(".usage-loading"))`,
     );
     if (usageLoading) throw new Error("Cached agent usage rendered a blocking loading state");
-    await window.webContents.executeJavaScript(`document.querySelector('[data-action="set-agent-usage-source"][data-source="codex"]')?.click()`);
-    await wait(80);
-    const codexRendered = await window.webContents.executeJavaScript(`(() => {
-      const page = document.querySelector(".usage-page");
-      const active = document.querySelector('[data-action="set-agent-usage-source"][data-source="codex"]');
-      const text = page?.textContent || "";
-      return Boolean(active?.classList.contains("is-active")) && text.includes("gpt-5.6-sol") && text.includes("1.25B");
-    })()`);
-    if (!codexRendered) throw new Error("Agent usage did not switch to Codex");
-
-    await window.webContents.executeJavaScript(`document.querySelector('[data-action="set-agent-usage-source"][data-source="opencode"]')?.click()`);
-    await wait(80);
   }
 
   if (showHealth) {

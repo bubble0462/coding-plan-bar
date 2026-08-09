@@ -55,12 +55,6 @@ const {
   summarizeCodexUsage,
 } = require("../src/session-usage");
 const {
-  parseOpenCodeStats,
-  collectOpenCodeTodayFromDatabase,
-  collectOpenCodeAgentUsage,
-  localDayStartMs,
-} = require("../src/opencode-usage");
-const {
   parseVersion,
   normalizeVersionLabel,
   compareVersions,
@@ -96,7 +90,6 @@ const agentUsageCachePath = path.join(tempDir, "agent-usage-cache.json");
 const cachedAgentUsage = {
   generatedAt: 1_740_000_000_000,
   codex: { generatedAt: 1_740_000_000_000, windows: {}, daily: [], models: [] },
-  opencode: { available: true, generatedAt: 1_740_000_000_000, windows: {}, models: [] },
 };
 assert.strictEqual(writeAgentUsageCache(agentUsageCachePath, cachedAgentUsage, { savedAt: 1_740_000_000_000 }), true);
 assert.deepStrictEqual(readAgentUsageCache(agentUsageCachePath, { now: 1_950_000_000_000 }), {
@@ -490,124 +483,6 @@ assert.strictEqual(agentUsage.windows.thirtyDays.sessions, 3);
 assert.strictEqual(agentUsage.daily.length, 7);
 assert.strictEqual(agentUsage.models[0].model, "gpt-5.4");
 assert(agentUsage.windows.thirtyDays.costUsd > agentUsage.windows.sevenDays.costUsd);
-
-const openCodeStatsFixture = [
-  "OVERVIEW", "Sessions 3", "Messages 12", "Days 7",
-  "COST & TOKENS", "Total Cost $1.25", "Input 1.2M", "Output 34.5K", "Cache Read 6.7M", "Cache Write 0",
-  "MODEL USAGE", "cpa/gpt-5.6-sol", "Messages 10", "Input Tokens 1.0M", "Output Tokens 30K", "Cache Read 6.0M", "Cache Write 0", "Cost $0.00",
-  "zhipuai-coding-plan/glm-5.2", "Messages 2", "Input Tokens 200K", "Output Tokens 4.5K", "Cache Read 700K", "Cache Write 0", "Cost $1.25",
-  "TOOL USAGE",
-].join("\n");
-const openCodeUsage = parseOpenCodeStats(openCodeStatsFixture);
-assert.strictEqual(openCodeUsage.summary.sessions, 3);
-assert.strictEqual(openCodeUsage.summary.requests, 12);
-assert.strictEqual(openCodeUsage.summary.totalTokens, 7_934_500);
-assert.strictEqual(openCodeUsage.summary.costUsd, 1.25);
-assert.strictEqual(openCodeUsage.models.length, 2);
-assert.strictEqual(openCodeUsage.models[0].model, "cpa/gpt-5.6-sol");
-assert.strictEqual(openCodeUsage.models[0].totalTokens, 7_030_000);
-// Raw parse keeps provider $0; estimation is applied in collectOpenCodeAgentUsage.
-assert.strictEqual(openCodeUsage.models[0].costUsd, 0);
-assert.strictEqual(openCodeUsage.models[1].costUsd, 1.25);
-const { applyEstimatedCostsToModels } = require("../src/opencode-usage");
-const pricedModels = applyEstimatedCostsToModels(openCodeUsage.models);
-assert.strictEqual(pricedModels[0].costSource, "estimated");
-assert(pricedModels[0].costUsd > 0);
-assert.strictEqual(pricedModels[1].costSource, "recorded");
-assert.strictEqual(pricedModels[1].costUsd, 1.25);
-
-// OpenCode windows must come from opencode.db with per-model public API estimates.
-{
-  const DatabaseSync = require("node:sqlite").DatabaseSync;
-  const openCodeDbDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-opencode-db-"));
-  const openCodeDbPath = path.join(openCodeDbDir, "opencode.db");
-  const db = new DatabaseSync(openCodeDbPath);
-  db.exec(`
-    CREATE TABLE message (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      time_created INTEGER NOT NULL,
-      time_updated INTEGER NOT NULL,
-      data TEXT NOT NULL
-    );
-  `);
-  const fixedNow = Date.parse("2026-07-24T12:00:00+08:00");
-  const dayStart = localDayStartMs(fixedNow);
-  assert.strictEqual(dayStart, Date.parse("2026-07-24T00:00:00+08:00"));
-  const insert = db.prepare(
-    "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
-  );
-  const threeDaysAgo = dayStart - 3 * 24 * 60 * 60 * 1000;
-  const rows = [
-    // Outside 7d window but inside 30d.
-    ["m-old", "s-old", threeDaysAgo - 20 * 24 * 60 * 60 * 1000, threeDaysAgo - 20 * 24 * 60 * 60 * 1000, JSON.stringify({
-      role: "assistant",
-      cost: 0,
-      tokens: { input: 100_000, output: 1_000, reasoning: 0, cache: { read: 200_000, write: 0 } },
-      time: {
-        created: threeDaysAgo - 20 * 24 * 60 * 60 * 1000,
-        completed: threeDaysAgo - 20 * 24 * 60 * 60 * 1000 + 1_000,
-      },
-      modelID: "cpa/gpt-5.6-sol",
-    })],
-    // Yesterday (excluded from calendar today, included in 7d).
-    ["m-yest", "s-yest", dayStart - 3_600_000, dayStart - 3_600_000, JSON.stringify({
-      role: "assistant",
-      cost: 0,
-      tokens: { input: 1_000_000, output: 1_000, reasoning: 0, cache: { read: 2_000_000, write: 0 } },
-      time: { created: dayStart - 3_600_000, completed: dayStart - 3_500_000 },
-      modelID: "cpa/gpt-5.6-sol",
-    })],
-    // Today completed with provider-recorded cost.
-    ["m-today", "s-today", dayStart + 3_600_000, dayStart + 3_600_000, JSON.stringify({
-      role: "assistant",
-      cost: 1.25,
-      tokens: { input: 2_000, output: 100, reasoning: 50, cache: { read: 8_000, write: 0 } },
-      time: { created: dayStart + 3_600_000, completed: dayStart + 3_700_000 },
-      modelID: "cpa/gemini-3.6-flash-high",
-    })],
-    // Today completed needing public API estimate (recorded $0).
-    ["m-today-sol", "s-today", dayStart + 4_000_000, dayStart + 4_000_000, JSON.stringify({
-      role: "assistant",
-      cost: 0,
-      tokens: { input: 10_000, output: 500, reasoning: 0, cache: { read: 20_000, write: 0 } },
-      time: { created: dayStart + 4_000_000, completed: dayStart + 4_100_000 },
-      modelID: "cpa/gpt-5.6-sol",
-    })],
-    // In-progress stream without completed (must be skipped).
-    ["m-wip", "s-today", dayStart + 5_000_000, dayStart + 5_000_000, JSON.stringify({
-      role: "assistant",
-      cost: 0,
-      tokens: { input: 999_999, output: 1, reasoning: 0, cache: { read: 999_999, write: 0 } },
-      time: { created: dayStart + 5_000_000 },
-      modelID: "wip/model",
-    })],
-  ];
-  for (const row of rows) insert.run(...row);
-  db.close();
-
-  const today = collectOpenCodeTodayFromDatabase({
-    now: fixedNow,
-    dbPath: openCodeDbPath,
-  });
-  assert.strictEqual(today.source, "database");
-  assert.strictEqual(today.summary.calendarDay, true);
-  assert.strictEqual(today.summary.sessions, 1);
-  assert.strictEqual(today.summary.requests, 2);
-  assert.strictEqual(today.summary.inputTokens, 12_000);
-  assert.strictEqual(today.summary.outputTokens, 650);
-  assert.strictEqual(today.summary.cacheReadTokens, 28_000);
-  assert.strictEqual(today.summary.totalTokens, 40_650);
-  assert.strictEqual(today.summary.costSource, "estimated");
-  assert(today.summary.costUsd > 1.25);
-  assert.strictEqual(today.summary.rangeStartAt, dayStart);
-  global.__openCodeTodayDbSmoke = {
-    fixedNow,
-    openCodeDbPath,
-    openCodeDbDir,
-    openCodeStatsFixture,
-  };
-}
 
 const claudeEvents = parseClaudeJsonl(JSON.stringify({
   type: "assistant",
@@ -1244,51 +1119,6 @@ async function runFetchTimeoutSmoke() {
   }
 }
 
-async function runOpenCodeCalendarTodaySmoke() {
-  const fixture = global.__openCodeTodayDbSmoke;
-  assert.ok(fixture, "OpenCode calendar today fixture missing");
-  try {
-    const collected = await collectOpenCodeAgentUsage({
-      now: fixture.fixedNow,
-      resolveDbPath: () => fixture.openCodeDbPath,
-      runStats: async () => {
-        throw new Error("DB path available — CLI stats must not be required");
-      },
-    });
-    assert.strictEqual(collected.todaySource, "database");
-    assert.strictEqual(collected.source, "database");
-    assert.strictEqual(collected.windows.today.requests, 2);
-    assert.strictEqual(collected.windows.today.totalTokens, 40_650);
-    assert.strictEqual(collected.windows.today.calendarDay, true);
-    assert.strictEqual(collected.windows.today.costSource, "estimated");
-    assert(collected.windows.today.costUsd > 1.25);
-
-    // 7d includes yesterday + today; excludes 20d-old row.
-    assert.strictEqual(collected.windows.sevenDays.sessions, 2);
-    assert.strictEqual(collected.windows.sevenDays.requests, 3);
-    assert.strictEqual(collected.windows.sevenDays.costSource, "estimated");
-    assert(collected.windows.sevenDays.costUsd > collected.windows.today.costUsd);
-
-    // 30d includes all completed rows and per-model public API estimates.
-    assert.strictEqual(collected.windows.thirtyDays.sessions, 3);
-    assert.strictEqual(collected.windows.thirtyDays.requests, 4);
-    assert.strictEqual(collected.windows.thirtyDays.costSource, "estimated");
-    assert(collected.windows.thirtyDays.costUsd >= collected.windows.sevenDays.costUsd);
-
-    const sol = collected.models.find((item) => item.model === "cpa/gpt-5.6-sol");
-    assert.ok(sol);
-    assert.strictEqual(sol.costSource, "estimated");
-    assert(sol.costUsd > 0);
-    const gemini = collected.models.find((item) => item.model === "cpa/gemini-3.6-flash-high");
-    assert.ok(gemini);
-    assert.strictEqual(gemini.costSource, "recorded");
-    assert.strictEqual(gemini.costUsd, 1.25);
-  } finally {
-    fs.rmSync(fixture.openCodeDbDir, { recursive: true, force: true });
-    delete global.__openCodeTodayDbSmoke;
-  }
-}
-
 runZhipuRequestSmoke()
   .then(runGrokRefreshSmoke)
   .then(runGrokSourceSmoke)
@@ -1296,7 +1126,6 @@ runZhipuRequestSmoke()
   .then(runSecretStorageSmoke)
   .then(runUpdaterIntegritySmoke)
   .then(runFetchTimeoutSmoke)
-  .then(runOpenCodeCalendarTodaySmoke)
   .then(() => console.log("Smoke tests passed"))
   .catch((error) => {
     console.error(error);

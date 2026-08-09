@@ -1,7 +1,7 @@
 /* eslint-disable no-unused-vars -- globals consumed by settings.js */
 /* global formatUsageInteger, formatUsageTokens, formatUsageMoney, escapeHtml, escapeAttr, computeCacheShare, state, root, render */
 /* exported normalizeAgentUsagePayload, applyAgentUsagePayload, refreshAgentUsageNavigation,
-   renderAgentUsagePage, renderCodexAgentUsage, renderOpenCodeAgentUsage,
+   renderAgentUsagePage, renderCodexAgentUsage,
    renderUsageModelsSection, renderUsageWindowCard, loadAgentUsage */
 
 /**
@@ -9,7 +9,7 @@
  * on the same window scope without ES module wiring.
  *
  * Depends on settings.js owning:
- *   - `state` (agentUsage / agentUsageSource / view)
+ *   - `state` (agentUsage / view)
  *   - `render()`
  *   - `root` (for navigation badge)
  */
@@ -46,50 +46,37 @@ function refreshAgentUsageNavigation() {
 function renderAgentUsagePage() {
   const usage = state.agentUsage;
   const aggregate = usage.data;
-  const source = state.agentUsageSource === "codex" ? "codex" : "opencode";
   const codex = aggregate?.codex || (aggregate?.windows ? aggregate : null);
-  const opencode = aggregate?.opencode || null;
-  const selectedData = source === "codex" ? codex : opencode;
-  const refreshedAt = selectedData?.generatedAt || aggregate?.generatedAt;
-  const sourceLabel = source === "opencode" ? "OpenCode" : "Codex";
-  const description = source === "opencode"
-    ? "汇总本机 OpenCode 会话、消息、Token 与 provider 记录费用。"
-    : "汇总本机 Codex Agent 的请求、Token 与 API 等价费用，不按账号拆分。";
-  const sourceError = aggregate?.sourceErrors?.[source] || null;
+  const refreshedAt = codex?.generatedAt || aggregate?.generatedAt;
+  const sourceError = aggregate?.sourceErrors?.codex || null;
   const cacheState = usage.loading
     ? "正在后台更新，当前结果可继续使用"
     : sourceError
       ? "本次更新未成功，正在显示上次可用结果"
-      : usage.stale || selectedData?.stale
+      : usage.stale || codex?.stale
         ? "显示上次统计结果，后台会自动刷新"
         : "";
 
   let body = "";
 
   if (usage.loading && !aggregate) {
-    body = `<div class="usage-loading" aria-live="polite"><span></span><strong>正在读取本机 Agent 用量…</strong><small>Codex 只读取本地会话日志；OpenCode 只调用本机 CLI 统计命令。</small></div>`;
+    body = `<div class="usage-loading" aria-live="polite"><span></span><strong>正在读取本机 Agent 用量…</strong><small>Codex 只读取本地会话日志。</small></div>`;
   } else if (usage.error && !aggregate) {
     body = `<div class="usage-error"><strong>统计失败</strong><p>${escapeHtml(usage.error)}</p><button class="btn" data-action="refresh-agent-usage">重试</button></div>`;
-  } else if (source === "opencode") {
-    body = renderOpenCodeAgentUsage(opencode);
   } else {
     body = renderCodexAgentUsage(codex);
   }
 
   return `
     <div class="editor-head">
-      <div class="section-title"><strong>Agent 用量</strong><span>${escapeHtml(description)}</span></div>
+      <div class="section-title"><strong>Agent 用量</strong><span>汇总本机 Codex Agent 的请求、Token 与 API 等价费用，不按账号拆分。</span></div>
       <div class="agent-usage-actions">
-        <div class="agent-source-switch" role="group" aria-label="Agent 用量来源">
-          <button class="agent-source-button ${source === "codex" ? "is-active" : ""}" type="button" data-action="set-agent-usage-source" data-source="codex" aria-label="显示 Codex 用量" aria-pressed="${source === "codex"}" title="Codex 用量"><img src="../assets/codex-logo.png" alt="" /></button>
-          <button class="agent-source-button ${source === "opencode" ? "is-active" : ""}" type="button" data-action="set-agent-usage-source" data-source="opencode" aria-label="显示 OpenCode 用量" aria-pressed="${source === "opencode"}" title="OpenCode 用量"><img src="../assets/opencode-logo.png" alt="" /></button>
-        </div>
         <button class="btn" data-action="refresh-agent-usage" ${usage.loading ? "disabled" : ""}>${usage.loading ? "统计中…" : "重新统计"}</button>
       </div>
     </div>
     <div class="form usage-page">
       ${cacheState ? `<p class="usage-refresh-note${sourceError ? " is-warning" : ""}"${sourceError ? ` title="${escapeAttr(sourceError)}"` : ""}>${cacheState}</p>` : ""}
-      <div class="usage-meta"><span>${escapeHtml(sourceLabel)} 数据更新时间：${escapeHtml(refreshedAt ? new Date(refreshedAt).toLocaleString("zh-CN") : "尚未统计")}</span>${source === "codex" && codex?.lastEventAt ? `<span>最近活动：${escapeHtml(new Date(codex.lastEventAt).toLocaleString("zh-CN"))}</span>` : ""}</div>
+      <div class="usage-meta"><span>Codex 数据更新时间：${escapeHtml(refreshedAt ? new Date(refreshedAt).toLocaleString("zh-CN") : "尚未统计")}</span>${codex?.lastEventAt ? `<span>最近活动：${escapeHtml(new Date(codex.lastEventAt).toLocaleString("zh-CN"))}</span>` : ""}</div>
       ${body}
     </div>
   `;
@@ -126,25 +113,6 @@ function renderCodexAgentUsage(data) {
     </section>
     ${renderUsageModelsSection(models, "模型明细", "最近 30 天，费用按公开 API 单价估算", "估算费用", "最近 30 天没有可统计的 Codex 会话。")}
     <p class="usage-note">统计来自本机 Codex JSONL 会话日志，不代表订阅账单；未知模型不会计入金额，但 Token 仍会保留。</p>
-  `;
-}
-
-function renderOpenCodeAgentUsage(data) {
-  if (!data) {
-    return `<div class="usage-error usage-unavailable"><strong>OpenCode 统计尚未就绪</strong><p>请重新统计以读取本机 OpenCode CLI 数据。</p></div>`;
-  }
-  if (!data.available) {
-    return `<div class="usage-error usage-unavailable"><strong>OpenCode 统计不可用</strong><p>${escapeHtml(data.error || "未检测到 OpenCode CLI。")}</p><button class="btn" data-action="refresh-agent-usage">重新统计</button></div>`;
-  }
-  const models = Array.isArray(data.models) ? data.models : [];
-  return `
-    <div class="usage-window-grid is-opencode">
-      ${renderUsageWindowCard("今天", data.windows?.today, false, "估算", "separate")}
-      ${renderUsageWindowCard("最近 7 天", data.windows?.sevenDays, false, "估算", "separate")}
-      ${renderUsageWindowCard("最近 30 天", data.windows?.thirtyDays, true, "估算", "separate")}
-    </div>
-    ${renderUsageModelsSection(models, "模型明细", "最近 30 天；按模型 Token × 公开 API 单价估算（有 provider 记录费用时优先）", "估算费用", "最近 30 天没有可统计的 OpenCode 使用记录。")}
-    <p class="usage-note">今天 / 7 天 / 30 天均从本机 OpenCode 数据库按模型汇总并估算费用，不读取聊天正文。不等于订阅账单。</p>
   `;
 }
 
@@ -188,7 +156,6 @@ async function loadAgentUsage(options = {}) {
       : {
         generatedAt: Date.now(),
         codex: await window.codingPlanBar.getCodexAgentUsage(),
-        opencode: { available: false, generatedAt: Date.now(), windows: {}, models: [], error: "当前版本尚未提供 OpenCode 统计。" },
       };
     applyAgentUsagePayload(payload);
   } catch (error) {

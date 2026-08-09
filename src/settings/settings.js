@@ -52,7 +52,6 @@ let state = {
     stale: false,
     savedAt: null,
   },
-  agentUsageSource: "opencode",
   status: "正在读取设置...",
   statusIsError: false,
   statusTone: "loading",
@@ -1684,12 +1683,6 @@ function bindUpdateEvents() {
   });
   root.querySelectorAll("[data-action='refresh-agent-usage']").forEach((button) => {
     button.addEventListener("click", () => loadAgentUsage({ force: true }));
-  });
-  root.querySelectorAll("[data-action='set-agent-usage-source']").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.agentUsageSource = button.dataset.source === "codex" ? "codex" : "opencode";
-      render();
-    });
   });
   root.querySelector("[data-action='show-health']")?.addEventListener("click", () => {
     state.view = "health";

@@ -50,9 +50,8 @@ function formatUsageMoney(value, partial = false) {
  *
  * - "included" (Codex): cache_read is typically already counted inside input,
  *   so the bar is cache / input (capped at 100%).
- * - "separate" (OpenCode / Anthropic-style): input is fresh tokens only and
- *   cache is tracked separately (same split as cc-switch + opencode stats).
- *   Hit rate is cache / (input + cache).
+ * - "separate" (Anthropic-style): input is fresh tokens only and
+ *   cache is tracked separately. Hit rate is cache / (input + cache).
  */
 function computeCacheShare(windowData = {}, mode = "included") {
   const input = Math.max(0, Number(windowData?.inputTokens) || 0);

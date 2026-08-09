@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.19] - 2026-08-03
+
+### Removed
+
+- 移除 OpenCode Agent 用量统计功能。「Agent 用量」页面现在只统计本机 Codex Agent 用量，不再调用 OpenCode CLI 或读取 opencode.db。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。已配置的供应商、账号和 API Key 不受影响；agent-usage 缓存格式去掉 opencode 源，旧缓存会在下次刷新后自动失效重建。
+
 ## [0.4.18] - 2026-08-03
 
 ### Added
