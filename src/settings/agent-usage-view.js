@@ -75,7 +75,7 @@ function renderAgentUsagePage() {
 
   return `
     <div class="editor-head">
-      <div class="section-title"><strong>Agent 用量</strong><span>汇总本机 Codex / Claude Code 的请求、Token 与 API 等价费用，不按账号拆分。</span></div>
+      <div class="section-title"><strong>Agent 用量</strong><span>本机会话的请求、Token 与费用估算。</span></div>
       <div class="agent-usage-actions">
         <div class="agent-source-switch" role="group" aria-label="Agent 用量来源">
           <button class="agent-source-button ${source === "codex" ? "is-active" : ""}" type="button" data-action="set-agent-usage-source" data-source="codex" aria-pressed="${source === "codex"}" title="Codex 用量">Codex</button>
