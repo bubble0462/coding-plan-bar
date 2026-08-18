@@ -304,8 +304,12 @@ function isCursorInsidePopup(margin = 8) {
   );
 }
 
-function sendSnapshot() {
-  resizePopupForState();
+function sendSnapshot(options = {}) {
+  // On selection changes the renderer immediately re-reports a measured
+  // height; skipping the estimate resize here means exactly one resize per
+  // switch instead of estimate-then-measured (avoids transparent-window
+  // paint artifacts during the transition).
+  if (!options.skipResize) resizePopupForState();
   if (popupWindow && !popupWindow.webContents.isDestroyed()) {
     if (popupWindow.isVisible()) positionPopup();
     popupWindow.webContents.send("quota:snapshot", snapshotPayload());
@@ -349,7 +353,7 @@ function providerLayoutKey(providers = []) {
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
       const staleCount = provider.lastSuccess ? 1 : 0;
       const shape = provider.balance
-        ? `balance:${provider.usage ? 1 : 0}`
+        ? `balance:${provider.usage ? 1 : 0}:${provider.platformUsage ? (provider.platformUsage.error ? "perr" : `p${provider.platformUsage.daily?.length || 0}`) : ""}`
         : `tiers:${tierCount}:${provider.usageHistory ? "rich" : "plain"}`;
       return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:stale:${staleCount}:${provider.message ? 1 : 0}`;
     })
@@ -493,6 +497,7 @@ function applyLastSuccessProvider(provider, configuredProvider) {
     extraUsage: previous.extraUsage || provider.extraUsage,
     usageHistory: previous.usageHistory || provider.usageHistory,
     mcpQuota: previous.mcpQuota || provider.mcpQuota,
+    platformUsage: previous.platformUsage || provider.platformUsage,
     resetCredits: previous.resetCredits || provider.resetCredits,
     lastSuccess: {
       queriedAt: previous.queriedAt || cached.savedAt,
@@ -1201,7 +1206,7 @@ function selectPopupProvider(_event, providerId) {
   }
   currentState = { ...currentState, popupSelectedProvider: requested };
   invalidateMeasuredPopupHeight();
-  sendSnapshot();
+  sendSnapshot({ skipResize: true });
   return { providerId: requested };
 }
 

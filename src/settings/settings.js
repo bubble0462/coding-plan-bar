@@ -963,6 +963,17 @@ function renderEditor(provider) {
                 <input data-field="apiKeyEnv" aria-labelledby="provider-api-key-env-label" value="${escapeAttr(apiKeyEnvToText(provider.apiKeyEnv))}" placeholder="例如：DEEPSEEK_API_KEY" />
                 <p class="hint">多个环境变量用英文逗号分隔。</p>
               </div>
+              ${
+                String(provider.baseUrl || "").toLowerCase().includes("api.deepseek.com")
+                  ? `
+                    <div class="field full">
+                      <label id="provider-platform-token-label">DeepSeek 平台 Token（可选）</label>
+                      <input data-field="platformToken" aria-labelledby="provider-platform-token-label" type="password" value="${escapeAttr(provider.platformToken || "")}" placeholder="登录 platform.deepseek.com 后从控制台复制 userToken" />
+                      <p class="hint">配置后弹窗详情可显示本月 Token、费用与趋势（平台控制台接口，与余额的官方 API 相互独立）。Token 过期后请更新。</p>
+                    </div>
+                  `
+                  : ""
+              }
             `
             : `
               <div class="field full">

@@ -9,6 +9,8 @@ const {
   parseZhipuTokenTiers,
   parseZhipuUsageHistory,
   parseZhipuMcpQuota,
+  parseDeepSeekPlatformUsage,
+  deepSeekPricingState,
   windowSecondsToTierName,
   writeJsonFileAtomic,
   queryGrokQuota,
@@ -457,6 +459,63 @@ assert.strictEqual(zhipuHistory.todayTokens, 313_000_000);
 assert.strictEqual(parseZhipuUsageHistory({ data: { x_time: [] } }), null);
 assert.strictEqual(parseZhipuUsageHistory({ data: {} }), null);
 assert.strictEqual(parseZhipuUsageHistory(null), null);
+
+// DeepSeek platform-console usage: token types map to hit/miss/output and the
+// cost endpoint contributes CNY per day; both merge into a daily series.
+const deepSeekUsage = parseDeepSeekPlatformUsage(
+  {
+    data: {
+      biz_data: {
+        days: [
+          { date: "2026-08-01", data: [
+            { type: "PROMPT_CACHE_HIT_TOKEN", amount: "1000" },
+            { type: "PROMPT_CACHE_MISS_TOKEN", amount: 200 },
+            { type: "RESPONSE_TOKEN", amount: "50" },
+            { type: "UNKNOWN_TYPE", amount: 999 },
+          ] },
+          { date: "2026-08-02", data: [{ type: "PROMPT_CACHE_HIT_TOKEN", amount: 3000 }] },
+        ],
+      },
+    },
+  },
+  {
+    data: {
+      biz_data: [
+        {
+          days: [
+            { date: "2026-08-01", data: [
+              { type: "PROMPT_CACHE_HIT_TOKEN", amount: "0.12" },
+              { type: "RESPONSE_TOKEN", amount: 0.05 },
+            ] },
+            { date: "2026-08-02", data: [{ type: "PROMPT_CACHE_HIT_TOKEN", amount: 0.09 }] },
+          ],
+        },
+      ],
+    },
+  },
+  "2026-08",
+);
+assert.strictEqual(deepSeekUsage.month, "2026-08");
+assert.strictEqual(deepSeekUsage.daily.length, 2);
+assert.deepStrictEqual(deepSeekUsage.daily[0].tokens, { hit: 1000, miss: 200, output: 50 });
+assert.strictEqual(deepSeekUsage.daily[0].costCny > 0.169 && deepSeekUsage.daily[0].costCny < 0.171, true);
+assert.strictEqual(deepSeekUsage.totals.totalTokens, 4250);
+assert.strictEqual(deepSeekUsage.totals.hit, 4000);
+assert.strictEqual(deepSeekUsage.totals.miss, 200);
+assert.strictEqual(deepSeekUsage.totals.output, 50);
+assert.strictEqual(Math.abs(deepSeekUsage.totals.costCny - 0.26) < 1e-9, true);
+assert.strictEqual(deepSeekUsage.error, null);
+assert.strictEqual(parseDeepSeekPlatformUsage({}, {}, "2026-08"), null);
+assert.strictEqual(parseDeepSeekPlatformUsage(null, null, "2026-08"), null);
+
+// DeepSeek off-peak window: 00:30–08:30 Beijing time (UTC+8).
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T00:29:00+08:00")).isOffPeak, false);
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T00:31:00+08:00")).isOffPeak, true);
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T08:29:00+08:00")).isOffPeak, true);
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T08:31:00+08:00")).isOffPeak, false);
+// Also correct when the host clock is in a non-Beijing timezone (UTC here).
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-17T16:31:00Z")).isOffPeak, true);
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T02:00:00Z")).isOffPeak, false);
 assert.strictEqual(findModelPricing("glm-4.7-flash").output, 0);
 assert.strictEqual(findModelPricing("claude-mythos-5").output, 50);
 assert.strictEqual(findModelPricing("claude-sonnet-5").input, 2);
@@ -625,8 +684,16 @@ const twoTierProvider = { tiers: [{}, {}] };
 const oneProviderHeight = computePopupHeight([twoTierProvider]);
 const threeProviderHeight = computePopupHeight([twoTierProvider, twoTierProvider, twoTierProvider]);
 const fourProviderHeight = computePopupHeight([twoTierProvider, twoTierProvider, twoTierProvider, twoTierProvider]);
+const sixProviderHeight = computePopupHeight([
+  twoTierProvider, twoTierProvider, twoTierProvider,
+  twoTierProvider, twoTierProvider, twoTierProvider,
+]);
+const sevenProviderHeight = computePopupHeight([
+  ...Array.from({ length: 7 }, () => twoTierProvider),
+]);
 assert(oneProviderHeight < threeProviderHeight);
-assert.strictEqual(fourProviderHeight, threeProviderHeight);
+assert(fourProviderHeight > threeProviderHeight);
+assert.strictEqual(sevenProviderHeight, sixProviderHeight);
 
 const templates = providerTemplates();
 assert(templates.some((template) => template.id === "deepseek"));

@@ -11,6 +11,7 @@ const reorderTest = process.argv.includes("--reorder");
 const grokOnly = process.argv.includes("--grok");
 const darkMode = process.argv.includes("--dark");
 const detailMode = process.argv.includes("--detail");
+const deepSeekMode = process.argv.includes("--deepseek");
 const providerCount = countArg ? Number(countArg.split("=")[1]) : null;
 const providerSequence = sequenceArg
   ? sequenceArg
@@ -30,7 +31,12 @@ const outputSuffix = balanceOnly
   : Number.isFinite(providerCount)
     ? `-${providerCount}`
     : "";
-const outputPath = path.join(__dirname, "..", "tmp", `popup-screenshot${outputSuffix}${detailMode ? "-detail" : ""}${darkMode ? "-dark" : ""}.png`);
+const outputPath = path.join(
+  __dirname,
+  "..",
+  "tmp",
+  `popup-screenshot${outputSuffix}${detailMode ? "-detail" : ""}${deepSeekMode ? "-deepseek" : ""}${darkMode ? "-dark" : ""}.png`,
+);
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-capture-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
 
@@ -161,6 +167,20 @@ const sampleProviders = [
     planLabel: "Direct balance",
     status: "ok",
     statusText: "可用",
+    platformUsage: {
+      month: "2026-08",
+      daily: Array.from({ length: 20 }, (_, index) => ({
+        date: `2026-08-${String(index + 1).padStart(2, "0")}`,
+        costCny: [0.42, 0.18, 0, 0.05, 0.66, 1.24, 2.1, 1.8, 0.9, 0.32, 0.12, 0.48, 1.05, 2.4, 3.2, 2.8, 1.6, 0.7, 0.25, 0.55][index],
+        tokens: {
+          hit: 180_000 + index * 12_000,
+          miss: 24_000 + index * 1_800,
+          output: 9_000 + index * 700,
+        },
+      })),
+      totals: { costCny: 19.86, totalTokens: 6_282_000, hit: 5_544_000, miss: 606_000, output: 132_000 },
+      error: null,
+    },
     balance: {
         planName: "账户余额",
       remaining: 18.42,
@@ -258,14 +278,21 @@ async function main() {
   ipcMain.handle("quota:keep-open", () => {});
   ipcMain.handle("quota:leave-popup", () => {});
   ipcMain.handle("quota:visibility-complete", () => {});
-  ipcMain.handle("quota:select-provider", (_event, providerId) => ({ providerId }));
-  ipcMain.handle("quota:resize", (_event, height) => {
+  ipcMain.handle("quota:select-provider", (_event, providerId) => {
+    // Mirror production: the snapshot is sent immediately and the renderer's
+    // measured-height report drives the single window resize.
+    firstSnapshot.popupSelectedProvider = String(providerId);
     if (captureWindow && !captureWindow.isDestroyed()) {
-      if (debugLayout) console.log(`resize:${height}`);
-      captureWindow.setResizable(true);
-      captureWindow.setSize(POPUP_WIDTH, Math.round(Number(height)), false);
-      captureWindow.setResizable(false);
+      captureWindow.webContents.send("quota:snapshot", firstSnapshot);
     }
+    return { providerId };
+  });
+  ipcMain.handle("quota:resize", (_event, height) => {
+    if (!captureWindow || captureWindow.isDestroyed()) return;
+    if (debugLayout) console.log(`resize:${height}`);
+    captureWindow.setResizable(true);
+    captureWindow.setSize(POPUP_WIDTH, Math.round(Number(height)), false);
+    captureWindow.setResizable(false);
   });
   ipcMain.handle("quota:reorder-providers", (_event, ids) => {
     const order = new Map(ids.map((id, index) => [id, index]));
@@ -286,13 +313,17 @@ async function main() {
     show: false,
     frame: false,
     resizable: false,
-    transparent: false,
-    backgroundColor: "#eef2f7",
+    // Match the production popup window: transparent surface, no background.
+    transparent: true,
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: path.join(__dirname, "..", "src", "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+  captureWindow.webContents.on("console-message", (_event, _level, message) => {
+    if (/\berror\b/i.test(message)) console.log(`[renderer] ${message}`);
   });
 
   await captureWindow.loadFile(path.join(__dirname, "..", "src", "renderer", "index.html"));
@@ -456,6 +487,15 @@ async function main() {
       failure: { label: '查询失败', action: '检查网络设置' },
       tiers: [],
     }, 0, false, false, false));
+    const codexDetailCard = providerCardFromMarkup(renderProvider({
+      id: 'codex',
+      name: 'Codex',
+      kind: 'official-subscription',
+      status: 'ok',
+      statusText: '可用',
+      resetCredits: { available: 5 },
+      tiers: [{ name: 'five_hour', label: '5h', utilization: 40 }],
+    }, 0, false, false, false));
     return {
       refreshHasBusy: refresh ? refresh.getAttribute('aria-busy') : 'missing',
       listScrollable: list ? list.classList.contains('is-scrollable') : false,
@@ -482,10 +522,12 @@ async function main() {
         serviceErrorCard?.classList.contains('is-service-attention') &&
         !serviceErrorCard.classList.contains('is-quota-danger')
       ),
-      resetCreditsText: document.querySelector('.provider[data-provider-id="codex"] .reset-credits-row strong')?.textContent || '',
+      resetCreditsText: codexDetailCard?.querySelector('.reset-credits-row strong')?.textContent || '',
       rootTheme: document.documentElement.dataset.theme || '',
       selectorChips: Array.from(document.querySelectorAll('.selector-chip')).map((chip) => chip.textContent.trim()),
       activeSelection: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
+      overviewRowCount: document.querySelectorAll('.provider.overview-row').length,
+      overviewValues: Array.from(document.querySelectorAll('.provider.overview-row .overview-value')).map((node) => node.textContent.trim()),
     };
   })()`);
   if (assertions.refreshHasBusy === 'missing') throw new Error('Popup refresh control was not rendered');
@@ -493,6 +535,20 @@ async function main() {
     throw new Error(`Popup card count assertion failed: ${assertions.cardCount}`);
   }
   if (!assertions.cardIdsStable) throw new Error('Popup provider cards must keep stable data-provider-id');
+  if (assertions.overviewRowCount !== firstSnapshot.providers.length) {
+    throw new Error(`Popup overview rows incomplete: ${assertions.overviewRowCount} of ${firstSnapshot.providers.length}`);
+  }
+  if (assertions.overviewValues.some((value) => !value)) {
+    throw new Error(`Popup overview rows must all show a metric: ${JSON.stringify(assertions.overviewValues)}`);
+  }
+  const snapshotIds = firstSnapshot.providers.map((provider) => provider.id);
+  if (snapshotIds.includes("deepseek") && !assertions.overviewValues.some((value) => value.startsWith("¥"))) {
+    throw new Error(`Popup overview must show a CNY balance for DeepSeek: ${JSON.stringify(assertions.overviewValues)}`);
+  }
+  if (firstSnapshot.providers.some((provider) => provider.id !== "deepseek") &&
+      !assertions.overviewValues.some((value) => value.startsWith("剩余"))) {
+    throw new Error(`Popup overview must show remaining percent for tier providers: ${JSON.stringify(assertions.overviewValues)}`);
+  }
   if (!assertions.selectorChips.includes('全部') || assertions.selectorChips.length !== firstSnapshot.providers.length + 1) {
     throw new Error(`Popup provider selector chips incomplete: ${JSON.stringify(assertions.selectorChips)}`);
   }
@@ -518,6 +574,47 @@ async function main() {
     throw new Error(`Popup dark theme was not applied to root element: ${JSON.stringify(assertions.rootTheme)}`);
   }
 
+  if (deepSeekMode) {
+    // Entering the detail view by clicking the compact overview row.
+    await captureWindow.webContents.executeJavaScript(
+      `document.querySelector('.provider.overview-row[data-provider-id="deepseek"]')?.click()`,
+    );
+    await wait(400);
+    const deepSeekAssertions = await captureWindow.webContents.executeJavaScript(`(() => {
+      const line = document.querySelector('.detail-chart polyline');
+      const footer = document.querySelector('.footer');
+      const footerRect = footer?.getBoundingClientRect();
+      return {
+        detailCard: Boolean(document.querySelector('.provider-detail .provider[data-provider-id="deepseek"]')),
+        statChips: document.querySelectorAll('.usage-detail .stat-chip').length,
+        linePoints: line ? line.getAttribute('points').trim().split(/\\s+/).length : 0,
+        pricingBadge: document.querySelector('.usage-detail .pricing-badge')?.textContent || '',
+        sourceNote: document.querySelector('.usage-detail .usage-source')?.textContent || '',
+        breakdown: document.querySelector('.usage-detail .usage-breakdown')?.textContent || '',
+        footerVisible: Boolean(footerRect && footerRect.bottom <= window.innerHeight + 1),
+      };
+    })()`);
+    if (!deepSeekAssertions.detailCard) throw new Error('DeepSeek detail view did not render the provider card');
+    if (deepSeekAssertions.statChips !== 2) {
+      throw new Error(`DeepSeek detail must show cost and token chips: ${deepSeekAssertions.statChips}`);
+    }
+    if (deepSeekAssertions.linePoints !== 20) {
+      throw new Error(`DeepSeek month chart must have 20 points: ${deepSeekAssertions.linePoints}`);
+    }
+    if (!/谷时 5 折|标准时段/.test(deepSeekAssertions.pricingBadge)) {
+      throw new Error(`DeepSeek pricing badge missing: ${JSON.stringify(deepSeekAssertions.pricingBadge)}`);
+    }
+    if (!deepSeekAssertions.sourceNote.includes("平台控制台")) {
+      throw new Error(`DeepSeek source note missing: ${JSON.stringify(deepSeekAssertions.sourceNote)}`);
+    }
+    if (!deepSeekAssertions.breakdown.includes("缓存命中")) {
+      throw new Error(`DeepSeek token breakdown missing: ${JSON.stringify(deepSeekAssertions.breakdown)}`);
+    }
+    if (!deepSeekAssertions.footerVisible) throw new Error('DeepSeek detail view footer is clipped');
+    const deepSeekImage = await captureWindow.capturePage();
+    fs.writeFileSync(outputPath, deepSeekImage.toPNG());
+  }
+
   if (detailMode) {
     await captureWindow.webContents.executeJavaScript(
       `document.querySelector('[data-select-provider="glm"]')?.click()`,
@@ -525,12 +622,25 @@ async function main() {
     await wait(400);
     const detailAssertions = await captureWindow.webContents.executeJavaScript(`(() => {
       const line = document.querySelector('.detail-chart polyline');
+      const selector = document.querySelector('.provider-selector');
+      const rect = selector?.getBoundingClientRect();
+      const footer = document.querySelector('.footer');
+      const footerRect = footer?.getBoundingClientRect();
       return {
         detailCard: Boolean(document.querySelector('.provider-detail .provider[data-provider-id="glm"]')),
         linePoints: line ? line.getAttribute('points').trim().split(/\\s+/).length : 0,
         statChips: document.querySelectorAll('.usage-detail .stat-chip').length,
         mcpTier: Boolean(document.querySelector('.usage-detail .mcp-tier')),
         activeChip: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
+        selectorVisible: Boolean(
+          rect && rect.height > 4 && rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
+        ),
+        footerVisible: Boolean(
+          footerRect && footerRect.height > 4 && footerRect.bottom <= window.innerHeight + 1,
+        ),
+        selectorTop: rect ? Math.round(rect.top) : null,
+        footerBottom: footerRect ? Math.round(footerRect.bottom) : null,
+        viewportHeight: window.innerHeight,
       };
     })()`);
     if (!detailAssertions.detailCard) throw new Error('Popup detail view did not render the selected provider card');
@@ -544,12 +654,46 @@ async function main() {
     if (detailAssertions.activeChip !== 'glm') {
       throw new Error(`Popup selection chip should be glm: ${JSON.stringify(detailAssertions.activeChip)}`);
     }
+    if (!detailAssertions.selectorVisible) {
+      throw new Error(
+        `Popup provider selector is not visible in detail view: top=${detailAssertions.selectorTop} viewport=${detailAssertions.viewportHeight}`,
+      );
+    }
+    if (!detailAssertions.footerVisible) {
+      throw new Error(
+        `Popup footer is clipped in detail view: bottom=${detailAssertions.footerBottom} viewport=${detailAssertions.viewportHeight}`,
+      );
+    }
     const afterRerender = await captureWindow.webContents.executeJavaScript(
       `(() => { render(false); return document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || ''; })()`,
     );
     if (afterRerender !== 'glm') {
       throw new Error(`Popup selection did not survive a re-render: ${JSON.stringify(afterRerender)}`);
     }
+
+    // Transition back to the all view must not leave any detail markup behind.
+    await captureWindow.webContents.executeJavaScript(
+      `document.querySelector('[data-select-provider="all"]')?.click()`,
+    );
+    await wait(400);
+    const backAssertions = await captureWindow.webContents.executeJavaScript(`(() => ({
+      leftoverDetail: Boolean(document.querySelector('.provider-detail')),
+      leftoverUsage: Boolean(document.querySelector('.usage-detail')),
+      leftoverMcp: Boolean(document.querySelector('.mcp-tier')),
+      cardCount: document.querySelectorAll('.provider[data-provider-id]').length,
+      activeChip: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
+    }))()`);
+    if (backAssertions.leftoverDetail || backAssertions.leftoverUsage || backAssertions.leftoverMcp) {
+      throw new Error(`Popup all view retained detail leftovers: ${JSON.stringify(backAssertions)}`);
+    }
+    if (backAssertions.activeChip !== 'all') {
+      throw new Error(`Popup back-to-all chip should be active: ${JSON.stringify(backAssertions.activeChip)}`);
+    }
+
+    await captureWindow.webContents.executeJavaScript(
+      `document.querySelector('[data-select-provider="glm"]')?.click()`,
+    );
+    await wait(400);
     const detailImage = await captureWindow.capturePage();
     fs.writeFileSync(outputPath, detailImage.toPNG());
   }

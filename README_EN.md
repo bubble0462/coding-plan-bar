@@ -13,7 +13,9 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Shows request counts and token totals per quota window, with model-aware estimated cost in USD.
 - The Settings page includes **Agent Usage**: switch between local Codex and Claude Code usage — today, the last 7 days, the last 30 days, requests, tokens, sessions, and model-level cost.
 - Balance cards can show today's requests, tokens, and spend returned by the endpoint; DeepSeek uses seven-day local-log statistics.
-- Automatically fits up to three providers and switches to a scrollable fixed height for four or more.
+- The popup has two levels: an overview of compact rows showing each provider's remaining quota and risk status, and a detail view entered by clicking a row. The top selector switches providers and remembers your choice.
+- The GLM detail view shows today's calls, tokens, a 24-hour line chart, and the monthly MCP quota. The DeepSeek detail view can optionally use a platform token to show this month's cost, tokens, cache-hit breakdown, a daily cost line chart, and an off-peak pricing badge.
+- Automatically fits up to six providers and switches to a scrollable fixed height beyond that.
 - Graphical provider management without manually editing JSON.
 - Reorder providers from the left drag handle; the quota panel follows the saved order.
 - Drag cards directly from the quota panel to persist their display order.

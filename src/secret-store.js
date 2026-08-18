@@ -1,4 +1,4 @@
-const SECRET_FIELDS = ["apiKey", "accessToken"];
+const SECRET_FIELDS = ["apiKey", "accessToken", "platformToken"];
 const SECRET_MASK = "••••••••••••";
 const ENCRYPTED_SUFFIX = "Encrypted";
 const ENCRYPTED_PREFIX = "dpapi:";

@@ -118,6 +118,7 @@ function safeProviderPreview(provider) {
   const clone = { ...provider };
   if (clone.accessToken) clone.accessToken = maskSecret(clone.accessToken);
   if (clone.apiKey) clone.apiKey = maskSecret(clone.apiKey);
+  if (clone.platformToken) clone.platformToken = maskSecret(clone.platformToken);
   if (clone.importPath) clone.importPath = "<local file>";
   return clone;
 }

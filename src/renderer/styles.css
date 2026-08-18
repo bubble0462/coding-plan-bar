@@ -402,6 +402,120 @@ button {
   background: var(--surface-glass);
 }
 
+.usage-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.usage-hint.is-warning {
+  color: var(--amber-text);
+}
+
+.usage-breakdown {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.usage-source {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  opacity: 0.85;
+}
+
+.pricing-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.pricing-badge.is-off-peak {
+  background: var(--green-soft);
+  color: var(--green-text);
+}
+
+/* Compact overview rows replace full cards in the all view. */
+.provider.overview-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.provider.overview-row + .provider.overview-row {
+  margin-top: 0;
+}
+
+.provider.overview-row .overview-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.provider.overview-row .overview-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.provider.overview-row .overview-plan {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.provider.overview-row .overview-metric {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider.overview-row .overview-value {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.provider.overview-row .progress-track.slim {
+  width: 64px;
+  height: 5px;
+  margin: 0;
+}
+
+.provider.overview-row .status-dot {
+  margin-top: 0;
+}
+
+.provider.overview-row .provider-drag-handle {
+  top: 50%;
+  height: 32px;
+  opacity: 0;
+}
+
+.provider.overview-row:hover .provider-drag-handle,
+.provider.overview-row .provider-drag-handle:focus-visible {
+  opacity: 0.6;
+}
+
 .stat-chips {
   display: flex;
   gap: 8px;

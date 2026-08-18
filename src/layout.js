@@ -1,6 +1,8 @@
 const POPUP_WIDTH = 420;
 const POPUP_MIN_HEIGHT = 180;
-const POPUP_MAX_VISIBLE_PROVIDERS = 3;
+// Compact overview rows are ~48px tall, so more of them fit before the list
+// switches to a scrollable viewport.
+const POPUP_MAX_VISIBLE_PROVIDERS = 6;
 
 const OUTER_PADDING_Y = 24;
 // Header + provider selector row + footer + paddings estimate. The measured
@@ -9,6 +11,7 @@ const FIXED_CHROME_HEIGHT = 161;
 const PROVIDER_LIST_PADDING_Y = 18;
 const PROVIDER_GAP = 8;
 const EMPTY_PROVIDER_HEIGHT = 72;
+const OVERVIEW_ROW_HEIGHT = 48;
 
 function computePopupHeight(providers = []) {
   const visibleProviders = providers.slice(0, POPUP_MAX_VISIBLE_PROVIDERS);
@@ -27,14 +30,8 @@ function isProviderListScrollable(providers = []) {
 
 function estimateProviderHeight(provider) {
   if (!provider) return EMPTY_PROVIDER_HEIGHT;
-
-  const messageHeight = provider.message || provider.failure ? 22 : 0;
-  if (provider.balance) return 127 + (provider.usage ? 20 : 0) + messageHeight;
-
-  const tierCount = Math.max(1, Array.isArray(provider.tiers) ? provider.tiers.length : 0);
-  const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
-  const billingHeight = provider.tool === "grok" && provider.extraUsage ? 26 : 0;
-  return 64 + tierCount * 46 + usageCount * 17 + Math.max(0, tierCount - 1) * 8 + billingHeight + messageHeight;
+  // The all view renders compact overview rows; detail views are measured.
+  return OVERVIEW_ROW_HEIGHT;
 }
 
 module.exports = {

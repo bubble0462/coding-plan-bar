@@ -143,6 +143,13 @@ function render(isDataRefresh = false) {
   patchProviderSelector(providers, selection);
 
   if (selection === "all") {
+    // Returning from a detail view: the reconciler only manages .provider
+    // cards, so drop any leftover .provider-detail wrapper (usage chart, MCP
+    // row) before rebuilding the list.
+    if (list.querySelector(".provider-detail")) {
+      list.innerHTML = "";
+      renderedProviderSignatures.clear();
+    }
     patchProviderList(list, providers, { fresh, isDataRefresh });
     // Use provider count as a fast default, but after the first layout pass
     // upgrade to scrollable when content overflows the window — a single tall
@@ -150,18 +157,7 @@ function render(isDataRefresh = false) {
     // fewer than four providers.
     list.classList.toggle("is-scrollable", providers.length > 3);
     list.classList.toggle("is-static", providers.length <= 3);
-    requestAnimationFrame(() => {
-      const stillStatic = list.classList.contains("is-static");
-      if (!stillStatic) return;
-      const shell = root.querySelector(".panel-shell");
-      if (!shell) return;
-      const rootStyle = getComputedStyle(root);
-      const fullHeight = measureStaticLayoutHeight(shell, rootStyle);
-      if (fullHeight > window.innerHeight + 1) {
-        list.classList.replace("is-static", "is-scrollable");
-        queueLayoutReport();
-      }
-    });
+    upgradeToScrollableIfOverflowing(list);
   } else {
     renderedProviderSignatures.clear();
     const selected = providers.find((provider) => String(provider.id) === selection) || null;
@@ -170,6 +166,7 @@ function render(isDataRefresh = false) {
       : renderEmpty();
     list.classList.remove("is-scrollable");
     list.classList.add("is-static");
+    upgradeToScrollableIfOverflowing(list);
   }
 
   const fatal = root.querySelector("[data-role='fatal']");
@@ -233,16 +230,23 @@ function ensurePopupShell() {
   root.querySelector("[data-action='focus-attention']")?.addEventListener("click", focusFirstAttentionProvider);
   root.querySelector("[data-role='provider-selector']")?.addEventListener("click", (event) => {
     const chip = event.target.closest("[data-select-provider]");
-    if (!chip) return;
-    const next = chip.dataset.selectProvider;
-    if (next === selectedProviderId) return;
-    selectedProviderId = next;
-    renderedSelectorSignature = "";
-    lastReportedHeight = 0;
-    render(false);
-    queueLayoutReport();
-    window.codingPlanBar.selectProvider?.(next).catch(() => {});
+    if (chip) selectProviderView(chip.dataset.selectProvider);
   });
+  root.querySelector(".provider-list")?.addEventListener("click", (event) => {
+    if (event.target.closest("[data-provider-drag]")) return;
+    const row = event.target.closest(".provider.overview-row[data-provider-id]");
+    if (row) selectProviderView(row.dataset.providerId);
+  });
+}
+
+function selectProviderView(next) {
+  if (!next || next === selectedProviderId) return;
+  selectedProviderId = next;
+  renderedSelectorSignature = "";
+  lastReportedHeight = 0;
+  render(false);
+  queueLayoutReport();
+  window.codingPlanBar.selectProvider?.(next).catch(() => {});
 }
 
 function patchProviderList(list, providers, { fresh, isDataRefresh }) {
@@ -271,9 +275,9 @@ function patchProviderList(list, providers, { fresh, isDataRefresh }) {
     const changed = Boolean(priorSignature && priorSignature !== signature && !snapshot.loading);
     let card = list.querySelector(`.provider[data-provider-id="${cssEscape(id)}"]`);
     if (!card) {
-      card = providerCardFromMarkup(renderProvider(provider, index, fresh, changed || isDataRefresh, canReorder));
+      card = providerCardFromMarkup(renderOverviewRow(provider, index, fresh, changed || isDataRefresh, canReorder));
     } else if (priorSignature !== signature || card.dataset.canReorder !== String(canReorder)) {
-      const next = providerCardFromMarkup(renderProvider(provider, index, false, changed, canReorder));
+      const next = providerCardFromMarkup(renderOverviewRow(provider, index, false, changed, canReorder));
       card.replaceWith(next);
       card = next;
       if (changed) flashChangedCard(card);
@@ -283,6 +287,58 @@ function patchProviderList(list, providers, { fresh, isDataRefresh }) {
   }
   list.scrollTop = priorScrollTop;
   bindProviderReorder();
+}
+
+function renderOverviewRow(provider, index, fresh, changed, canReorder) {
+  const serviceStatus = providerServiceStatus(provider);
+  const quotaRisk = providerQuotaRisk(provider);
+  const needsAttention = Boolean(providerAlertClass(provider));
+  const classes = [
+    "provider",
+    "overview-row",
+    `status-${serviceStatus.status}`,
+    providerServiceClass(provider),
+    quotaRisk ? `is-quota-${quotaRisk}` : "",
+    canReorder ? "is-reorderable" : "",
+    fresh ? "is-fresh" : "",
+    changed ? "is-changed" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const enterStyle = fresh ? ` style="--enter-delay:${Math.min(index, 4) * 45}ms"` : "";
+
+  const tiers = Array.isArray(provider.tiers) ? provider.tiers : [];
+  const maxUtilization = tiers.length
+    ? Math.max(...tiers.map((tier) => clamp(Number(tier.utilization) || 0, 0, 100)))
+    : 0;
+  let value = "";
+  let barWidth = 0;
+  if (provider.balance) {
+    const unit = provider.balance.unit || "";
+    const remaining = Number(provider.balance.remaining) || 0;
+    value = unit === "CNY" ? `¥${remaining.toFixed(2)}` : `$${remaining.toFixed(2)}`;
+  } else if (tiers.length) {
+    value = `剩余 ${Math.round(100 - maxUtilization)}%`;
+    barWidth = Math.round(maxUtilization);
+  } else {
+    value = serviceStatus.label;
+  }
+  const barClass = maxUtilization >= 90 ? "bar-danger" : maxUtilization >= 70 ? "bar-warn" : "bar-ok";
+
+  return `
+    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}" data-can-reorder="${canReorder}" data-needs-attention="${needsAttention}" tabindex="-1" role="button" aria-label="${escapeAttr(providerAccessibleLabel(provider, serviceStatus, quotaRisk))}。按 Enter 查看详情。"${enterStyle}>
+      ${canReorder ? `<button class="provider-drag-handle" type="button" draggable="true" data-provider-drag="${escapeAttr(provider.id || "")}" title="Alt + 上下方向键调整显示顺序" aria-label="调整 ${escapeAttr(provider.name || provider.id)} 的显示顺序。按 Alt 加上方向键或下方向键移动。">${ICONS.grip}</button>` : ""}
+      <span class="status-dot"></span>
+      <div class="overview-main">
+        <span class="overview-name">${escapeHtml(provider.name || provider.id)}</span>
+        <span class="overview-plan">${escapeHtml(provider.planLabel ? provider.planLabel : provider.kindLabel || provider.kind || "")}</span>
+      </div>
+      <div class="overview-metric">
+        ${barWidth ? `<div class="progress-track slim"><div class="progress-bar ${barClass}" style="width:${barWidth}%"></div></div>` : ""}
+        <strong class="overview-value">${escapeHtml(value)}</strong>
+      </div>
+    </article>
+  `;
 }
 
 function providerCardFromMarkup(markup) {
@@ -303,6 +359,17 @@ function providerDisplaySignature(provider) {
     usage: provider.usage,
     tiers: provider.tiers,
     extraUsage: provider.extraUsage,
+    usageHistory: provider.usageHistory && {
+      todayCalls: provider.usageHistory.todayCalls,
+      todayTokens: provider.usageHistory.todayTokens,
+    },
+    mcpQuota: provider.mcpQuota && Math.round(provider.mcpQuota.utilization),
+    platformUsage: provider.platformUsage && {
+      month: provider.platformUsage.month,
+      error: provider.platformUsage.error || null,
+      days: provider.platformUsage.daily?.length || 0,
+      costCny: provider.platformUsage.totals?.costCny,
+    },
   });
 }
 
@@ -334,6 +401,11 @@ function announcePopupStatus(providers) {
 }
 
 function focusFirstAttentionProvider() {
+  // Attention cards outside the selected detail view are not in the DOM —
+  // fall back to the all view first so the focus target exists.
+  if (selectedProviderId !== null && selectedProviderId !== "all") {
+    selectProviderView("all");
+  }
   const card = root.querySelector('.provider[data-needs-attention="true"]');
   if (!card) return;
   card.scrollIntoView({ block: "nearest", behavior: prefersReducedMotion() ? "auto" : "smooth" });
@@ -390,8 +462,26 @@ function patchProviderSelector(providers, selection) {
 }
 
 function renderUsageDetail(provider) {
+  if (provider.usageHistory && Array.isArray(provider.usageHistory.hourly) && provider.usageHistory.hourly.length) {
+    return renderGlmUsageDetail(provider);
+  }
+  if (provider.platformUsage) return renderDeepSeekUsage(provider.platformUsage);
+  if (isDeepSeekProvider(provider)) {
+    return `
+      <div class="usage-detail">
+        <p class="usage-hint">在设置中填写 DeepSeek 平台 Token 后，这里会显示本月 Token、费用与逐日趋势。余额查询不受影响。</p>
+      </div>
+    `;
+  }
+  return "";
+}
+
+function isDeepSeekProvider(provider) {
+  return /deepseek/i.test(`${provider.id || ""} ${provider.name || ""}`);
+}
+
+function renderGlmUsageDetail(provider) {
   const history = provider.usageHistory;
-  if (!history || !Array.isArray(history.hourly) || !history.hourly.length) return "";
   const mcp = provider.mcpQuota;
   return `
     <div class="usage-detail">
@@ -399,40 +489,84 @@ function renderUsageDetail(provider) {
         <span class="stat-chip">今日调用 <strong>${escapeHtml(formatCompactNumber(history.todayCalls))}</strong> 次</span>
         <span class="stat-chip">Token <strong>${escapeHtml(formatCompactNumber(history.todayTokens))}</strong></span>
       </div>
-      ${renderLineChart(history.hourly)}
+      ${renderLineChart(
+        history.hourly.map((point) => point.calls),
+        history.hourly.map((point) => (point.hour ? `${point.hour}:00` : "")),
+        "近 24 小时调用量折线图",
+      )}
       ${mcp ? renderMcpQuota(mcp) : ""}
+      <p class="usage-source">数据来源：智谱服务端接口（额度 · model-usage），不代表订阅账单。</p>
     </div>
   `;
 }
 
-function renderLineChart(hourly) {
+function renderDeepSeekUsage(platformUsage) {
+  if (platformUsage.error || !Array.isArray(platformUsage.daily) || !platformUsage.daily.length) {
+    return `
+      <div class="usage-detail">
+        <p class="usage-hint is-warning">${escapeHtml(platformUsage.error || "平台用量数据暂不可用。")}余额仍来自官方 API，不受影响。</p>
+        <p class="usage-source">数据来源：余额 · 官方 API / 用量 · 平台控制台。</p>
+      </div>
+    `;
+  }
+  const totals = platformUsage.totals || { costCny: 0, totalTokens: 0, hit: 0, miss: 0, output: 0 };
+  const pricing = deepSeekPricingBadge();
+  return `
+    <div class="usage-detail">
+      <div class="stat-chips">
+        <span class="stat-chip">本月费用 <strong>¥${(Number(totals.costCny) || 0).toFixed(2)}</strong>${pricing}</span>
+        <span class="stat-chip">本月 Token <strong>${escapeHtml(formatCompactNumber(totals.totalTokens))}</strong></span>
+      </div>
+      <p class="usage-breakdown">缓存命中 ${escapeHtml(formatCompactNumber(totals.hit))} · 未命中 ${escapeHtml(formatCompactNumber(totals.miss))} · 输出 ${escapeHtml(formatCompactNumber(totals.output))}</p>
+      ${renderLineChart(
+        platformUsage.daily.map((day) => day.costCny),
+        platformUsage.daily.map((day) => String(day.date || "").slice(5)),
+        "本月逐日费用折线图",
+      )}
+      <p class="usage-source">数据来源：余额 · 官方 API / 用量与费用 · 平台控制台（${escapeHtml(platformUsage.month || "")}）。峰谷提示不参与费用计算。</p>
+    </div>
+  `;
+}
+
+function deepSeekPricingBadge() {
+  const now = new Date();
+  const beijing = new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60_000);
+  const minutes = beijing.getHours() * 60 + beijing.getMinutes();
+  const isOffPeak = minutes >= 30 && minutes < 30 + 8 * 60;
+  return `<span class="pricing-badge ${isOffPeak ? "is-off-peak" : ""}" title="DeepSeek 谷时 00:30–08:30（北京时间）输入 5 折，仅提示不参与计算">${isOffPeak ? "谷时 5 折" : "标准时段"}</span>`;
+}
+
+function renderLineChart(values, labels, ariaLabel) {
+  const series = (values || []).map((value) => Number(value) || 0);
+  if (series.length < 2) return "";
   const width = 380;
   const height = 56;
   const top = 5;
   const bottom = 50;
-  const maxCalls = Math.max(1, ...hourly.map((point) => Number(point.calls) || 0));
-  const stepX = hourly.length > 1 ? width / (hourly.length - 1) : width;
-  const points = hourly.map((point, index) => {
+  const max = Math.max(1, ...series);
+  const stepX = width / (series.length - 1);
+  const points = series.map((value, index) => {
     const x = index * stepX;
-    const y = bottom - ((Number(point.calls) || 0) / maxCalls) * (bottom - top);
+    const y = bottom - (value / max) * (bottom - top);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
   let peakIndex = 0;
-  hourly.forEach((point, index) => {
-    if ((Number(point.calls) || 0) > (Number(hourly[peakIndex].calls) || 0)) peakIndex = index;
+  series.forEach((value, index) => {
+    if (value > series[peakIndex]) peakIndex = index;
   });
   const peakX = (peakIndex * stepX).toFixed(1);
-  const peakY = (bottom - ((Number(hourly[peakIndex].calls) || 0) / maxCalls) * (bottom - top)).toFixed(1);
+  const peakY = (bottom - (series[peakIndex] / max) * (bottom - top)).toFixed(1);
   const area = `0,${bottom} ${points.join(" ")} ${width},${bottom}`;
-  const hourLabel = (index) => (hourly[index]?.hour ? `${hourly[index].hour}:00` : "");
+  const label = (index) => escapeHtml(labels?.[index] || "");
+  const middleIndex = Math.floor(series.length / 2);
   return `
     <div class="detail-chart">
-      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="近 24 小时调用量折线图">
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="${escapeAttr(ariaLabel)}">
         <polygon class="chart-area" points="${area}"></polygon>
         <polyline class="chart-line" points="${points.join(" ")}"></polyline>
         <circle class="chart-peak" cx="${peakX}" cy="${peakY}" r="2.6"></circle>
       </svg>
-      <div class="chart-labels"><span>${escapeHtml(hourLabel(0))}</span><span>${escapeHtml(hourLabel(11))}</span><span>${escapeHtml(hourLabel(23))}</span></div>
+      <div class="chart-labels"><span>${label(0)}</span><span>${label(middleIndex)}</span><span>${label(series.length - 1)}</span></div>
     </div>
   `;
 }
@@ -901,9 +1035,23 @@ function measureStaticLayoutHeight(shell, rootStyle) {
   return Math.ceil(footerRect.bottom - rootRect.top) + parsePixel(rootStyle.paddingBottom);
 }
 
+function upgradeToScrollableIfOverflowing(list) {
+  requestAnimationFrame(() => {
+    if (!list.classList.contains("is-static")) return;
+    const shell = root.querySelector(".panel-shell");
+    if (!shell) return;
+    const rootStyle = getComputedStyle(root);
+    const fullHeight = measureStaticLayoutHeight(shell, rootStyle);
+    if (fullHeight > window.innerHeight + 1) {
+      list.classList.replace("is-static", "is-scrollable");
+      queueLayoutReport();
+    }
+  });
+}
+
 function measureScrollableLayoutHeight(shell, providerList, rootStyle) {
   const cards = Array.from(providerList.querySelectorAll(":scope > article"));
-  const visibleCount = 3;
+  const visibleCount = 6;
   const listStyle = getComputedStyle(providerList);
   const listPadding =
     parsePixel(listStyle.paddingTop) + parsePixel(listStyle.paddingBottom);
@@ -945,7 +1093,7 @@ function providerLayoutKey(providers = []) {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
       const shape = provider.balance
-        ? `balance:${provider.usage ? 1 : 0}`
+        ? `balance:${provider.usage ? 1 : 0}:${provider.platformUsage ? (provider.platformUsage.error ? "perr" : `p${provider.platformUsage.daily?.length || 0}`) : ""}`
         : `tiers:${tierCount}:${provider.usageHistory ? "rich" : "plain"}`;
       return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:${provider.message ? 1 : 0}`;
     })

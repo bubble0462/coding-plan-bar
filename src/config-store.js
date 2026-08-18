@@ -104,6 +104,8 @@ function normalizeProvider(provider) {
     apiKey: provider.apiKey || undefined,
     apiKeyEncrypted: provider.apiKeyEncrypted || undefined,
     apiKeyEnv: provider.apiKeyEnv || undefined,
+    platformToken: provider.platformToken || undefined,
+    platformTokenEncrypted: provider.platformTokenEncrypted || undefined,
     enabled: provider.enabled !== false,
     tiers: provider.tiers || undefined,
     unavailableSecretFields: normalizeUnavailableSecretFields(provider),
@@ -129,6 +131,8 @@ function normalizeProvider(provider) {
     delete normalized.apiKey;
     delete normalized.apiKeyEncrypted;
     delete normalized.apiKeyEnv;
+    delete normalized.platformToken;
+    delete normalized.platformTokenEncrypted;
     delete normalized.tiers;
     // Keep ciphertext for secrets that still need re-auth after a DPAPI miss.
     if (!normalized.accessToken && !normalized.accessTokenEncrypted) {
@@ -147,8 +151,12 @@ function normalizeProvider(provider) {
     if (!normalized.apiKey && !normalized.apiKeyEncrypted) {
       delete normalized.apiKeyEncrypted;
     }
+    if (!normalized.platformToken && !normalized.platformTokenEncrypted) {
+      delete normalized.platformToken;
+      delete normalized.platformTokenEncrypted;
+    }
     normalized.unavailableSecretFields = normalized.unavailableSecretFields.filter(
-      (field) => field === "apiKey" && !normalized.apiKey,
+      (field) => (field === "apiKey" && !normalized.apiKey) || (field === "platformToken" && !normalized.platformToken),
     );
   }
 

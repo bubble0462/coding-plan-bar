@@ -162,6 +162,7 @@ function normalizeBalanceProvider(provider, result) {
     balance: preferred,
     balances,
     usage,
+    platformUsage: result.platformUsage || null,
   };
 }
 
@@ -850,7 +851,7 @@ async function queryBalance(provider) {
   if (!provider.baseUrl) return { success: false, data: null, error: "缺少请求地址" };
 
   const detected = detectBalanceProvider(provider.baseUrl || "");
-  if (detected === "deepseek") return queryDeepSeekBalance(apiKey);
+  if (detected === "deepseek") return queryDeepSeekBalance(apiKey, provider);
   if (detected === "moonshot") return queryMoonshotBalance(provider.baseUrl, apiKey);
   if (detected === "openrouter") return queryOpenRouterBalance(apiKey);
   if (detected === "siliconflow-cn") return querySiliconFlowBalance(apiKey, true);
@@ -869,7 +870,13 @@ function detectBalanceProvider(baseUrl) {
   return null;
 }
 
-async function queryDeepSeekBalance(apiKey) {
+async function queryDeepSeekBalance(apiKey, provider) {
+  // The platform-console usage query runs concurrently with the official
+  // balance API; failures degrade to a usage hint without affecting balance.
+  const platformToken = typeof provider?.platformToken === "string" ? provider.platformToken.trim() : "";
+  const platformUsagePromise = platformToken
+    ? fetchDeepSeekPlatformUsage(platformToken).catch((error) => deepSeekPlatformUsageError(error?.message || String(error)))
+    : null;
   const response = await fetchJson("https://api.deepseek.com/user/balance", {
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -892,7 +899,112 @@ async function queryDeepSeekBalance(apiKey) {
       toppedUpBalance: parseNumber(info.topped_up_balance, 0),
     },
   }));
-  return { success: true, data, error: null };
+  const platformUsage = platformUsagePromise ? await platformUsagePromise : null;
+  return { success: true, data, error: null, platformUsage };
+}
+
+async function fetchDeepSeekPlatformUsage(platformToken) {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+  const monthKey = `${year}-${String(month).padStart(2, "0")}`;
+  const query = `?month=${month}&year=${year}`;
+  const headers = {
+    Authorization: platformToken,
+    Accept: "*/*",
+    "Accept-Language": "zh-CN,zh;q=0.9",
+    Referer: "https://platform.deepseek.com/usage",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+  };
+  const [amount, cost] = await Promise.all([
+    fetchJson(`https://platform.deepseek.com/api/v0/usage/amount${query}`, { headers, timeoutMs: 10000, retries: 1 }),
+    fetchJson(`https://platform.deepseek.com/api/v0/usage/cost${query}`, { headers, timeoutMs: 10000, retries: 1 }),
+  ]);
+  for (const response of [amount, cost]) {
+    if (response.status === 401 || response.status === 403) {
+      return deepSeekPlatformUsageError("平台 Token 已失效，请在设置中更新 DeepSeek 平台 Token");
+    }
+  }
+  if (!amount.ok || !cost.ok) {
+    return deepSeekPlatformUsageError(`平台用量接口不可用 (HTTP ${amount.status}/${cost.status})`);
+  }
+  const parsed = parseDeepSeekPlatformUsage(amount.json, cost.json, monthKey);
+  if (!parsed) return deepSeekPlatformUsageError("平台用量响应格式无法识别");
+  return parsed;
+}
+
+function deepSeekPlatformUsageError(message) {
+  return {
+    month: null,
+    daily: [],
+    totals: { costCny: 0, totalTokens: 0, hit: 0, miss: 0, output: 0 },
+    error: message,
+  };
+}
+
+function parseDeepSeekPlatformUsage(amountJson, costJson, monthKey) {
+  const amountDays = deepSeekUsageBizDays(amountJson);
+  const costDays = deepSeekUsageBizDays(costJson);
+  if (!amountDays && !costDays) return null;
+  const byDate = new Map();
+  const dayEntry = (date) => {
+    if (!byDate.has(date)) {
+      byDate.set(date, { date, costCny: 0, tokens: { hit: 0, miss: 0, output: 0 } });
+    }
+    return byDate.get(date);
+  };
+  const TOKEN_FIELDS = {
+    PROMPT_CACHE_HIT_TOKEN: "hit",
+    PROMPT_CACHE_MISS_TOKEN: "miss",
+    RESPONSE_TOKEN: "output",
+  };
+  for (const { date, rows, kind } of [
+    ...amountDays.map((day) => ({ ...day, kind: "tokens" })),
+    ...costDays.map((day) => ({ ...day, kind: "cost" })),
+  ]) {
+    if (!date) continue;
+    const entry = dayEntry(date);
+    for (const row of rows) {
+      const field = TOKEN_FIELDS[String(row.type || "").toUpperCase()];
+      if (!field) continue;
+      const value = parseNumber(row.amount, 0);
+      if (kind === "cost") entry.costCny += value;
+      else entry.tokens[field] += value;
+    }
+  }
+  const daily = [...byDate.values()].sort((left, right) => String(left.date).localeCompare(String(right.date)));
+  const totals = daily.reduce((acc, day) => ({
+    costCny: acc.costCny + day.costCny,
+    hit: acc.hit + day.tokens.hit,
+    miss: acc.miss + day.tokens.miss,
+    output: acc.output + day.tokens.output,
+    totalTokens: acc.totalTokens + day.tokens.hit + day.tokens.miss + day.tokens.output,
+  }), { costCny: 0, hit: 0, miss: 0, output: 0, totalTokens: 0 });
+  return { month: monthKey, daily, totals, error: null };
+}
+
+function deepSeekUsageBizDays(json) {
+  let biz = json?.data?.biz_data;
+  if (Array.isArray(biz)) biz = biz[0];
+  const days = biz?.days;
+  if (!Array.isArray(days)) return null;
+  return days.map((day) => ({
+    date: day?.date ? String(day.date) : null,
+    rows: Array.isArray(day?.data) ? day.data : [],
+  }));
+}
+
+// DeepSeek official off-peak discount: 50% off between 16:30–00:30 UTC, i.e.
+// 00:30–08:30 Beijing time. Display-only hint; it never changes cost math.
+function deepSeekPricingState(now = new Date()) {
+  const beijing = new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60_000);
+  const minutes = beijing.getHours() * 60 + beijing.getMinutes();
+  const isOffPeak = minutes >= 30 && minutes < 30 + 8 * 60;
+  return {
+    isOffPeak,
+    label: isOffPeak ? "谷时 5 折" : "标准时段",
+    window: "00:30–08:30（北京时间）",
+  };
 }
 
 async function queryMoonshotBalance(baseUrl, apiKey) {
@@ -1597,6 +1709,8 @@ module.exports = {
   parseZhipuTokenTiers,
   parseZhipuUsageHistory,
   parseZhipuMcpQuota,
+  parseDeepSeekPlatformUsage,
+  deepSeekPricingState,
   parseMiniMaxTiers,
   parseGenericBalanceResponse,
   parseBalanceUsage,
