@@ -2,7 +2,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 
 function providerFingerprint(provider = {}, secretOverride) {
@@ -13,6 +13,7 @@ function providerFingerprint(provider = {}, secretOverride) {
     tool: String(provider.tool || ""),
     baseUrl: normalizeBaseUrl(provider.baseUrl),
     apiKeyHash: secret ? secretFingerprint(secret) : "",
+    platformTokenHash: provider.platformToken ? secretFingerprint(provider.platformToken) : "",
     apiKeyEnv: Array.isArray(provider.apiKeyEnv)
       ? provider.apiKeyEnv.map(String).sort()
       : String(provider.apiKeyEnv || ""),

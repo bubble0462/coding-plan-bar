@@ -19,6 +19,8 @@ const ICONS = {
     '<svg viewBox="0 0 16 20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="4" r="1.25"/><circle cx="11" cy="4" r="1.25"/><circle cx="5" cy="10" r="1.25"/><circle cx="11" cy="10" r="1.25"/><circle cx="5" cy="16" r="1.25"/><circle cx="11" cy="16" r="1.25"/></svg>',
 };
 
+const MAX_VISIBLE_PROVIDERS = 6;
+
 let snapshot = {
   loading: true,
   providers: [],
@@ -154,9 +156,9 @@ function render(isDataRefresh = false) {
     // Use provider count as a fast default, but after the first layout pass
     // upgrade to scrollable when content overflows the window — a single tall
     // card (e.g. Grok with three tiers) can exceed the work area even with
-    // fewer than four providers.
-    list.classList.toggle("is-scrollable", providers.length > 3);
-    list.classList.toggle("is-static", providers.length <= 3);
+    // fewer than the normal visible-provider limit.
+    list.classList.toggle("is-scrollable", providers.length > MAX_VISIBLE_PROVIDERS);
+    list.classList.toggle("is-static", providers.length <= MAX_VISIBLE_PROVIDERS);
     upgradeToScrollableIfOverflowing(list);
   } else {
     renderedProviderSignatures.clear();
@@ -237,6 +239,14 @@ function ensurePopupShell() {
     const row = event.target.closest(".provider.overview-row[data-provider-id]");
     if (row) selectProviderView(row.dataset.providerId);
   });
+  root.querySelector(".provider-list")?.addEventListener("keydown", (event) => {
+    if (event.target.closest("[data-provider-drag]")) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    const row = event.target.closest(".provider.overview-row[data-provider-id]");
+    if (!row) return;
+    event.preventDefault();
+    selectProviderView(row.dataset.providerId);
+  });
 }
 
 function selectProviderView(next) {
@@ -316,7 +326,7 @@ function renderOverviewRow(provider, index, fresh, changed, canReorder) {
   if (provider.balance) {
     const unit = provider.balance.unit || "";
     const remaining = Number(provider.balance.remaining) || 0;
-    value = unit === "CNY" ? `¥${remaining.toFixed(2)}` : `$${remaining.toFixed(2)}`;
+    value = formatMoney(remaining, unit);
   } else if (tiers.length) {
     value = `剩余 ${Math.round(100 - maxUtilization)}%`;
     barWidth = Math.round(maxUtilization);
@@ -326,7 +336,7 @@ function renderOverviewRow(provider, index, fresh, changed, canReorder) {
   const barClass = maxUtilization >= 90 ? "bar-danger" : maxUtilization >= 70 ? "bar-warn" : "bar-ok";
 
   return `
-    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}" data-can-reorder="${canReorder}" data-needs-attention="${needsAttention}" tabindex="-1" role="button" aria-label="${escapeAttr(providerAccessibleLabel(provider, serviceStatus, quotaRisk))}。按 Enter 查看详情。"${enterStyle}>
+    <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}" data-can-reorder="${canReorder}" data-needs-attention="${needsAttention}" tabindex="0" role="button" aria-label="${escapeAttr(providerAccessibleLabel(provider, serviceStatus, quotaRisk))}。按 Enter 查看详情。"${enterStyle}>
       ${canReorder ? `<button class="provider-drag-handle" type="button" draggable="true" data-provider-drag="${escapeAttr(provider.id || "")}" title="Alt + 上下方向键调整显示顺序" aria-label="调整 ${escapeAttr(provider.name || provider.id)} 的显示顺序。按 Alt 加上方向键或下方向键移动。">${ICONS.grip}</button>` : ""}
       <span class="status-dot"></span>
       <div class="overview-main">
@@ -532,8 +542,11 @@ function deepSeekPricingBadge() {
   const now = new Date();
   const beijing = new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60_000);
   const minutes = beijing.getHours() * 60 + beijing.getMinutes();
-  const isOffPeak = minutes >= 30 && minutes < 30 + 8 * 60;
-  return `<span class="pricing-badge ${isOffPeak ? "is-off-peak" : ""}" title="DeepSeek 谷时 00:30–08:30（北京时间）输入 5 折，仅提示不参与计算">${isOffPeak ? "谷时 5 折" : "标准时段"}</span>`;
+  const isPeak =
+    (minutes >= 9 * 60 && minutes < 12 * 60) ||
+    (minutes >= 14 * 60 && minutes < 18 * 60);
+  const isOffPeak = !isPeak;
+  return `<span class="pricing-badge ${isOffPeak ? "is-off-peak" : ""}" title="DeepSeek 高峰为 09:00–12:00、14:00–18:00（北京时间），其余空闲时段 5 折；仅提示不参与计算">${isOffPeak ? "空闲 5 折" : "高峰时段"}</span>`;
 }
 
 function renderLineChart(values, labels, ariaLabel) {
@@ -1015,7 +1028,7 @@ function reportLayoutHeight() {
   // Prefer the list's actual class (set by the content-overflow check) over
   // the raw count, so a single tall card that was upgraded to scrollable
   // reports a bounded height instead of its full natural height.
-  const isScrollable = providerList.classList.contains("is-scrollable") || providerCount > 3;
+  const isScrollable = providerList.classList.contains("is-scrollable") || providerCount > MAX_VISIBLE_PROVIDERS;
   const desiredHeight = isScrollable
     ? measureScrollableLayoutHeight(shell, providerList, rootStyle)
     : measureStaticLayoutHeight(shell, rootStyle);
@@ -1051,7 +1064,7 @@ function upgradeToScrollableIfOverflowing(list) {
 
 function measureScrollableLayoutHeight(shell, providerList, rootStyle) {
   const cards = Array.from(providerList.querySelectorAll(":scope > article"));
-  const visibleCount = 6;
+  const visibleCount = MAX_VISIBLE_PROVIDERS;
   const listStyle = getComputedStyle(providerList);
   const listPadding =
     parsePixel(listStyle.paddingTop) + parsePixel(listStyle.paddingBottom);

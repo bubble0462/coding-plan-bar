@@ -14,7 +14,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - The Settings page includes **Agent Usage**: switch between local Codex and Claude Code usage — today, the last 7 days, the last 30 days, requests, tokens, sessions, and model-level cost.
 - Balance cards can show today's requests, tokens, and spend returned by the endpoint; DeepSeek uses seven-day local-log statistics.
 - The popup has two levels: an overview of compact rows showing each provider's remaining quota and risk status, and a detail view entered by clicking a row. The top selector switches providers and remembers your choice.
-- The GLM detail view shows today's calls, tokens, a 24-hour line chart, and the monthly MCP quota. The DeepSeek detail view can optionally use a platform token to show this month's cost, tokens, cache-hit breakdown, a daily cost line chart, and an off-peak pricing badge.
+- The GLM detail view shows today's calls, tokens, a 24-hour line chart, and the monthly MCP quota. The DeepSeek detail view can optionally use a platform token to show this month's cost, tokens, cache-hit breakdown, a daily cost line chart, and a pricing-period badge. DeepSeek peak periods are 09:00–12:00 and 14:00–18:00 Beijing time; all other times are shown as the 50%-off period. The badge does not recalculate platform-reported costs.
 - Automatically fits up to six providers and switches to a scrollable fixed height beyond that.
 - Graphical provider management without manually editing JSON.
 - Reorder providers from the left drag handle; the quota panel follows the saved order.
@@ -31,7 +31,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 Download the latest Windows installer from [Releases](https://github.com/bubble0462/coding-plan-bar/releases/latest):
 
 ```text
-Coding Plan Bar-Setup-0.4.4-x64.exe
+Coding Plan Bar-Setup-<version>-x64.exe
 ```
 
 Quit any running older version before installing. The installer supports a custom destination, including drives such as D:. Upgrading does not delete your user configuration.

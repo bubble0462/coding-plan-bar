@@ -452,6 +452,12 @@ button {
   cursor: pointer;
 }
 
+.provider.overview-row:focus-visible {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: var(--ring);
+}
+
 .provider.overview-row + .provider.overview-row {
   margin-top: 0;
 }

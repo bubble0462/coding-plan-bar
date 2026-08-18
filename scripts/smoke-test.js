@@ -389,6 +389,10 @@ assert.notStrictEqual(
   providerFingerprint(cacheProvider, "first-env-key"),
   providerFingerprint(cacheProvider, "second-env-key"),
 );
+assert.notStrictEqual(
+  providerFingerprint({ ...cacheProvider, platformToken: "first-platform-token" }),
+  providerFingerprint({ ...cacheProvider, platformToken: "second-platform-token" }),
+);
 assert.strictEqual(
   readProviderCache(cachePath, { now: Date.now() + DEFAULT_TTL_MS + 1 }).size,
   0,
@@ -508,14 +512,51 @@ assert.strictEqual(deepSeekUsage.error, null);
 assert.strictEqual(parseDeepSeekPlatformUsage({}, {}, "2026-08"), null);
 assert.strictEqual(parseDeepSeekPlatformUsage(null, null, "2026-08"), null);
 
-// DeepSeek off-peak window: 00:30–08:30 Beijing time (UTC+8).
-assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T00:29:00+08:00")).isOffPeak, false);
-assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T00:31:00+08:00")).isOffPeak, true);
-assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T08:29:00+08:00")).isOffPeak, true);
-assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T08:31:00+08:00")).isOffPeak, false);
+// Newer platform responses wrap usage rows by model and return an explicit
+// COST_CNY row. Explicit cost must win so legacy token-price rows are not
+// counted a second time.
+const normalizedDeepSeekUsage = parseDeepSeekPlatformUsage(
+  {
+    data: { biz_data: { days: [{
+      date: "2026-08-03",
+      data: [{ model: "deepseek-v4", usage: [
+        { type: "PROMPT_CACHE_HIT_TOKEN", amount: 500 },
+        { type: "PROMPT_CACHE_MISS_TOKEN", amount: 100 },
+        { type: "RESPONSE_TOKEN", amount: 25 },
+      ] }],
+    }] } },
+  },
+  {
+    data: { biz_data: { days: [{
+      date: "2026-08-03",
+      data: [{ model: "deepseek-v4", usage: [
+        { type: "COST_CNY", amount: "1.25" },
+        { type: "PROMPT_CACHE_HIT_TOKEN", amount: "0.20" },
+      ] }],
+    }] } },
+  },
+  "2026-08",
+);
+assert.deepStrictEqual(normalizedDeepSeekUsage.daily[0].tokens, { hit: 500, miss: 100, output: 25 });
+assert.strictEqual(normalizedDeepSeekUsage.daily[0].costCny, 1.25);
+assert.strictEqual(normalizedDeepSeekUsage.totals.totalTokens, 625);
+
+// DeepSeek high-price periods: 09:00–12:00 and 14:00–18:00 Beijing time.
+for (const [time, expectedOffPeak] of [
+  ["2026-08-18T08:59:00+08:00", true],
+  ["2026-08-18T09:00:00+08:00", false],
+  ["2026-08-18T11:59:00+08:00", false],
+  ["2026-08-18T12:00:00+08:00", true],
+  ["2026-08-18T13:59:00+08:00", true],
+  ["2026-08-18T14:00:00+08:00", false],
+  ["2026-08-18T17:59:00+08:00", false],
+  ["2026-08-18T18:00:00+08:00", true],
+]) {
+  assert.strictEqual(deepSeekPricingState(new Date(time)).isOffPeak, expectedOffPeak, time);
+}
 // Also correct when the host clock is in a non-Beijing timezone (UTC here).
-assert.strictEqual(deepSeekPricingState(new Date("2026-08-17T16:31:00Z")).isOffPeak, true);
-assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T02:00:00Z")).isOffPeak, false);
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T01:00:00Z")).isOffPeak, false);
+assert.strictEqual(deepSeekPricingState(new Date("2026-08-18T04:00:00Z")).isOffPeak, true);
 assert.strictEqual(findModelPricing("glm-4.7-flash").output, 0);
 assert.strictEqual(findModelPricing("claude-mythos-5").output, 50);
 assert.strictEqual(findModelPricing("claude-sonnet-5").input, 2);

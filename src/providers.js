@@ -915,18 +915,39 @@ async function fetchDeepSeekPlatformUsage(platformToken) {
     "Accept-Language": "zh-CN,zh;q=0.9",
     Referer: "https://platform.deepseek.com/usage",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "sec-ch-ua": '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "x-app-version": "20240425.0",
+  };
+  const requestOptions = {
+    headers,
+    timeoutMs: 10000,
+    retries: 1,
+    retryStatuses: [502, 503, 504],
   };
   const [amount, cost] = await Promise.all([
-    fetchJson(`https://platform.deepseek.com/api/v0/usage/amount${query}`, { headers, timeoutMs: 10000, retries: 1 }),
-    fetchJson(`https://platform.deepseek.com/api/v0/usage/cost${query}`, { headers, timeoutMs: 10000, retries: 1 }),
+    fetchJson(`https://platform.deepseek.com/api/v0/usage/amount${query}`, requestOptions),
+    fetchJson(`https://platform.deepseek.com/api/v0/usage/cost${query}`, requestOptions),
   ]);
   for (const response of [amount, cost]) {
     if (response.status === 401 || response.status === 403) {
       return deepSeekPlatformUsageError("平台 Token 已失效，请在设置中更新 DeepSeek 平台 Token");
     }
+    if (response.status === 429) {
+      const contentType = String(response.headers?.get?.("content-type") || "").toLowerCase();
+      return deepSeekPlatformUsageError(
+        contentType.includes("json")
+          ? "平台用量请求过于频繁，请稍后重试"
+          : "平台风控拒绝请求，请稍后重试或更新兼容配置",
+      );
+    }
   }
   if (!amount.ok || !cost.ok) {
     return deepSeekPlatformUsageError(`平台用量接口不可用 (HTTP ${amount.status}/${cost.status})`);
+  }
+  if (!amount.json || !cost.json) {
+    return deepSeekPlatformUsageError("平台用量接口返回了非 JSON 响应");
   }
   const parsed = parseDeepSeekPlatformUsage(amount.json, cost.json, monthKey);
   if (!parsed) return deepSeekPlatformUsageError("平台用量响应格式无法识别");
@@ -958,18 +979,26 @@ function parseDeepSeekPlatformUsage(amountJson, costJson, monthKey) {
     PROMPT_CACHE_MISS_TOKEN: "miss",
     RESPONSE_TOKEN: "output",
   };
+  const hasNormalizedCost = (costDays || []).some(({ rows }) =>
+    deepSeekUsageRows(rows).some((row) => String(row?.type || "").toUpperCase() === "COST_CNY"),
+  );
   for (const { date, rows, kind } of [
-    ...amountDays.map((day) => ({ ...day, kind: "tokens" })),
-    ...costDays.map((day) => ({ ...day, kind: "cost" })),
+    ...(amountDays || []).map((day) => ({ ...day, kind: "tokens" })),
+    ...(costDays || []).map((day) => ({ ...day, kind: "cost" })),
   ]) {
     if (!date) continue;
     const entry = dayEntry(date);
-    for (const row of rows) {
-      const field = TOKEN_FIELDS[String(row.type || "").toUpperCase()];
-      if (!field) continue;
+    for (const row of deepSeekUsageRows(rows)) {
+      const type = String(row?.type || "").toUpperCase();
+      const field = TOKEN_FIELDS[type];
       const value = parseNumber(row.amount, 0);
-      if (kind === "cost") entry.costCny += value;
-      else entry.tokens[field] += value;
+      if (kind === "cost") {
+        if ((hasNormalizedCost && type === "COST_CNY") || (!hasNormalizedCost && field)) {
+          entry.costCny += value;
+        }
+      } else if (field) {
+        entry.tokens[field] += value;
+      }
     }
   }
   const daily = [...byDate.values()].sort((left, right) => String(left.date).localeCompare(String(right.date)));
@@ -983,6 +1012,12 @@ function parseDeepSeekPlatformUsage(amountJson, costJson, monthKey) {
   return { month: monthKey, daily, totals, error: null };
 }
 
+function deepSeekUsageRows(rows) {
+  return (Array.isArray(rows) ? rows : []).flatMap((row) =>
+    Array.isArray(row?.usage) ? row.usage : [row],
+  );
+}
+
 function deepSeekUsageBizDays(json) {
   let biz = json?.data?.biz_data;
   if (Array.isArray(biz)) biz = biz[0];
@@ -994,16 +1029,20 @@ function deepSeekUsageBizDays(json) {
   }));
 }
 
-// DeepSeek official off-peak discount: 50% off between 16:30–00:30 UTC, i.e.
-// 00:30–08:30 Beijing time. Display-only hint; it never changes cost math.
+// DeepSeek official peak periods are 09:00–12:00 and 14:00–18:00 Beijing
+// time. All other times are off-peak at half price. Display-only hint; it
+// never changes cost math returned by the platform usage endpoint.
 function deepSeekPricingState(now = new Date()) {
   const beijing = new Date(now.getTime() + (now.getTimezoneOffset() + 480) * 60_000);
   const minutes = beijing.getHours() * 60 + beijing.getMinutes();
-  const isOffPeak = minutes >= 30 && minutes < 30 + 8 * 60;
+  const isPeak =
+    (minutes >= 9 * 60 && minutes < 12 * 60) ||
+    (minutes >= 14 * 60 && minutes < 18 * 60);
+  const isOffPeak = !isPeak;
   return {
     isOffPeak,
-    label: isOffPeak ? "谷时 5 折" : "标准时段",
-    window: "00:30–08:30（北京时间）",
+    label: isOffPeak ? "空闲 5 折" : "高峰时段",
+    window: "高峰 09:00–12:00、14:00–18:00（北京时间）",
   };
 }
 
@@ -1304,6 +1343,7 @@ async function fetchJson(url, options = {}) {
     timeoutMs = 10000,
     retryBaseDelayMs = 250,
     maxResponseBytes = 2 * 1024 * 1024,
+    retryStatuses = null,
     ...requestOptions
   } = options;
   const retries = Number.isFinite(Number(options.retries))
@@ -1318,7 +1358,7 @@ async function fetchJson(url, options = {}) {
       const response = await fetchJsonOnce(url, requestOptions, timeoutMs, maxResponseBytes);
       response.attempts = attempt;
       response.durationMs = Date.now() - startedAt;
-      if (!isRetryableStatus(response.status) || attempt > retries) return response;
+      if (!isRetryableStatus(response.status, retryStatuses) || attempt > retries) return response;
       await delay(retryDelayMs(response, attempt, retryBaseDelayMs));
     } catch (error) {
       lastError = error;
@@ -1389,8 +1429,11 @@ function isIdempotentMethod(method) {
   return ["GET", "HEAD"].includes(String(method || "GET").toUpperCase());
 }
 
-function isRetryableStatus(status) {
-  return [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
+function isRetryableStatus(status, retryStatuses) {
+  const statuses = retryStatuses == null
+    ? [408, 425, 429, 500, 502, 503, 504]
+    : retryStatuses;
+  return Array.from(statuses).map(Number).includes(Number(status));
 }
 
 function retryDelayMs(response, attempt, baseDelay) {
