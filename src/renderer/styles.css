@@ -338,6 +338,135 @@ button {
   background-clip: padding-box;
 }
 
+.provider-selector {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.provider-selector::-webkit-scrollbar {
+  display: none;
+}
+
+.selector-chip {
+  flex: 0 0 auto;
+  max-width: 108px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-glass);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 140ms var(--ease-out), border-color 140ms var(--ease-out), background-color 140ms var(--ease-out);
+}
+
+.selector-chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.selector-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.selector-chip.is-active {
+  border-color: var(--blue);
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+
+.provider-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.usage-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-glass);
+}
+
+.stat-chips {
+  display: flex;
+  gap: 8px;
+}
+
+.stat-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.stat-chip strong {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.detail-chart {
+  /* The chart is intentionally a white card with a blue line in both themes. */
+  padding: 8px 10px 6px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.detail-chart svg {
+  display: block;
+  width: 100%;
+  height: 56px;
+}
+
+.chart-line {
+  fill: none;
+  stroke: #2563eb;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chart-area {
+  fill: rgba(37, 99, 235, 0.06);
+}
+
+.chart-peak {
+  fill: #2563eb;
+}
+
+.chart-labels {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 2px 0;
+  color: #64748b;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
 .provider {
   position: relative;
   flex: 0 0 auto;

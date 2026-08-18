@@ -45,6 +45,9 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   reorderProviders(providerIds) {
     return ipcRenderer.invoke("quota:reorder-providers", providerIds);
   },
+  selectProvider(providerId) {
+    return ipcRenderer.invoke("quota:select-provider", providerId);
+  },
   quit() {
     return ipcRenderer.invoke("quota:quit");
   },

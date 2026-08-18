@@ -35,6 +35,10 @@ let prevSnapshotUpdatedAt = null;
 let renderedProviderSignatures = new Map();
 let draggedProviderId = null;
 let refreshHighlightTimer = null;
+// Popup provider selection: "all" or a provider id. Module-level so it survives
+// hide/show cycles; the resolved default is persisted to config via IPC.
+let selectedProviderId = null;
+let renderedSelectorSignature = "";
 
 window.codingPlanBar.onSnapshot((next) => {
   const nextLayoutKey = next.layoutKey || providerLayoutKey(next.providers);
@@ -135,25 +139,38 @@ function render(isDataRefresh = false) {
       : "";
   }
 
-  patchProviderList(list, providers, { fresh, isDataRefresh });
-  // Use provider count as a fast default, but after the first layout pass
-  // upgrade to scrollable when content overflows the window — a single tall
-  // card (e.g. Grok with three tiers) can exceed the work area even with
-  // fewer than four providers.
-  list.classList.toggle("is-scrollable", providers.length > 3);
-  list.classList.toggle("is-static", providers.length <= 3);
-  requestAnimationFrame(() => {
-    const stillStatic = list.classList.contains("is-static");
-    if (!stillStatic) return;
-    const shell = root.querySelector(".panel-shell");
-    if (!shell) return;
-    const rootStyle = getComputedStyle(root);
-    const fullHeight = measureStaticLayoutHeight(shell, rootStyle);
-    if (fullHeight > window.innerHeight + 1) {
-      list.classList.replace("is-static", "is-scrollable");
-      queueLayoutReport();
-    }
-  });
+  const selection = resolveProviderSelection(providers);
+  patchProviderSelector(providers, selection);
+
+  if (selection === "all") {
+    patchProviderList(list, providers, { fresh, isDataRefresh });
+    // Use provider count as a fast default, but after the first layout pass
+    // upgrade to scrollable when content overflows the window — a single tall
+    // card (e.g. Grok with three tiers) can exceed the work area even with
+    // fewer than four providers.
+    list.classList.toggle("is-scrollable", providers.length > 3);
+    list.classList.toggle("is-static", providers.length <= 3);
+    requestAnimationFrame(() => {
+      const stillStatic = list.classList.contains("is-static");
+      if (!stillStatic) return;
+      const shell = root.querySelector(".panel-shell");
+      if (!shell) return;
+      const rootStyle = getComputedStyle(root);
+      const fullHeight = measureStaticLayoutHeight(shell, rootStyle);
+      if (fullHeight > window.innerHeight + 1) {
+        list.classList.replace("is-static", "is-scrollable");
+        queueLayoutReport();
+      }
+    });
+  } else {
+    renderedProviderSignatures.clear();
+    const selected = providers.find((provider) => String(provider.id) === selection) || null;
+    list.innerHTML = selected
+      ? `<div class="provider-detail">${renderProvider(selected, 0, false, false, false)}${renderUsageDetail(selected)}</div>`
+      : renderEmpty();
+    list.classList.remove("is-scrollable");
+    list.classList.add("is-static");
+  }
 
   const fatal = root.querySelector("[data-role='fatal']");
   if (fatal) {
@@ -197,6 +214,7 @@ function ensurePopupShell() {
       </header>
 
       <div class="sr-only" data-role="live-status" aria-live="polite" aria-atomic="true"></div>
+      <div class="provider-selector" data-role="provider-selector" role="tablist" aria-label="供应商选择"></div>
       <section class="provider-list is-static"></section>
       <div class="fatal" data-role="fatal" hidden></div>
 
@@ -213,6 +231,18 @@ function ensurePopupShell() {
   root.querySelector("[data-action='config']")?.addEventListener("click", () => window.codingPlanBar.openConfig());
   root.querySelector("[data-action='quit']")?.addEventListener("click", () => window.codingPlanBar.quit());
   root.querySelector("[data-action='focus-attention']")?.addEventListener("click", focusFirstAttentionProvider);
+  root.querySelector("[data-role='provider-selector']")?.addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-select-provider]");
+    if (!chip) return;
+    const next = chip.dataset.selectProvider;
+    if (next === selectedProviderId) return;
+    selectedProviderId = next;
+    renderedSelectorSignature = "";
+    lastReportedHeight = 0;
+    render(false);
+    queueLayoutReport();
+    window.codingPlanBar.selectProvider?.(next).catch(() => {});
+  });
 }
 
 function patchProviderList(list, providers, { fresh, isDataRefresh }) {
@@ -314,6 +344,126 @@ function focusFirstAttentionProvider() {
 
 function prefersReducedMotion() {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+}
+
+function isGlmProvider(provider) {
+  // Zhipu/Z.ai coding plans are the only providers carrying server-side usage
+  // detail today; also match by name so the default works before data loads.
+  return Boolean(provider.usageHistory || provider.mcpQuota) ||
+    /glm|zhipu|bigmodel|z\.ai/i.test(`${provider.id || ""} ${provider.name || ""}`);
+}
+
+function resolveProviderSelection(providers) {
+  const persist = (value) => {
+    window.codingPlanBar.selectProvider?.(value).catch(() => {});
+  };
+  if (selectedProviderId === null) {
+    const stored = snapshot.popupSelectedProvider || "";
+    if (stored === "all" || (stored && providers.some((provider) => String(provider.id) === stored))) {
+      selectedProviderId = stored;
+    } else {
+      const glm = providers.find(isGlmProvider);
+      selectedProviderId = glm ? String(glm.id) : "all";
+      persist(selectedProviderId);
+    }
+  } else if (selectedProviderId !== "all" && !providers.some((provider) => String(provider.id) === selectedProviderId)) {
+    const glm = providers.find(isGlmProvider);
+    selectedProviderId = glm ? String(glm.id) : "all";
+    persist(selectedProviderId);
+  }
+  return selectedProviderId;
+}
+
+function patchProviderSelector(providers, selection) {
+  const container = root.querySelector("[data-role='provider-selector']");
+  if (!container) return;
+  const signature = JSON.stringify([providers.map((provider) => provider.id), selection]);
+  if (signature === renderedSelectorSignature) return;
+  renderedSelectorSignature = signature;
+  const chips = [
+    `<button class="selector-chip ${selection === "all" ? "is-active" : ""}" type="button" role="tab" aria-selected="${selection === "all"}" data-select-provider="all">全部</button>`,
+    ...providers.map((provider) => `
+      <button class="selector-chip ${selection === String(provider.id) ? "is-active" : ""}" type="button" role="tab" aria-selected="${selection === String(provider.id)}" data-select-provider="${escapeAttr(String(provider.id || ""))}" title="${escapeAttr(provider.name || String(provider.id || ""))}">${escapeHtml(provider.name || String(provider.id || ""))}</button>
+    `),
+  ];
+  container.innerHTML = chips.join("");
+}
+
+function renderUsageDetail(provider) {
+  const history = provider.usageHistory;
+  if (!history || !Array.isArray(history.hourly) || !history.hourly.length) return "";
+  const mcp = provider.mcpQuota;
+  return `
+    <div class="usage-detail">
+      <div class="stat-chips">
+        <span class="stat-chip">今日调用 <strong>${escapeHtml(formatCompactNumber(history.todayCalls))}</strong> 次</span>
+        <span class="stat-chip">Token <strong>${escapeHtml(formatCompactNumber(history.todayTokens))}</strong></span>
+      </div>
+      ${renderLineChart(history.hourly)}
+      ${mcp ? renderMcpQuota(mcp) : ""}
+    </div>
+  `;
+}
+
+function renderLineChart(hourly) {
+  const width = 380;
+  const height = 56;
+  const top = 5;
+  const bottom = 50;
+  const maxCalls = Math.max(1, ...hourly.map((point) => Number(point.calls) || 0));
+  const stepX = hourly.length > 1 ? width / (hourly.length - 1) : width;
+  const points = hourly.map((point, index) => {
+    const x = index * stepX;
+    const y = bottom - ((Number(point.calls) || 0) / maxCalls) * (bottom - top);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  let peakIndex = 0;
+  hourly.forEach((point, index) => {
+    if ((Number(point.calls) || 0) > (Number(hourly[peakIndex].calls) || 0)) peakIndex = index;
+  });
+  const peakX = (peakIndex * stepX).toFixed(1);
+  const peakY = (bottom - ((Number(hourly[peakIndex].calls) || 0) / maxCalls) * (bottom - top)).toFixed(1);
+  const area = `0,${bottom} ${points.join(" ")} ${width},${bottom}`;
+  const hourLabel = (index) => (hourly[index]?.hour ? `${hourly[index].hour}:00` : "");
+  return `
+    <div class="detail-chart">
+      <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="近 24 小时调用量折线图">
+        <polygon class="chart-area" points="${area}"></polygon>
+        <polyline class="chart-line" points="${points.join(" ")}"></polyline>
+        <circle class="chart-peak" cx="${peakX}" cy="${peakY}" r="2.6"></circle>
+      </svg>
+      <div class="chart-labels"><span>${escapeHtml(hourLabel(0))}</span><span>${escapeHtml(hourLabel(11))}</span><span>${escapeHtml(hourLabel(23))}</span></div>
+    </div>
+  `;
+}
+
+function renderMcpQuota(mcp) {
+  const utilization = clamp(Number(mcp.utilization) || 0, 0, 100);
+  const colorClass = utilization >= 90 ? "bar-danger" : utilization >= 70 ? "bar-warn" : "bar-ok";
+  const reset = countdown(mcp.resetsAt);
+  return `
+    <div class="tier mcp-tier">
+      <div class="tier-line">
+        <span>MCP 月额度</span>
+        <strong>已用 ${Math.round(utilization)}%</strong>
+      </div>
+      <div class="progress-track">
+        <div class="progress-bar ${colorClass}" style="width:${utilization}%"></div>
+      </div>
+      <div class="tier-meta">
+        <span>${escapeHtml(formatCompactNumber(mcp.used))} / ${escapeHtml(formatCompactNumber(mcp.total))} 次</span>
+        <span class="reset-time ${reset ? reset.tone : ""}">${reset ? `${escapeHtml(reset.relative)} · ${escapeHtml(reset.absolute)} 重置` : ""}</span>
+      </div>
+    </div>
+  `;
+}
+
+function formatCompactNumber(value) {
+  const numeric = Number(value) || 0;
+  if (numeric >= 1_000_000_000) return `${(numeric / 1_000_000_000).toFixed(2)}B`;
+  if (numeric >= 1_000_000) return `${(numeric / 1_000_000).toFixed(1)}M`;
+  if (numeric >= 1_000) return `${(numeric / 1_000).toFixed(1)}K`;
+  return String(numeric);
 }
 
 function renderProvider(provider, index, fresh, changed, canReorder) {
@@ -771,6 +921,7 @@ function measureScrollableLayoutHeight(shell, providerList, rootStyle) {
   const shellStyle = getComputedStyle(shell);
   const fixedHeight = [
     ".header",
+    ".provider-selector",
     ".fatal",
     ".footer",
   ].reduce((total, selector) => {
@@ -788,14 +939,17 @@ function measureScrollableLayoutHeight(shell, providerList, rootStyle) {
 }
 
 function providerLayoutKey(providers = []) {
-  return providers
+  const selection = selectedProviderId || "all";
+  return `sel:${selection}|${providers
     .map((provider) => {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
-      const shape = provider.balance ? `balance:${provider.usage ? 1 : 0}` : `tiers:${tierCount}`;
+      const shape = provider.balance
+        ? `balance:${provider.usage ? 1 : 0}`
+        : `tiers:${tierCount}:${provider.usageHistory ? "rich" : "plain"}`;
       return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:${provider.message ? 1 : 0}`;
     })
-    .join("|");
+    .join("|")}`;
 }
 
 function parsePixel(value) {

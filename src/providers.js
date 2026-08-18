@@ -115,6 +115,8 @@ function normalizeSubscriptionProvider(provider, quota) {
     queriedAt: quota.queriedAt || Date.now(),
     tiers,
     extraUsage: quota.extraUsage || null,
+    usageHistory: quota.usageHistory || null,
+    mcpQuota: quota.mcpQuota || null,
     resetCredits: quota.resetCredits || null,
     billingDetails: quota.billingDetails || null,
     diagnostics: quota.diagnostics || null,
@@ -679,6 +681,9 @@ async function queryZhipuCoding(baseUrl, apiKey) {
   const quotaBase = baseUrl.toLowerCase().includes("bigmodel.cn")
     ? "https://open.bigmodel.cn"
     : "https://api.z.ai";
+  // Fire the 24h usage-history request concurrently with the quota request so
+  // the extra detail never adds latency; failures degrade to no chart.
+  const usageHistoryPromise = fetchZhipuUsageHistory(quotaBase, apiKey);
   const response = await fetchJson(`${quotaBase}/api/monitor/usage/quota/limit`, {
     headers: {
       Authorization: apiKey,
@@ -718,7 +723,68 @@ async function queryZhipuCoding(baseUrl, apiKey) {
   if (!tiers.length) {
     return subscriptionError("coding_plan", "parse_error", "响应中没有可识别的 GLM 额度档位", response.status, diagnostics);
   }
-  return okSubscription("coding_plan", tiers, data.level || null, diagnostics);
+  const usageHistory = await usageHistoryPromise.catch(() => null);
+  return okSubscription("coding_plan", tiers, data.level || null, diagnostics, {
+    usageHistory,
+    mcpQuota: parseZhipuMcpQuota(data),
+  });
+}
+
+async function fetchZhipuUsageHistory(quotaBase, apiKey) {
+  const now = new Date();
+  const start = new Date(now);
+  start.setDate(now.getDate() - 1);
+  start.setMinutes(0, 0, 0);
+  const end = new Date(now);
+  end.setMinutes(59, 59, 999);
+  const format = (date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ` +
+    `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
+  const query = `?startTime=${encodeURIComponent(format(start))}&endTime=${encodeURIComponent(format(end))}`;
+  const response = await fetchJson(`${quotaBase}/api/monitor/usage/model-usage${query}`, {
+    headers: {
+      Authorization: apiKey,
+      "Content-Type": "application/json",
+      "Accept-Language": "en-US,en",
+    },
+    timeoutMs: 8000,
+    retries: 1,
+    retryBaseDelayMs: 200,
+  });
+  if (!response.ok || response.json?.success === false) return null;
+  return parseZhipuUsageHistory(response.json);
+}
+
+function parseZhipuUsageHistory(json) {
+  const data = json?.data;
+  if (!Array.isArray(data?.x_time) || !Array.isArray(data?.modelCallCount)) return null;
+  const points = data.x_time
+    .map((time, index) => ({
+      hour: String(time || "").split(" ")[1]?.split(":")[0] || "",
+      calls: parseNumber(data.modelCallCount[index], 0),
+    }))
+    .slice(-24);
+  if (!points.length) return null;
+  while (points.length < 24) points.unshift({ hour: "", calls: 0 });
+  return {
+    hourly: points,
+    todayCalls: parseNumber(data.totalUsage?.totalModelCallCount, 0),
+    todayTokens: parseNumber(data.totalUsage?.totalTokensUsage, 0),
+  };
+}
+
+function parseZhipuMcpQuota(data) {
+  const entry = (data?.limits || []).find((item) => String(item.type || "").toLowerCase() === "time_limit");
+  if (!entry) return null;
+  const used = parseNumber(entry.currentValue, 0);
+  const total = parseNumber(entry.usage, 0);
+  if (total <= 0) return null;
+  return {
+    used,
+    total,
+    utilization: clamp((used / total) * 100, 0, 100),
+    resetsAt: extractResetTime(entry.nextResetTime),
+  };
 }
 
 async function queryMiniMaxCoding(apiKey, isCn) {
@@ -1277,7 +1343,7 @@ function subscriptionError(tool, status, message, httpStatus = null, diagnostics
   };
 }
 
-function okSubscription(tool, tiers, credentialMessage, diagnostics = null) {
+function okSubscription(tool, tiers, credentialMessage, diagnostics = null, extras = {}) {
   return {
     tool,
     credentialStatus: "valid",
@@ -1285,6 +1351,8 @@ function okSubscription(tool, tiers, credentialMessage, diagnostics = null) {
     success: true,
     tiers,
     extraUsage: null,
+    usageHistory: extras.usageHistory || null,
+    mcpQuota: extras.mcpQuota || null,
     error: null,
     diagnostics,
     queriedAt: Date.now(),
@@ -1527,6 +1595,8 @@ module.exports = {
   normalizeProviderConfig,
   refreshProviders,
   parseZhipuTokenTiers,
+  parseZhipuUsageHistory,
+  parseZhipuMcpQuota,
   parseMiniMaxTiers,
   parseGenericBalanceResponse,
   parseBalanceUsage,

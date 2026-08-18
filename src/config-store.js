@@ -29,6 +29,7 @@ function normalizeConfig(config) {
     showOnHover: config.showOnHover !== false,
     panelDensity: normalizePanelDensity(config.panelDensity),
     theme: normalizeTheme(config.theme),
+    popupSelectedProvider: normalizePopupSelection(config.popupSelectedProvider),
     privacy: normalizePrivacy(config.privacy),
     proxy: normalizeProxy(config.proxy),
     autoUpdate: normalizeAutoUpdate(config.autoUpdate),
@@ -43,6 +44,10 @@ function normalizePanelDensity(value) {
 
 function normalizeTheme(value) {
   return value === "dark" ? "dark" : "light";
+}
+
+function normalizePopupSelection(value) {
+  return typeof value === "string" ? value.slice(0, 64) : "";
 }
 
 function normalizePrivacy(privacy) {

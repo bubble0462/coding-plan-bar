@@ -7,6 +7,8 @@ const {
   parseBalanceUsage,
   parseMiniMaxTiers,
   parseZhipuTokenTiers,
+  parseZhipuUsageHistory,
+  parseZhipuMcpQuota,
   windowSecondsToTierName,
   writeJsonFileAtomic,
   queryGrokQuota,
@@ -418,6 +420,43 @@ assert.deepStrictEqual(
     ["weekly_limit", 44, true],
   ],
 );
+
+// Zhipu MCP quota: TIME_LIMIT entries carry count-based monthly limits.
+assert.deepStrictEqual(
+  (() => {
+    const mcp = parseZhipuMcpQuota({
+      limits: [
+        { type: "TOKENS_LIMIT", unit: "3", percentage: "12.5" },
+        { type: "TIME_LIMIT", currentValue: 402, usage: 2000, nextResetTime: "2033-05-18T03:33:20.000Z" },
+      ],
+    });
+    return [mcp.used, mcp.total, Math.round(mcp.utilization), Boolean(mcp.resetsAt)];
+  })(),
+  [402, 2000, 20, true],
+);
+assert.strictEqual(parseZhipuMcpQuota({ limits: [{ type: "TOKENS_LIMIT", unit: "3" }] }), null);
+assert.strictEqual(parseZhipuMcpQuota({ limits: [{ type: "TIME_LIMIT", currentValue: 1, usage: 0 }] }), null);
+assert.strictEqual(parseZhipuMcpQuota({}), null);
+
+// Zhipu 24h usage history: hourly call series + today totals, padded to 24 points.
+const zhipuHistory = parseZhipuUsageHistory({
+  data: {
+    x_time: ["2026-08-08 10:00:00", "2026-08-08 11:00:00", "2026-08-09 09:00:00"],
+    modelCallCount: [12, 0, 40],
+    totalUsage: { totalModelCallCount: 802, totalTokensUsage: 313_000_000 },
+  },
+});
+assert.strictEqual(zhipuHistory.hourly.length, 24);
+assert.strictEqual(zhipuHistory.hourly[0].calls, 0);
+assert.strictEqual(zhipuHistory.hourly[21].hour, "10");
+assert.strictEqual(zhipuHistory.hourly[21].calls, 12);
+assert.strictEqual(zhipuHistory.hourly[22].calls, 0);
+assert.strictEqual(zhipuHistory.hourly[23].calls, 40);
+assert.strictEqual(zhipuHistory.todayCalls, 802);
+assert.strictEqual(zhipuHistory.todayTokens, 313_000_000);
+assert.strictEqual(parseZhipuUsageHistory({ data: { x_time: [] } }), null);
+assert.strictEqual(parseZhipuUsageHistory({ data: {} }), null);
+assert.strictEqual(parseZhipuUsageHistory(null), null);
 assert.strictEqual(findModelPricing("glm-4.7-flash").output, 0);
 assert.strictEqual(findModelPricing("claude-mythos-5").output, 50);
 assert.strictEqual(findModelPricing("claude-sonnet-5").input, 2);
@@ -1048,9 +1087,19 @@ async function runZhipuRequestSmoke() {
   const previousFetch = global.fetch;
   try {
     let attempts = 0;
-    global.fetch = async (_url, options = {}) => {
-      attempts += 1;
+    global.fetch = async (url, options = {}) => {
       assert.strictEqual(options.headers.Authorization, "glm-api-key");
+      if (String(url).includes("model-usage")) {
+        return jsonResponse(200, {
+          success: true,
+          data: {
+            x_time: ["2026-08-08 10:00:00"],
+            modelCallCount: [3],
+            totalUsage: { totalModelCallCount: 3, totalTokensUsage: 1200 },
+          },
+        });
+      }
+      attempts += 1;
       if (attempts === 1) return jsonResponse(503, { message: "temporary" });
       return jsonResponse(200, {
         success: true,
@@ -1067,6 +1116,8 @@ async function runZhipuRequestSmoke() {
     assert.strictEqual(recovered.success, true);
     assert.strictEqual(recovered.diagnostics.attempts, 2);
     assert.deepStrictEqual(recovered.tiers.map((tier) => tier.utilization), [15, 35]);
+    assert.strictEqual(recovered.usageHistory.todayCalls, 3);
+    assert.strictEqual(recovered.usageHistory.hourly.length, 24);
 
     global.fetch = async () => jsonResponse(200, { success: true, data: { limits: [] } });
     const empty = await queryZhipuCoding("https://open.bigmodel.cn", "glm-api-key");

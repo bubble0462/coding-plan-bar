@@ -10,6 +10,7 @@ const balanceOnly = process.argv.includes("--balance-only");
 const reorderTest = process.argv.includes("--reorder");
 const grokOnly = process.argv.includes("--grok");
 const darkMode = process.argv.includes("--dark");
+const detailMode = process.argv.includes("--detail");
 const providerCount = countArg ? Number(countArg.split("=")[1]) : null;
 const providerSequence = sequenceArg
   ? sequenceArg
@@ -29,7 +30,7 @@ const outputSuffix = balanceOnly
   : Number.isFinite(providerCount)
     ? `-${providerCount}`
     : "";
-const outputPath = path.join(__dirname, "..", "tmp", `popup-screenshot${outputSuffix}${darkMode ? "-dark" : ""}.png`);
+const outputPath = path.join(__dirname, "..", "tmp", `popup-screenshot${outputSuffix}${detailMode ? "-detail" : ""}${darkMode ? "-dark" : ""}.png`);
 const captureUserDataPath = path.join(__dirname, "..", "tmp", `electron-capture-${process.pid}`);
 app.setPath("userData", captureUserDataPath);
 
@@ -96,6 +97,20 @@ const sampleProviders = [
     planLabel: "Z.AI",
     status: "danger",
     statusText: "接近上限",
+    usageHistory: {
+      hourly: Array.from({ length: 24 }, (_, index) => ({
+        hour: String((index + 10) % 24).padStart(2, "0"),
+        calls: [2, 1, 0, 0, 0, 0, 0, 0, 3, 8, 14, 21, 34, 47, 52, 41, 38, 44, 61, 48, 32, 19, 9, 4][index],
+      })),
+      todayCalls: 802,
+      todayTokens: 313_000_000,
+    },
+    mcpQuota: {
+      used: 402,
+      total: 2000,
+      utilization: 20.1,
+      resetsAt: new Date(now + 21 * 24 * 60 * 60 * 1000).toISOString(),
+    },
     tiers: [
       {
         name: "five_hour",
@@ -220,6 +235,7 @@ function sampleSnapshotFor(count) {
     elapsedMs: 386,
     refreshIntervalSeconds: 300,
     theme: darkMode ? "dark" : "light",
+    popupSelectedProvider: "all",
     errorCount: providers.filter((provider) => provider.status === "danger" || provider.status === "error").length,
     providers,
   };
@@ -242,6 +258,7 @@ async function main() {
   ipcMain.handle("quota:keep-open", () => {});
   ipcMain.handle("quota:leave-popup", () => {});
   ipcMain.handle("quota:visibility-complete", () => {});
+  ipcMain.handle("quota:select-provider", (_event, providerId) => ({ providerId }));
   ipcMain.handle("quota:resize", (_event, height) => {
     if (captureWindow && !captureWindow.isDestroyed()) {
       if (debugLayout) console.log(`resize:${height}`);
@@ -467,6 +484,8 @@ async function main() {
       ),
       resetCreditsText: document.querySelector('.provider[data-provider-id="codex"] .reset-credits-row strong')?.textContent || '',
       rootTheme: document.documentElement.dataset.theme || '',
+      selectorChips: Array.from(document.querySelectorAll('.selector-chip')).map((chip) => chip.textContent.trim()),
+      activeSelection: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
     };
   })()`);
   if (assertions.refreshHasBusy === 'missing') throw new Error('Popup refresh control was not rendered');
@@ -474,6 +493,12 @@ async function main() {
     throw new Error(`Popup card count assertion failed: ${assertions.cardCount}`);
   }
   if (!assertions.cardIdsStable) throw new Error('Popup provider cards must keep stable data-provider-id');
+  if (!assertions.selectorChips.includes('全部') || assertions.selectorChips.length !== firstSnapshot.providers.length + 1) {
+    throw new Error(`Popup provider selector chips incomplete: ${JSON.stringify(assertions.selectorChips)}`);
+  }
+  if (assertions.activeSelection !== 'all') {
+    throw new Error(`Popup default selection should be the all view: ${JSON.stringify(assertions.activeSelection)}`);
+  }
   if (assertions.hasAttentionSummary && (!assertions.attentionFocusId || !assertions.attentionFocusLabel)) {
     throw new Error(`Popup attention summary did not focus an accessible provider card: ${JSON.stringify(assertions)}`);
   }
@@ -491,6 +516,42 @@ async function main() {
   }
   if (darkMode && assertions.rootTheme !== "dark") {
     throw new Error(`Popup dark theme was not applied to root element: ${JSON.stringify(assertions.rootTheme)}`);
+  }
+
+  if (detailMode) {
+    await captureWindow.webContents.executeJavaScript(
+      `document.querySelector('[data-select-provider="glm"]')?.click()`,
+    );
+    await wait(400);
+    const detailAssertions = await captureWindow.webContents.executeJavaScript(`(() => {
+      const line = document.querySelector('.detail-chart polyline');
+      return {
+        detailCard: Boolean(document.querySelector('.provider-detail .provider[data-provider-id="glm"]')),
+        linePoints: line ? line.getAttribute('points').trim().split(/\\s+/).length : 0,
+        statChips: document.querySelectorAll('.usage-detail .stat-chip').length,
+        mcpTier: Boolean(document.querySelector('.usage-detail .mcp-tier')),
+        activeChip: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
+      };
+    })()`);
+    if (!detailAssertions.detailCard) throw new Error('Popup detail view did not render the selected provider card');
+    if (detailAssertions.linePoints !== 24) {
+      throw new Error(`Popup 24h line chart must have 24 points: ${detailAssertions.linePoints}`);
+    }
+    if (detailAssertions.statChips !== 2) {
+      throw new Error(`Popup detail view must show today call and token chips: ${detailAssertions.statChips}`);
+    }
+    if (!detailAssertions.mcpTier) throw new Error('Popup detail view must render the MCP monthly quota row');
+    if (detailAssertions.activeChip !== 'glm') {
+      throw new Error(`Popup selection chip should be glm: ${JSON.stringify(detailAssertions.activeChip)}`);
+    }
+    const afterRerender = await captureWindow.webContents.executeJavaScript(
+      `(() => { render(false); return document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || ''; })()`,
+    );
+    if (afterRerender !== 'glm') {
+      throw new Error(`Popup selection did not survive a re-render: ${JSON.stringify(afterRerender)}`);
+    }
+    const detailImage = await captureWindow.capturePage();
+    fs.writeFileSync(outputPath, detailImage.toPNG());
   }
 
   app.exit(0);

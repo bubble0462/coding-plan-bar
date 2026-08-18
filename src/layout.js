@@ -3,7 +3,9 @@ const POPUP_MIN_HEIGHT = 180;
 const POPUP_MAX_VISIBLE_PROVIDERS = 3;
 
 const OUTER_PADDING_Y = 24;
-const FIXED_CHROME_HEIGHT = 123;
+// Header + provider selector row + footer + paddings estimate. The measured
+// height from the renderer takes over after the first layout pass.
+const FIXED_CHROME_HEIGHT = 161;
 const PROVIDER_LIST_PADDING_Y = 18;
 const PROVIDER_GAP = 8;
 const EMPTY_PROVIDER_HEIGHT = 72;

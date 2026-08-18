@@ -90,6 +90,7 @@ let currentState = {
   refreshIntervalSeconds: 300,
   panelDensity: "comfortable",
   theme: "light",
+  popupSelectedProvider: "",
   errorCount: 0,
   providers: [],
 };
@@ -341,12 +342,15 @@ function invalidateMeasuredPopupHeight() {
 
 function providerLayoutKey(providers = []) {
   const density = currentState.panelDensity || "comfortable";
-  return `${density}|${providers
+  const selection = currentState.popupSelectedProvider || "all";
+  return `${density}|sel:${selection}|${providers
     .map((provider) => {
       const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
       const usageCount = Array.isArray(provider.tiers) ? provider.tiers.filter((tier) => tier.usage).length : 0;
       const staleCount = provider.lastSuccess ? 1 : 0;
-      const shape = provider.balance ? `balance:${provider.usage ? 1 : 0}` : `tiers:${tierCount}`;
+      const shape = provider.balance
+        ? `balance:${provider.usage ? 1 : 0}`
+        : `tiers:${tierCount}:${provider.usageHistory ? "rich" : "plain"}`;
       return `${provider.id || provider.name}:${provider.kind || ""}:${shape}:usage:${usageCount}:stale:${staleCount}:${provider.message ? 1 : 0}`;
     })
     .join("|")}`;
@@ -439,6 +443,7 @@ async function refreshAllNow(reason = "timer") {
       refreshIntervalSeconds: config.refreshIntervalSeconds,
       panelDensity: config.panelDensity,
       theme: config.theme,
+      popupSelectedProvider: config.popupSelectedProvider || "",
       errorCount,
       providers,
     };
@@ -486,6 +491,8 @@ function applyLastSuccessProvider(provider, configuredProvider) {
     balances: previous.balances || provider.balances,
     usage: previous.usage || provider.usage,
     extraUsage: previous.extraUsage || provider.extraUsage,
+    usageHistory: previous.usageHistory || provider.usageHistory,
+    mcpQuota: previous.mcpQuota || provider.mcpQuota,
     resetCredits: previous.resetCredits || provider.resetCredits,
     lastSuccess: {
       queriedAt: previous.queriedAt || cached.savedAt,
@@ -1179,6 +1186,25 @@ function syncPopupProvidersToConfig(config) {
   sendSnapshot();
 }
 
+function selectPopupProvider(_event, providerId) {
+  const requested = String(providerId || "").slice(0, 64);
+  const config = readConfigFile(configPath);
+  const enabledIds = config.providers
+    .filter((provider) => provider.enabled !== false)
+    .map((provider) => provider.id);
+  if (requested !== "all" && !enabledIds.includes(requested)) {
+    throw new Error("供应商选择无效，请刷新后重试");
+  }
+  if (config.popupSelectedProvider !== requested) {
+    config.popupSelectedProvider = requested;
+    writeConfigFile(configPath, config);
+  }
+  currentState = { ...currentState, popupSelectedProvider: requested };
+  invalidateMeasuredPopupHeight();
+  sendSnapshot();
+  return { providerId: requested };
+}
+
 function reorderPopupProviders(_event, providerIds) {
   const requested = Array.isArray(providerIds) ? providerIds.map(String) : [];
   const config = readConfigFile(configPath);
@@ -1363,6 +1389,7 @@ async function startApp() {
     resizePopupToHeight(height);
   });
   ipcMain.handle("quota:reorder-providers", reorderPopupProviders);
+  ipcMain.handle("quota:select-provider", selectPopupProvider);
   ipcMain.handle("quota:quit", () => app.quit());
 
   ipcMain.handle("updater:check", () => checkForUpdates({ silent: false }));
