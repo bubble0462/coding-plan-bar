@@ -534,6 +534,8 @@ async function main() {
           label: chip.querySelector('.overview-tier-label')?.textContent.trim() || '',
           value: chip.querySelector('.overview-tier-value')?.textContent.trim() || '',
           barWidth: chip.querySelector('.progress-bar')?.style.width || '',
+          trackRenderedWidth: Math.round(chip.querySelector('.progress-track')?.getBoundingClientRect().width || 0),
+          barRenderedWidth: Math.round(chip.querySelector('.progress-bar')?.getBoundingClientRect().width || 0),
         })),
       })),
     };
@@ -549,6 +551,13 @@ async function main() {
   for (const row of assertions.overviewRows) {
     if (!row.value && !row.tierChips.length) {
       throw new Error(`Popup overview rows must all show a metric: ${JSON.stringify(assertions.overviewRows)}`);
+    }
+    for (const chip of row.tierChips) {
+      if (chip.trackRenderedWidth < 30 || chip.barRenderedWidth < 2) {
+        throw new Error(
+          `Popup overview tier chip bar is not visibly filled for ${row.id} ${chip.label}: ${JSON.stringify(chip)}`,
+        );
+      }
     }
   }
   for (const provider of firstSnapshot.providers) {

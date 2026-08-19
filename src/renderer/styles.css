@@ -522,8 +522,14 @@ button {
 }
 
 .provider.overview-row .progress-track.slim.mini {
+  display: inline-block;
+  vertical-align: middle;
   width: 34px;
   height: 4px;
+}
+
+.provider.overview-row .progress-track.slim.mini .progress-bar {
+  display: block;
 }
 
 .provider.overview-row .overview-value {
