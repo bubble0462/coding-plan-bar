@@ -494,6 +494,38 @@ button {
   gap: 8px;
 }
 
+.provider.overview-row .overview-tiers {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.provider.overview-row .overview-tier {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.provider.overview-row .overview-tier-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.provider.overview-row .overview-tier-value {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.provider.overview-row .progress-track.slim.mini {
+  width: 34px;
+  height: 4px;
+}
+
 .provider.overview-row .overview-value {
   color: var(--text);
   font-size: 12px;

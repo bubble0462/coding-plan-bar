@@ -321,19 +321,22 @@ function renderOverviewRow(provider, index, fresh, changed, canReorder) {
   const maxUtilization = tiers.length
     ? Math.max(...tiers.map((tier) => clamp(Number(tier.utilization) || 0, 0, 100)))
     : 0;
-  let value = "";
-  let barWidth = 0;
+  let metricMarkup = "";
   if (provider.balance) {
     const unit = provider.balance.unit || "";
     const remaining = Number(provider.balance.remaining) || 0;
-    value = formatMoney(remaining, unit);
-  } else if (tiers.length) {
-    value = `剩余 ${Math.round(100 - maxUtilization)}%`;
-    barWidth = Math.round(maxUtilization);
+    metricMarkup = `<strong class="overview-value">${escapeHtml(formatMoney(remaining, unit))}</strong>`;
+  } else if (tiers.length > 1) {
+    metricMarkup = `<div class="overview-tiers">${tiers.slice(0, 2).map(overviewTierChip).join("")}</div>`;
+  } else if (tiers.length === 1) {
+    const barWidth = Math.round(maxUtilization);
+    const barClass = maxUtilization >= 90 ? "bar-danger" : maxUtilization >= 70 ? "bar-warn" : "bar-ok";
+    metricMarkup = `
+        ${barWidth ? `<div class="progress-track slim"><div class="progress-bar ${barClass}" style="width:${barWidth}%"></div></div>` : ""}
+        <strong class="overview-value">剩余 ${Math.round(100 - maxUtilization)}%</strong>`;
   } else {
-    value = serviceStatus.label;
+    metricMarkup = `<strong class="overview-value">${escapeHtml(serviceStatus.label)}</strong>`;
   }
-  const barClass = maxUtilization >= 90 ? "bar-danger" : maxUtilization >= 70 ? "bar-warn" : "bar-ok";
 
   return `
     <article class="${classes}" data-provider-id="${escapeAttr(provider.id || "")}" data-can-reorder="${canReorder}" data-needs-attention="${needsAttention}" tabindex="0" role="button" aria-label="${escapeAttr(providerAccessibleLabel(provider, serviceStatus, quotaRisk))}。按 Enter 查看详情。"${enterStyle}>
@@ -344,11 +347,23 @@ function renderOverviewRow(provider, index, fresh, changed, canReorder) {
         <span class="overview-plan">${escapeHtml(provider.planLabel ? provider.planLabel : provider.kindLabel || provider.kind || "")}</span>
       </div>
       <div class="overview-metric">
-        ${barWidth ? `<div class="progress-track slim"><div class="progress-bar ${barClass}" style="width:${barWidth}%"></div></div>` : ""}
-        <strong class="overview-value">${escapeHtml(value)}</strong>
+        ${metricMarkup}
       </div>
     </article>
   `;
+}
+
+function overviewTierShortLabel(label) {
+  const shortened = String(label || "").replace(/额度$/, "").replace(/\s*(Token|使用)$/, "").trim();
+  return shortened || label;
+}
+
+function overviewTierChip(tier) {
+  const utilization = clamp(Number(tier.utilization) || 0, 0, 100);
+  const remaining = Math.round(100 - utilization);
+  const barClass = utilization >= 90 ? "bar-danger" : utilization >= 70 ? "bar-warn" : "bar-ok";
+  const fullName = tier.label || tier.name || "";
+  return `<span class="overview-tier" title="${escapeAttr(`${fullName}：已用 ${Math.round(utilization)}%，剩余 ${remaining}%`)}"><span class="overview-tier-label">${escapeHtml(overviewTierShortLabel(fullName))}</span><span class="progress-track slim mini"><span class="progress-bar ${barClass}" style="width:${Math.round(utilization)}%"></span></span><span class="overview-tier-value">${remaining}%</span></span>`;
 }
 
 function providerCardFromMarkup(markup) {

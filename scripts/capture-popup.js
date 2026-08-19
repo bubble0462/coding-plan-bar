@@ -527,7 +527,15 @@ async function main() {
       selectorChips: Array.from(document.querySelectorAll('.selector-chip')).map((chip) => chip.textContent.trim()),
       activeSelection: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
       overviewRowCount: document.querySelectorAll('.provider.overview-row').length,
-      overviewValues: Array.from(document.querySelectorAll('.provider.overview-row .overview-value')).map((node) => node.textContent.trim()),
+      overviewRows: Array.from(document.querySelectorAll('.provider.overview-row')).map((row) => ({
+        id: row.dataset.providerId || '',
+        value: row.querySelector('.overview-value')?.textContent.trim() || '',
+        tierChips: Array.from(row.querySelectorAll('.overview-tier')).map((chip) => ({
+          label: chip.querySelector('.overview-tier-label')?.textContent.trim() || '',
+          value: chip.querySelector('.overview-tier-value')?.textContent.trim() || '',
+          barWidth: chip.querySelector('.progress-bar')?.style.width || '',
+        })),
+      })),
     };
   })()`);
   if (assertions.refreshHasBusy === 'missing') throw new Error('Popup refresh control was not rendered');
@@ -538,16 +546,36 @@ async function main() {
   if (assertions.overviewRowCount !== firstSnapshot.providers.length) {
     throw new Error(`Popup overview rows incomplete: ${assertions.overviewRowCount} of ${firstSnapshot.providers.length}`);
   }
-  if (assertions.overviewValues.some((value) => !value)) {
-    throw new Error(`Popup overview rows must all show a metric: ${JSON.stringify(assertions.overviewValues)}`);
+  for (const row of assertions.overviewRows) {
+    if (!row.value && !row.tierChips.length) {
+      throw new Error(`Popup overview rows must all show a metric: ${JSON.stringify(assertions.overviewRows)}`);
+    }
+  }
+  for (const provider of firstSnapshot.providers) {
+    const row = assertions.overviewRows.find((entry) => entry.id === provider.id);
+    if (!row) throw new Error(`Popup overview row missing for ${provider.id}`);
+    const tierCount = Array.isArray(provider.tiers) ? provider.tiers.length : 0;
+    if (tierCount > 1 && row.tierChips.length !== 2) {
+      throw new Error(`Popup overview row ${provider.id} must show both tier chips: ${JSON.stringify(row)}`);
+    }
+    if (tierCount === 1 && (!row.value.startsWith("剩余") || row.tierChips.length)) {
+      throw new Error(`Popup overview row ${provider.id} must keep the single-tier metric: ${JSON.stringify(row)}`);
+    }
+    if (!tierCount && !provider.balance && !row.value) {
+      throw new Error(`Popup overview row ${provider.id} must show a status label: ${JSON.stringify(row)}`);
+    }
+  }
+  const glmRow = assertions.overviewRows.find((entry) => entry.id === "glm");
+  if (glmRow && !(glmRow.tierChips.some((chip) => chip.label === "5h") && glmRow.tierChips.some((chip) => chip.label === "周"))) {
+    throw new Error(`Popup GLM overview row must show 5h and weekly chips: ${JSON.stringify(glmRow)}`);
   }
   const snapshotIds = firstSnapshot.providers.map((provider) => provider.id);
-  if (snapshotIds.includes("deepseek") && !assertions.overviewValues.some((value) => value.startsWith("¥"))) {
-    throw new Error(`Popup overview must show a CNY balance for DeepSeek: ${JSON.stringify(assertions.overviewValues)}`);
+  if (snapshotIds.includes("deepseek") && !assertions.overviewRows.some((row) => row.id === "deepseek" && row.value.startsWith("￥"))) {
+    throw new Error(`Popup overview must show a CNY balance for DeepSeek: ${JSON.stringify(assertions.overviewRows)}`);
   }
-  if (firstSnapshot.providers.some((provider) => provider.id !== "deepseek") &&
-      !assertions.overviewValues.some((value) => value.startsWith("剩余"))) {
-    throw new Error(`Popup overview must show remaining percent for tier providers: ${JSON.stringify(assertions.overviewValues)}`);
+  if (firstSnapshot.providers.some((provider) => provider.id !== "deepseek" && (!provider.balance || provider.tiers?.length)) &&
+      !assertions.overviewRows.some((row) => row.value.startsWith("剩余") || row.tierChips.length)) {
+    throw new Error(`Popup overview must show remaining percent for tier providers: ${JSON.stringify(assertions.overviewRows)}`);
   }
   if (!assertions.selectorChips.includes('全部') || assertions.selectorChips.length !== firstSnapshot.providers.length + 1) {
     throw new Error(`Popup provider selector chips incomplete: ${JSON.stringify(assertions.selectorChips)}`);
@@ -601,7 +629,7 @@ async function main() {
     if (deepSeekAssertions.linePoints !== 20) {
       throw new Error(`DeepSeek month chart must have 20 points: ${deepSeekAssertions.linePoints}`);
     }
-    if (!/谷时 5 折|标准时段/.test(deepSeekAssertions.pricingBadge)) {
+    if (!/空闲 5 折|高峰时段/.test(deepSeekAssertions.pricingBadge)) {
       throw new Error(`DeepSeek pricing badge missing: ${JSON.stringify(deepSeekAssertions.pricingBadge)}`);
     }
     if (!deepSeekAssertions.sourceNote.includes("平台控制台")) {

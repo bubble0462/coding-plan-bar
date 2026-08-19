@@ -738,25 +738,30 @@ async function fetchZhipuUsageHistory(quotaBase, apiKey) {
   start.setMinutes(0, 0, 0);
   const end = new Date(now);
   end.setMinutes(59, 59, 999);
+  const midnight = new Date(now);
+  midnight.setHours(0, 0, 0, 0);
   const format = (date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ` +
     `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:${String(date.getSeconds()).padStart(2, "0")}`;
-  const query = `?startTime=${encodeURIComponent(format(start))}&endTime=${encodeURIComponent(format(end))}`;
-  const response = await fetchJson(`${quotaBase}/api/monitor/usage/model-usage${query}`, {
-    headers: {
-      Authorization: apiKey,
-      "Content-Type": "application/json",
-      "Accept-Language": "en-US,en",
-    },
-    timeoutMs: 8000,
-    retries: 1,
-    retryBaseDelayMs: 200,
-  });
-  if (!response.ok || response.json?.success === false) return null;
-  return parseZhipuUsageHistory(response.json);
+  const headers = {
+    Authorization: apiKey,
+    "Content-Type": "application/json",
+    "Accept-Language": "en-US,en",
+  };
+  const options = { headers, timeoutMs: 8000, retries: 1, retryBaseDelayMs: 200 };
+  const base = `${quotaBase}/api/monitor/usage/model-usage`;
+  // 近 24 小时窗口用于折线图；totalUsage 覆盖的是整个请求范围，
+  // 因此「今日」统计必须再取一个自然日（0 点到现在）窗口，否则会把昨天的量算进今日。
+  const [rangeResponse, todayResponse] = await Promise.all([
+    fetchJson(`${base}?startTime=${encodeURIComponent(format(start))}&endTime=${encodeURIComponent(format(end))}`, options),
+    fetchJson(`${base}?startTime=${encodeURIComponent(format(midnight))}&endTime=${encodeURIComponent(format(end))}`, options).catch(() => null),
+  ]);
+  if (!rangeResponse.ok || rangeResponse.json?.success === false) return null;
+  const todayJson = todayResponse && todayResponse.ok && todayResponse.json?.success !== false ? todayResponse.json : null;
+  return parseZhipuUsageHistory(rangeResponse.json, todayJson);
 }
 
-function parseZhipuUsageHistory(json) {
+function parseZhipuUsageHistory(json, todayJson) {
   const data = json?.data;
   if (!Array.isArray(data?.x_time) || !Array.isArray(data?.modelCallCount)) return null;
   const points = data.x_time
@@ -767,10 +772,11 @@ function parseZhipuUsageHistory(json) {
     .slice(-24);
   if (!points.length) return null;
   while (points.length < 24) points.unshift({ hour: "", calls: 0 });
+  const todayTotals = todayJson?.data?.totalUsage || data.totalUsage || {};
   return {
     hourly: points,
-    todayCalls: parseNumber(data.totalUsage?.totalModelCallCount, 0),
-    todayTokens: parseNumber(data.totalUsage?.totalTokensUsage, 0),
+    todayCalls: parseNumber(todayTotals.totalModelCallCount, 0),
+    todayTokens: parseNumber(todayTotals.totalTokensUsage, 0),
   };
 }
 

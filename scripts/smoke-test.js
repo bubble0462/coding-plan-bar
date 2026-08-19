@@ -460,6 +460,23 @@ assert.strictEqual(zhipuHistory.hourly[22].calls, 0);
 assert.strictEqual(zhipuHistory.hourly[23].calls, 40);
 assert.strictEqual(zhipuHistory.todayCalls, 802);
 assert.strictEqual(zhipuHistory.todayTokens, 313_000_000);
+const zhipuTodayWindow = parseZhipuUsageHistory(
+  {
+    data: {
+      x_time: ["2026-08-09 09:00:00"],
+      modelCallCount: [40],
+      totalUsage: { totalModelCallCount: 802, totalTokensUsage: 313_000_000 },
+    },
+  },
+  {
+    data: {
+      totalUsage: { totalModelCallCount: 600, totalTokensUsage: 132_000_000 },
+    },
+  },
+);
+assert.strictEqual(zhipuTodayWindow.todayCalls, 600);
+assert.strictEqual(zhipuTodayWindow.todayTokens, 132_000_000);
+assert.strictEqual(zhipuTodayWindow.hourly[23].calls, 40);
 assert.strictEqual(parseZhipuUsageHistory({ data: { x_time: [] } }), null);
 assert.strictEqual(parseZhipuUsageHistory({ data: {} }), null);
 assert.strictEqual(parseZhipuUsageHistory(null), null);
