@@ -611,6 +611,64 @@ async function main() {
     throw new Error(`Popup dark theme was not applied to root element: ${JSON.stringify(assertions.rootTheme)}`);
   }
 
+  // Regression: overview tier chips must re-render bar width and risk color when
+  // utilization changes, and the changed row must flash.
+  if (!detailMode && !deepSeekMode) {
+    const refreshSnapshot = structuredClone(firstSnapshot);
+    const glmRefresh = refreshSnapshot.providers.find((provider) => provider.id === "glm");
+    const codexRefresh = refreshSnapshot.providers.find((provider) => provider.id === "codex");
+    if (glmRefresh) {
+      glmRefresh.tiers[0].utilization = 96;
+      glmRefresh.tiers[1].utilization = 78;
+    }
+    if (codexRefresh) codexRefresh.tiers[1].utilization = 12;
+    refreshSnapshot.updatedAt = Date.now();
+    await captureWindow.webContents.executeJavaScript(`
+      var nextSnapshot = ${JSON.stringify(refreshSnapshot)};
+      var nextLayoutKey = nextSnapshot.layoutKey || providerLayoutKey(nextSnapshot.providers);
+      if (nextLayoutKey !== lastLayoutKey) {
+        lastReportedHeight = 0;
+        lastLayoutKey = nextLayoutKey;
+      }
+      prevSnapshotUpdatedAt = nextSnapshot.updatedAt;
+      hasEntered = true;
+      snapshot = nextSnapshot;
+      render(false);
+      reportLayoutHeight();
+    `);
+    await wait(150);
+    const refreshAssertions = await captureWindow.webContents.executeJavaScript(`(() => {
+      const chips = (id) => Array.from(document.querySelectorAll(".provider.overview-row[data-provider-id=" + JSON.stringify(id) + "] .overview-tier"));
+      const read = (chip) => ({
+        width: chip.querySelector(".progress-bar")?.style.width || "",
+        cls: chip.querySelector(".progress-bar")?.className || "",
+        rendered: Math.round(chip.querySelector(".progress-bar")?.getBoundingClientRect().width || 0),
+      });
+      return {
+        glm: chips("glm").map(read),
+        codexWeekly: chips("codex").map(read)[1] || null,
+        glmFlashed: Boolean(document.querySelector('.provider.overview-row[data-provider-id="glm"]')?.classList.contains("is-changed")),
+      };
+    })()`);
+    if (glmRefresh) {
+      if (refreshAssertions.glm[0].width !== "96%" || !refreshAssertions.glm[0].cls.includes("bar-danger")) {
+        throw new Error(`Popup GLM 5h chip did not update after refresh: ${JSON.stringify(refreshAssertions.glm[0])}`);
+      }
+      if (refreshAssertions.glm[1].width !== "78%" || !refreshAssertions.glm[1].cls.includes("bar-warn")) {
+        throw new Error(`Popup GLM weekly chip did not switch to warn color after refresh: ${JSON.stringify(refreshAssertions.glm[1])}`);
+      }
+      if (refreshAssertions.glm.some((chip) => chip.rendered < 4)) {
+        throw new Error(`Popup GLM chip fills must stay visible after refresh: ${JSON.stringify(refreshAssertions.glm)}`);
+      }
+      if (!refreshAssertions.glmFlashed) {
+        throw new Error("Popup changed overview rows must flash after a data refresh");
+      }
+    }
+    if (codexRefresh && (!refreshAssertions.codexWeekly || refreshAssertions.codexWeekly.width !== "12%")) {
+      throw new Error(`Popup codex weekly chip did not update after refresh: ${JSON.stringify(refreshAssertions.codexWeekly)}`);
+    }
+  }
+
   if (deepSeekMode) {
     // Entering the detail view by clicking the compact overview row.
     await captureWindow.webContents.executeJavaScript(
