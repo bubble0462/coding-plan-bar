@@ -57,6 +57,12 @@ function isServiceErrorStatus(status) {
 function detectQuotaEvents(prevProviders, nextProviders, options = {}) {
   const thresholds = normalizeThresholds(options.thresholds);
   const armed = options.armed instanceof Map ? options.armed : new Map();
+  const nowMs = Number(options.now) || Date.now();
+  // When the previous provider array was observed; reset events require the
+  // old window to still have been current at that observation. This blocks
+  // false positives from stale cached baselines (window rolled while the app
+  // was closed) and from reset-timestamp jitter between two live snapshots.
+  const prevObservedAt = Number(options.prevObservedAt) || 0;
   const prev = providerTierIndex(prevProviders);
   const next = providerTierIndex(nextProviders);
   const events = [];
@@ -97,7 +103,10 @@ function detectQuotaEvents(prevProviders, nextProviders, options = {}) {
       }
 
       const windowRolled =
-        prevTier.resetsAt && nextTier.resetsAt && prevTier.resetsAt !== nextTier.resetsAt;
+        prevTier.resetsAt && nextTier.resetsAt && prevTier.resetsAt !== nextTier.resetsAt &&
+        nextTier.resetsAt > prevTier.resetsAt &&
+        prevTier.resetsAt >= prevObservedAt - 60_000 &&
+        prevTier.resetsAt <= nowMs + 60_000;
       if (windowRolled && prevTier.utilization > RESET_MIN_PRIOR_UTILIZATION) {
         events.push({
           type: "reset",

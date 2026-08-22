@@ -70,6 +70,7 @@ const timers = new AppTimers();
 
 const quotaEventArmed = new Map();
 let prevQuotaEventProviders = null;
+let prevQuotaEventAt = 0;
 let pendingCelebrations = [];
 let lastNotificationsConfig = null;
 
@@ -317,11 +318,13 @@ function isCursorInsidePopup(margin = 8) {
 }
 
 function sendSnapshot(options = {}) {
-  // On selection changes the renderer immediately re-reports a measured
-  // height; skipping the estimate resize here means exactly one resize per
-  // switch instead of estimate-then-measured (avoids transparent-window
-  // paint artifacts during the transition).
-  if (!options.skipResize) resizePopupForState();
+  // Transparent windows repaint badly across rapid successive resizes. While
+  // the popup is visible, only the renderer's measured-height report may
+  // resize it; estimate-based resizes run while it is hidden so the next
+  // open is pre-sized. This is the generalization of the v0.6.0 fix that
+  // covered provider-selection switches — data refreshes need it too.
+  const popupVisible = Boolean(popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible());
+  if (!options.skipResize && !popupVisible) resizePopupForState();
   if (popupWindow && !popupWindow.webContents.isDestroyed()) {
     if (popupWindow.isVisible()) positionPopup();
     popupWindow.webContents.send("quota:snapshot", snapshotPayload());
@@ -490,12 +493,15 @@ async function refreshAllNow(reason = "timer") {
 function processQuotaEvents() {
   const notifications = lastNotificationsConfig || {};
   const previous = prevQuotaEventProviders;
+  const previousObservedAt = prevQuotaEventAt;
   prevQuotaEventProviders = currentState.providers;
+  prevQuotaEventAt = Date.now();
   if (!previous || notifications.enabled === false) return;
 
   const events = detectQuotaEvents(previous, currentState.providers, {
     thresholds: notifications.quotaThresholds,
     armed: quotaEventArmed,
+    prevObservedAt: previousObservedAt,
   });
   for (const event of events) {
     if (event.type === "threshold") {

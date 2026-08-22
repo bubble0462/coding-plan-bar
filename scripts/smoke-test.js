@@ -1381,21 +1381,56 @@ assert.strictEqual(repeatEvents.length, 2);
 // Same-values refresh produces no events.
 assert.strictEqual(detectQuotaEvents([eventWindow()], [eventWindow()], { armed: new Map() }).length, 0);
 // Weekly window rollover -> reset event with weekly scope + a 5h reset stays "window".
-const resetEvents = detectQuotaEvents(
-  [eventWindow({ tiers: eventWindow().tiers.map((tier) => ({ ...tier, utilization: 72 })) })],
-  [
-    eventWindow({
-      tiers: [
-        { name: "five_hour", label: "5h", utilization: 72, resetsAt: "2026-08-20T11:00:00.000Z" },
-        { name: "weekly_limit", label: "周额度", utilization: 72, resetsAt: "2026-08-31T10:00:00.000Z" },
-      ],
-    }),
-  ],
-  { armed: new Map() },
-);
+// Time context: baseline observed at T0, old windows end at T0+10min, refresh
+// seen at T0+20min with the new (later) windows already in place.
+const resetT0 = Date.now();
+const resetIso = (offsetMs) => new Date(resetT0 + offsetMs).toISOString();
+const resetOptions = { armed: new Map(), now: resetT0 + 20 * 60 * 1000, prevObservedAt: resetT0 };
+const resetPrev = [
+  eventWindow({
+    tiers: [
+      { name: "five_hour", label: "5h", utilization: 72, resetsAt: resetIso(10 * 60 * 1000) },
+      { name: "weekly_limit", label: "周额度", utilization: 72, resetsAt: resetIso(10 * 60 * 1000) },
+    ],
+  }),
+];
+const resetNext = [
+  eventWindow({
+    tiers: [
+      { name: "five_hour", label: "5h", utilization: 5, resetsAt: resetIso(5 * 60 * 60 * 1000 + 10 * 60 * 1000) },
+      { name: "weekly_limit", label: "周额度", utilization: 8, resetsAt: resetIso(5 * 24 * 60 * 60 * 1000) },
+    ],
+  }),
+];
+const resetEvents = detectQuotaEvents(resetPrev, resetNext, resetOptions);
 assert.strictEqual(resetEvents.length, 2);
 assert.ok(resetEvents.some((event) => event.type === "reset" && event.scope === "weekly"));
 assert.ok(resetEvents.some((event) => event.type === "reset" && event.scope === "window"));
+// Stale cached baseline: the old window ended long before we observed it —
+// the reset happened while the app was closed, not between our observations.
+assert.strictEqual(
+  detectQuotaEvents(
+    [eventWindow({ tiers: resetPrev[0].tiers.map((tier) => ({ ...tier, resetsAt: resetIso(-3 * 24 * 60 * 60 * 1000) })) })],
+    resetNext,
+    resetOptions,
+  ).length,
+  0,
+);
+// Backwards window swap (live -> older cache fallback) is not a reset.
+assert.strictEqual(
+  detectQuotaEvents(resetNext, resetPrev, resetOptions).length,
+  0,
+);
+// Reset-time jitter between live snapshots: old window is still in the
+// future at "now", so a slightly different timestamp is not a reset.
+assert.strictEqual(
+  detectQuotaEvents(
+    [eventWindow({ tiers: resetPrev[0].tiers.map((tier) => ({ ...tier, resetsAt: resetIso(24 * 60 * 60 * 1000) })) })],
+    [eventWindow({ tiers: resetPrev[0].tiers.map((tier) => ({ ...tier, resetsAt: resetIso(24 * 60 * 60 * 1000 + 5000) })) })],
+    { armed: new Map(), now: resetT0, prevObservedAt: resetT0 - 90 * 1000 },
+  ).length,
+  0,
+);
 // A barely-used window rolling over is not a reset event.
 assert.strictEqual(
   detectQuotaEvents(

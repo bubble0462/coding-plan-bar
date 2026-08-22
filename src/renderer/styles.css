@@ -1449,7 +1449,7 @@ button {
 
 .reset-toast {
   position: absolute;
-  top: 6px;
+  bottom: 46px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 61;
