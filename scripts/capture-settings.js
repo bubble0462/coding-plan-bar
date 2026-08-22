@@ -16,6 +16,7 @@ const showDirty = process.argv.includes("--dirty");
 const showHealth = process.argv.includes("--health");
 const showBackup = process.argv.includes("--backup");
 const showUsage = process.argv.includes("--usage");
+const showNotifications = process.argv.includes("--notifications");
 const darkMode = process.argv.includes("--dark");
 const baseOutputName = showTemplates
   ? "settings-screenshot-templates"
@@ -39,9 +40,11 @@ const baseOutputName = showTemplates
                 ? "settings-screenshot-health"
                 : showBackup
                   ? "settings-screenshot-backup"
-                  : showUsage
-                    ? "settings-screenshot-usage"
-                    : "settings-screenshot";
+                    : showUsage
+                      ? "settings-screenshot-usage"
+                      : showNotifications
+                        ? "settings-screenshot-notifications"
+                        : "settings-screenshot";
 const outputPath = path.join(
   __dirname,
   "..",
@@ -313,7 +316,7 @@ async function main() {
     await window.webContents.insertCSS(`
       .template-backdrop,
       .template-popover,
-      .template-card {
+      .template-row {
         animation: none !important;
       }
 
@@ -334,7 +337,7 @@ async function main() {
         z-index: 1 !important;
       }
 
-      .template-card {
+      .template-row {
         opacity: 1 !important;
         transform: none !important;
       }
@@ -361,6 +364,44 @@ async function main() {
       })()`,
     );
     if (!opened) throw new Error("Template popover did not become visibly open");
+    // Split selector: grouped menu rows + a live preview panel that follows
+    // the selection, including the new Qwen template and its env hint.
+    const splitAssertions = await window.webContents.executeJavaScript(`(() => {
+      const rows = Array.from(document.querySelectorAll(".template-row"));
+      const preview = document.querySelector(".template-preview");
+      const selected = document.querySelector(".template-row.is-selected");
+      return {
+        menuGroups: document.querySelectorAll(".template-group").length,
+        rowCount: rows.length,
+        selectedTemplate: selected?.dataset.template || "",
+        previewLabel: preview?.querySelector(".template-preview-head strong")?.textContent || "",
+        previewRequirements: Array.from(preview?.querySelectorAll(".template-requirement") || []).map((node) => node.textContent.trim()),
+        hasQwen: rows.some((row) => row.dataset.template === "qwen-coding"),
+      };
+    })()`);
+    if (splitAssertions.menuGroups < 3) {
+      throw new Error(`Template menu groups missing: ${JSON.stringify(splitAssertions)}`);
+    }
+    if (splitAssertions.rowCount !== providerTemplates().length) {
+      throw new Error(`Template menu rows incomplete: ${splitAssertions.rowCount} of ${providerTemplates().length}`);
+    }
+    if (!splitAssertions.hasQwen) throw new Error("Template menu must include qwen-coding");
+    if (!splitAssertions.previewLabel) throw new Error("Template preview did not render a label");
+    if (!splitAssertions.selectedTemplate) throw new Error("Template menu must have a selected row");
+    await window.webContents.executeJavaScript(
+      `document.querySelector(".template-row[data-template='qwen-coding']")?.click()`,
+    );
+    await wait(120);
+    const qwenPreview = await window.webContents.executeJavaScript(
+      `(() => document.querySelector(".template-preview")?.textContent || "")()`,
+    );
+    if (!qwenPreview.includes("DASHSCOPE_API_KEY") || !qwenPreview.includes("bailian.console.aliyun.com")) {
+      throw new Error(`Qwen template preview missing credential/baseUrl info: ${qwenPreview.slice(0, 160)}`);
+    }
+    const qwenSelected = await window.webContents.executeJavaScript(
+      `(() => document.querySelector(".template-row.is-selected")?.dataset.template || "")()`,
+    );
+    if (qwenSelected !== "qwen-coding") throw new Error(`Qwen row selection state did not update: ${qwenSelected}`);
     // Template dialog must move keyboard focus into itself so it is operable
     // without the mouse, and Escape must close it back to the trigger.
     const templateFocus = await window.webContents.executeJavaScript(`(() => {
@@ -489,6 +530,43 @@ async function main() {
       })()`,
     );
     if (!rendered) throw new Error("Backup page did not render expected controls");
+  }
+
+  if (showNotifications) {
+    window.showInactive();
+    await wait(120);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="show-notifications"]')?.click();
+    `);
+    await wait(200);
+    const rendered = await window.webContents.executeJavaScript(
+      `(() => {
+        const page = document.querySelector(".notifications-page");
+        if (!page) return false;
+        const text = page.textContent || "";
+        return (
+          page.querySelectorAll(".segment").length === 2 &&
+          page.querySelectorAll("[data-field='notificationsReset']").length === 1 &&
+          page.querySelectorAll("[data-field='notificationsServiceError']").length === 1 &&
+          text.includes("阈值") && text.includes("80%") && text.includes("95%") && text.includes("专注助手")
+        );
+      })()`,
+    );
+    if (!rendered) throw new Error("Notifications page did not render expected controls");
+    // Turning the master switch off must dirty the config and reflect in the UI.
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action=' + JSON.stringify("set-notifications-enabled") + '][data-value="off"]')?.click();
+    `);
+    await wait(200);
+    const toggled = await window.webContents.executeJavaScript(
+      `(() => ({
+        offActive: Boolean(document.querySelector('.segment[data-value="off"]')?.classList.contains("is-active")),
+        dirty: document.querySelector(".dirty-actions")?.textContent.includes("保存") || false,
+      }))()`,
+    );
+    if (!toggled.offActive || !toggled.dirty) {
+      throw new Error(`Notifications toggle did not dirty the config: ${JSON.stringify(toggled)}`);
+    }
   }
 
   if (showImport || showImportSource || showImportDrop || showImportPaste || showImportClaude) {

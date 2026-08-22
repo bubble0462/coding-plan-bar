@@ -30,10 +30,17 @@ let state = {
       url: "",
     },
     autoUpdate: { enabled: true },
+    notifications: {
+      enabled: true,
+      quotaThresholds: [80, 95],
+      onReset: true,
+      onServiceError: true,
+    },
     importHistory: [],
     providers: [],
   },
   templates: [],
+  templateSelectedId: null,
   snapshot: { providers: [], loading: false, updatedAt: null },
   selectedId: null,
   // "providers" shows the provider editor; auxiliary views show health, backup/security, and updates.
@@ -333,6 +340,10 @@ function render() {
               <span class="nav-dot"></span>
               备份与安全
             </button>
+            <button class="nav-item ${state.view === "notifications" ? "is-active" : ""}" data-action="show-notifications">
+              <span class="nav-dot"></span>
+              通知与提醒
+            </button>
             <button class="nav-item ${state.view === "update" ? "is-active" : ""}" data-action="show-update">
               <span class="nav-dot ${state.updater.status === "available" ? "has-update" : ""}"></span>
               关于与更新
@@ -347,13 +358,15 @@ function render() {
               ? renderAgentUsagePage()
               : state.view === "update"
                 ? renderUpdatePage()
-              : state.view === "health"
+                : state.view === "health"
                 ? renderHealthPage()
                 : state.view === "backup"
                   ? renderBackupPage()
-                  : selected
-                    ? renderEditor(selected)
-                    : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧“添加”创建一个供应商。</p></div></div>`
+                  : state.view === "notifications"
+                    ? renderNotificationsPage()
+                    : selected
+                      ? renderEditor(selected)
+                      : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧"添加"创建一个供应商。</p></div></div>`
           }
         </section>
       </section>
@@ -816,6 +829,61 @@ function renderBackupPage() {
   `;
 }
 
+function renderNotificationsPage() {
+  const notifications = state.config.notifications || {};
+  const thresholds = (notifications.quotaThresholds || []).map((value) => `${Math.round(value)}%`).join("、") || "80%、95%";
+  return `
+    <div class="editor-head">
+      <div class="section-title">
+        <strong>通知与提醒</strong>
+        <span>额度变化时发送 Windows 系统通知，点击通知可打开额度面板。</span>
+      </div>
+    </div>
+    <div class="form notifications-page">
+      <div class="section">
+        <div class="section-title">
+          <strong>系统通知</strong>
+          <span>总开关；关闭后所有额度提醒都不再发送。</span>
+        </div>
+        <div class="segmented">
+          <button class="segment ${notifications.enabled !== false ? "is-active" : ""}" data-action="set-notifications-enabled" data-value="on">开启</button>
+          <button class="segment ${notifications.enabled === false ? "is-active" : ""}" data-action="set-notifications-enabled" data-value="off">关闭</button>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">
+          <strong>额度阈值提醒</strong>
+          <span>档位用量越过 ${escapeHtml(thresholds)} 提醒线时通知，每个额度窗口只提醒一次（80% 需要留意、95% 即将耗尽）。</span>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">
+          <strong>额度重置提醒</strong>
+          <span>周额度等窗口重置、额度恢复时通知，并在额度面板播放庆祝动画。</span>
+        </div>
+        <label class="security-toggle">
+          <input type="checkbox" data-field="notificationsReset" ${notifications.onReset !== false ? "checked" : ""} />
+          <span>额度重置时通知</span>
+        </label>
+      </div>
+      <div class="section">
+        <div class="section-title">
+          <strong>服务异常提醒</strong>
+          <span>供应商查询失败（如 Key 失效、服务不可用）时通知，恢复前只提醒一次。</span>
+        </div>
+        <label class="security-toggle">
+          <input type="checkbox" data-field="notificationsServiceError" ${notifications.onServiceError !== false ? "checked" : ""} />
+          <span>查询失败时通知</span>
+        </label>
+      </div>
+      <div class="notice-box">
+        <strong>关于 Windows 通知</strong>
+        <span>系统"专注助手/勿扰模式"开启时，Windows 会暂存通知并在关闭后展示；这属于系统行为。应用重启后提醒状态重新计算。</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderHistoryItem(item) {
   const time = item.importedAt ? new Date(item.importedAt).toLocaleString("zh-CN") : "未知时间";
   return `
@@ -1158,42 +1226,132 @@ function renderOfficialNotice(provider) {
   `;
 }
 
+const TEMPLATE_CATEGORY_ORDER = ["官方订阅", "Coding Plan", "API 余额", "通用模板", "自定义"];
+
 function renderTemplatePopover() {
   const closing = state.templatesClosing ? "is-leaving" : "";
   const origin = state.templateOrigin || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
   const originStyle = `--origin-x:${Math.round(origin.x)}px;--origin-y:${Math.round(origin.y)}px`;
   return `
     <div class="template-backdrop ${closing}" data-action="cancel-templates" style="${originStyle}">
-      <div class="template-popover ${closing}" role="dialog" aria-modal="true" aria-label="添加供应商">
+      <div class="template-popover is-split ${closing}" role="dialog" aria-modal="true" aria-label="添加供应商">
         <div class="template-head">
           <div>
             <strong>添加供应商</strong>
-            <span>选择官方订阅、官方 Coding Plan 或官方余额接口。</span>
+            <span>左侧选择模板，右侧确认需要的内容后添加。</span>
           </div>
           <button class="icon-close" data-action="cancel-templates" aria-label="关闭">×</button>
         </div>
-        <div class="template-grid">
-          ${state.templates.map(renderTemplateCard).join("")}
+        <div class="template-split">
+          <div class="template-menu" role="listbox" aria-label="供应商模板">
+            ${renderTemplateMenu()}
+          </div>
+          <div class="template-preview">
+            ${renderTemplatePreview(selectedTemplate())}
+          </div>
         </div>
       </div>
     </div>
   `;
 }
 
-function renderTemplateCard(template, index) {
-  // Per-card stagger covers any number of templates (capped so long lists
-  // don't make the user wait for the last card to appear).
-  const enterDelay = Math.min(index, 9) * 18;
+function selectedTemplate() {
+  return (
+    state.templates.find((template) => template.id === state.templateSelectedId) ||
+    state.templates[0] ||
+    null
+  );
+}
+
+function renderTemplateMenu() {
+  const groups = new Map();
+  for (const template of state.templates) {
+    const category = template.category || KIND_LABELS[template.provider?.kind] || "其他";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(template);
+  }
+  const ordered = [
+    ...TEMPLATE_CATEGORY_ORDER.filter((category) => groups.has(category)).map((category) => [category, groups.get(category)]),
+    ...[...groups.entries()].filter(([category]) => !TEMPLATE_CATEGORY_ORDER.includes(category)),
+  ];
+  const selected = selectedTemplate();
+  return ordered
+    .map(
+      ([category, templates], groupIndex) => `
+      <div class="template-group">
+        <div class="template-group-title">${escapeHtml(category)}</div>
+        ${templates
+          .map(
+            (template, index) => `
+          <button class="template-row ${selected?.id === template.id ? "is-selected" : ""}" role="option" aria-selected="${selected?.id === template.id ? "true" : "false"}" data-action="select-template" data-template="${escapeAttr(template.id)}" style="--enter-delay:${Math.min(groupIndex * 3 + index, 12) * 22}ms">
+            <span class="template-logo">${escapeHtml(template.short || template.label.slice(0, 2))}</span>
+            <span class="template-row-copy"><strong>${escapeHtml(template.label)}</strong><small>${escapeHtml(template.description || "")}</small></span>
+          </button>
+        `,
+          )
+          .join("")}
+      </div>
+    `,
+    )
+    .join("");
+}
+
+function renderTemplatePreview(template) {
+  if (!template) {
+    return `<div class="template-preview-empty">没有可用模板。</div>`;
+  }
+  const provider = template.provider || {};
   return `
-    <button class="template-card" data-action="add-template" data-template="${escapeAttr(template.id)}" style="--enter-delay:${enterDelay}ms">
-      <span class="template-logo">${escapeHtml(template.short || template.label.slice(0, 2))}</span>
-      <span class="template-copy">
+    <div class="template-preview-head">
+      <span class="template-logo is-large">${escapeHtml(template.short || template.label.slice(0, 2))}</span>
+      <div>
         <strong>${escapeHtml(template.label)}</strong>
-        <small>${escapeHtml(template.category || KIND_LABELS[template.provider?.kind] || "供应商")}</small>
-        <em>${escapeHtml(template.description || "")}</em>
-      </span>
-    </button>
+        <span>${escapeHtml(template.category || KIND_LABELS[provider.kind] || "供应商")}</span>
+      </div>
+    </div>
+    <p class="template-preview-desc">${escapeHtml(template.description || "")}</p>
+    <div class="template-preview-section">
+      <div class="template-preview-title">需要什么</div>
+      ${templateCredentialLines(template)
+        .map((line) => `<div class="template-requirement">${escapeHtml(line)}</div>`)
+        .join("")}
+    </div>
+    ${provider.baseUrl ? `
+    <div class="template-preview-section">
+      <div class="template-preview-title">请求地址</div>
+      <code>${escapeHtml(provider.baseUrl)}</code>
+    </div>` : ""}
+    ${template.homepage ? `
+    <div class="template-preview-section">
+      <div class="template-preview-title">控制台</div>
+      <code>${escapeHtml(template.homepage)}</code>
+    </div>` : ""}
+    <div class="template-preview-actions">
+      <button class="btn primary" data-action="add-template" data-template="${escapeAttr(template.id)}">添加供应商</button>
+      <span class="hint">添加后可在编辑器中调整名称与凭据。</span>
+    </div>
   `;
+}
+
+function templateCredentialLines(template) {
+  const provider = template.provider || {};
+  if (provider.kind === "official-subscription") {
+    return ["自动读取本机 CLI 登录，无需填写 API Key"];
+  }
+  const envNames = Array.isArray(provider.apiKeyEnv)
+    ? provider.apiKeyEnv
+    : provider.apiKeyEnv
+      ? [provider.apiKeyEnv]
+      : [];
+  const lines = ["API Key（保存后加密存储）"];
+  if (envNames.length) lines.push(`支持环境变量：${envNames.join("、")}`);
+  if (provider.kind === "coding-plan" && String(provider.baseUrl || "").includes("api.kimi.com")) {
+    lines.push("或已登录 Kimi Code CLI（自动只读复用本机凭据）");
+  }
+  if (provider.kind === "coding-plan" && String(provider.baseUrl || "").includes("bailian.console.aliyun.com")) {
+    lines.push("个别账户可能要求百炼网页会话，届时会明确提示");
+  }
+  return lines;
 }
 
 function renderCustomSelect(field, value, options, labelId = "") {
@@ -1710,6 +1868,28 @@ function bindUpdateEvents() {
     state.view = "backup";
     render();
   });
+  root.querySelector("[data-action='show-notifications']")?.addEventListener("click", () => {
+    state.view = "notifications";
+    render();
+  });
+  root.querySelectorAll("[data-action='set-notifications-enabled']").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.config.notifications = {
+        ...(state.config.notifications || {}),
+        enabled: button.dataset.value !== "off",
+      };
+      markDirty();
+      render();
+    });
+  });
+  root.querySelector("[data-field='notificationsReset']")?.addEventListener("change", (event) => {
+    state.config.notifications = { ...(state.config.notifications || {}), onReset: event.target.checked };
+    markDirty();
+  });
+  root.querySelector("[data-field='notificationsServiceError']")?.addEventListener("change", (event) => {
+    state.config.notifications = { ...(state.config.notifications || {}), onServiceError: event.target.checked };
+    markDirty();
+  });
   root.querySelector("[data-action='show-update']")?.addEventListener("click", () => {
     state.view = "update";
     render();
@@ -1911,7 +2091,7 @@ function replaceEditorForSelectedProvider() {
   if (!editor) return;
   editor.innerHTML = selected
     ? renderEditor(selected)
-    : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧“添加”创建一个供应商。</p></div></div>`;
+    : `<div class="empty"><div><strong>没有供应商</strong><p class="hint">点击左侧"添加"创建一个供应商。</p></div></div>`;
   bindProviderEditorEvents(editor);
   flashFormSwap();
   lastSelectedId = state.selectedId;
@@ -2123,6 +2303,7 @@ function addTemplate(templateId) {
   const firstPositions = captureListPositions();
   state.config.providers.push(provider);
   state.selectedId = provider.id;
+  state.templateSelectedId = null;
   dismissTemplates();
   dialogOrigin = null;
   markDirty();
@@ -2533,6 +2714,36 @@ function bindTemplateEvents() {
   root.querySelectorAll("[data-action='add-template']").forEach((button) => {
     button.addEventListener("click", () => addTemplate(button.dataset.template));
   });
+
+  root.querySelectorAll("[data-action='select-template']").forEach((row) => {
+    row.addEventListener("click", () => selectTemplate(row.dataset.template));
+    row.addEventListener("dblclick", () => addTemplate(row.dataset.template));
+  });
+
+  const menu = root.querySelector(".template-menu");
+  menu?.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const rows = [...menu.querySelectorAll(".template-row")];
+    const index = rows.findIndex((row) => row.classList.contains("is-selected"));
+    const nextIndex = event.key === "ArrowDown" ? Math.min(index + 1, rows.length - 1) : Math.max(index - 1, 0);
+    if (nextIndex === index || !rows[nextIndex]) return;
+    selectTemplate(rows[nextIndex].dataset.template);
+    rows[nextIndex].focus();
+  });
+}
+
+function selectTemplate(templateId) {
+  if (!templateId) return;
+  state.templateSelectedId = templateId;
+  root.querySelectorAll("[data-action='select-template']").forEach((row) => {
+    const isSelected = row.dataset.template === templateId;
+    row.classList.toggle("is-selected", isSelected);
+    row.setAttribute("aria-selected", String(isSelected));
+  });
+  const template = state.templates.find((entry) => entry.id === templateId);
+  const preview = root.querySelector(".template-preview");
+  if (template && preview) preview.innerHTML = renderTemplatePreview(template);
 }
 
 function openDropdown(field) {
@@ -2720,6 +2931,14 @@ function cloneConfig(config) {
     },
     autoUpdate: {
       enabled: (config.autoUpdate || {}).enabled !== false,
+    },
+    notifications: {
+      enabled: (config.notifications || {}).enabled !== false,
+      quotaThresholds: Array.isArray((config.notifications || {}).quotaThresholds)
+        ? [...(config.notifications || {}).quotaThresholds]
+        : [80, 95],
+      onReset: (config.notifications || {}).onReset !== false,
+      onServiceError: (config.notifications || {}).onServiceError !== false,
     },
     importHistory: Array.isArray(config.importHistory) ? config.importHistory.map(clone) : [],
     providers: Array.isArray(config.providers) ? config.providers.map(clone) : [],

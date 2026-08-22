@@ -20,6 +20,7 @@ const TIER_LABELS = {
   grok_limit: "周期限额",
   grok_build: "GrokBuild 使用",
   grok_monthly_credits: "月度积分",
+  monthly_quota: "月额度",
 };
 
 function loadConfig(configPath) {
@@ -613,15 +614,18 @@ async function queryCodexQuota(accessToken, accountId, tool = "codex") {
 }
 
 async function queryCodingPlan(provider) {
-  const apiKey = resolveApiKey(provider);
+  let apiKey = resolveApiKey(provider);
+  const detected = detectCodingPlanProvider(provider.baseUrl || "");
+  // Kimi CLI 登录凭据只读复用：没有配置 API Key 时回退到本机凭据文件。
+  if (!apiKey && detected === "kimi") apiKey = readKimiCliCredential() || "";
   if (!apiKey) return subscriptionError("coding_plan", "not_found", "缺少 API Key");
 
-  const detected = detectCodingPlanProvider(provider.baseUrl || "");
   if (detected === "kimi") return queryKimiCoding(apiKey);
   if (detected === "zhipu") return queryZhipuCoding(provider.baseUrl || "", apiKey);
   if (detected === "minimax-cn") return queryMiniMaxCoding(apiKey, true);
   if (detected === "minimax-en") return queryMiniMaxCoding(apiKey, false);
   if (detected === "zenmux") return queryZenMux(provider.baseUrl, apiKey);
+  if (detected === "qwen") return queryQwenCoding(apiKey);
 
   return subscriptionError("coding_plan", "not_found", "无法识别的 Coding Plan 供应商");
 }
@@ -629,12 +633,23 @@ async function queryCodingPlan(provider) {
 function detectCodingPlanProvider(baseUrl) {
   const url = baseUrl.toLowerCase();
   if (url.includes("api.kimi.com/coding")) return "kimi";
+  if (url.includes("bailian.console.aliyun.com") || url.includes("modelstudio.console.alibabacloud.com")) return "qwen";
   if (url.includes("open.bigmodel.cn") || url.includes("bigmodel.cn")) return "zhipu";
   if (url.includes("api.z.ai")) return "zhipu";
   if (url.includes("api.minimaxi.com")) return "minimax-cn";
   if (url.includes("api.minimax.io")) return "minimax-en";
   if (url.includes("zenmux")) return "zenmux";
   return null;
+}
+
+function readKimiCliCredential(filePath = path.join(os.homedir(), ".kimi-code", "credentials", "kimi-code.json")) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const token = parsed?.accessToken || parsed?.access_token;
+    return typeof token === "string" && token.trim() ? token.trim() : null;
+  } catch {
+    return null;
+  }
 }
 
 async function queryKimiCoding(apiKey) {
@@ -676,6 +691,204 @@ async function queryKimiCoding(apiKey) {
   }
 
   return okSubscription("coding_plan", tiers, null);
+}
+
+const QWEN_CODING_REGIONS = [
+  {
+    host: "https://bailian.console.aliyun.com",
+    commodityCode: "sfm_codingplan_public_cn",
+    regionId: "cn-beijing",
+    referer: "https://bailian.console.aliyun.com/cn-beijing/?tab=model",
+  },
+  {
+    host: "https://modelstudio.console.alibabacloud.com",
+    commodityCode: "sfm_codingplan_public_intl",
+    regionId: "ap-southeast-1",
+    referer: "https://modelstudio.console.alibabacloud.com/ap-southeast-1/?tab=coding-plan",
+  },
+];
+
+// 百炼控制台 RPC（非公开接口，行为对照 CodexBar）。中国站优先，凭据或
+// 主机类错误时回退国际站；登录态要求两个站点一致时给出明确降级提示。
+async function queryQwenCoding(apiKey) {
+  let loginRequired = false;
+  let lastError = "";
+  for (const region of QWEN_CODING_REGIONS) {
+    const url =
+      `${region.host}/data/api.json?action=zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2` +
+      `&product=broadscope-bailian&api=queryCodingPlanInstanceInfoV2&currentRegionId=${region.regionId}`;
+    let response;
+    try {
+      response = await fetchJson(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "x-api-key": apiKey,
+          "X-DashScope-API-Key": apiKey,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Origin: region.host,
+          Referer: region.referer,
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+        },
+        body: JSON.stringify({
+          queryCodingPlanInstanceInfoRequest: { commodityCode: region.commodityCode },
+        }),
+        timeoutMs: 10000,
+        retries: 1,
+      });
+    } catch (error) {
+      lastError = String(error?.message || error);
+      continue;
+    }
+    if (response.status === 401 || response.status === 403) {
+      return subscriptionError("coding_plan", "expired", `API Key 无效或已过期 (HTTP ${response.status})`);
+    }
+    if (!response.ok) {
+      lastError = `API error (HTTP ${response.status}): ${safeResponseExcerpt(response.text)}`;
+      continue;
+    }
+    const parsed = parseQwenCodingPlan(response.json);
+    if (parsed.loginRequired) {
+      loginRequired = true;
+      continue;
+    }
+    if (parsed.error) {
+      lastError = parsed.error;
+      continue;
+    }
+    if (!parsed.tiers.length) {
+      return subscriptionError(
+        "coding_plan",
+        "parse_error",
+        parsed.planName ? `计划「${parsed.planName}」有效但接口未返回额度数据` : "Qwen Coding 计划未返回额度数据",
+      );
+    }
+    return okSubscription("coding_plan", parsed.tiers, parsed.planName);
+  }
+  if (loginRequired) {
+    return subscriptionError("coding_plan", "valid", "该账户的 Qwen Coding 额度需要百炼网页会话，API Key 模式不可用");
+  }
+  return subscriptionError("coding_plan", "valid", lastError || "Qwen Coding 额度接口不可用");
+}
+
+function parseQwenCodingPlan(json) {
+  const result = { tiers: [], planName: null, loginRequired: false, error: null };
+  if (!json || typeof json !== "object") {
+    result.error = "Qwen Coding 接口返回空响应";
+    return result;
+  }
+  const codeText = String(json.code ?? json.statusCode ?? json.status ?? "");
+  const messageText = String(json.message ?? json.msg ?? json.statusMessage ?? "");
+  const combined = `${codeText} ${messageText}`.toLowerCase();
+  if (/needlogin|console session|log ?in/.test(combined)) {
+    result.loginRequired = true;
+    return result;
+  }
+  const numericCode = Number(codeText);
+  if (codeText !== "" && Number.isFinite(numericCode) && numericCode !== 0 && numericCode !== 200) {
+    result.error = `Qwen Coding 接口错误: ${messageText || codeText}`;
+    return result;
+  }
+  const infos = qwenFindInstanceInfos(json);
+  if (!infos.length) {
+    result.error = "Qwen Coding 接口未返回计划实例";
+    return result;
+  }
+  const active = qwenPickActiveInstance(infos) || infos[0];
+  const quota = qwenFindQuotaInfo(active) || qwenFindQuotaInfo(json);
+  result.planName = qwenPlanName(active) || qwenPlanName(json);
+  if (!quota) return result;
+  const windows = [
+    ["five_hour", "per5Hour"],
+    ["weekly_limit", "perWeek"],
+    ["monthly_quota", "perBillMonth"],
+  ];
+  for (const [name, prefix] of windows) {
+    const total = parseNumber(quota[`${prefix}TotalQuota`], 0);
+    if (!total) continue;
+    result.tiers.push({
+      name,
+      label: TIER_LABELS[name] || name,
+      utilization: (parseNumber(quota[`${prefix}UsedQuota`], 0) / total) * 100,
+      resetsAt: extractResetTime(quota[`${prefix}QuotaNextRefreshTime`]),
+    });
+  }
+  return result;
+}
+
+function qwenFindInstanceInfos(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = qwenFindInstanceInfos(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  for (const key of ["codingPlanInstanceInfos", "coding_plan_instance_infos"]) {
+    if (Array.isArray(value[key])) return value[key];
+  }
+  for (const nested of Object.values(value)) {
+    const found = qwenFindInstanceInfos(nested);
+    if (found) return found;
+  }
+  return null;
+}
+
+function qwenPickActiveInstance(infos) {
+  let best = null;
+  let bestScore = 0;
+  for (const info of infos) {
+    if (!info || typeof info !== "object") continue;
+    let score = 0;
+    const status = String(info.status || info.instanceStatus || "").toUpperCase();
+    if (["VALID", "ACTIVE"].includes(status)) score = 3;
+    else if (["EXPIRED", "INVALID", "INACTIVE", "DISABLED", "TERMINATED"].includes(status)) score = -1;
+    if (score === 0 && typeof info.isActive === "boolean") score = info.isActive ? 3 : -1;
+    if (score === 0) {
+      const endTime = extractResetTime(info.endTime || info.periodEndTime || info.expireTime);
+      if (endTime && new Date(endTime).getTime() > Date.now()) score = 1;
+    }
+    if (score > bestScore) {
+      best = info;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function qwenFindQuotaInfo(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = qwenFindQuotaInfo(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  if (
+    value.codingPlanQuotaInfo && typeof value.codingPlanQuotaInfo === "object" &&
+    !Array.isArray(value.codingPlanQuotaInfo)
+  ) {
+    return value.codingPlanQuotaInfo;
+  }
+  if (Object.keys(value).some((key) => /^per(5Hour|Week|BillMonth)(Used|Total)Quota$/.test(key))) return value;
+  for (const nested of Object.values(value)) {
+    const found = qwenFindQuotaInfo(nested);
+    if (found) return found;
+  }
+  return null;
+}
+
+function qwenPlanName(value) {
+  if (!value || typeof value !== "object") return null;
+  for (const key of ["planName", "plan_name", "instanceName", "instance_name", "packageName", "package_name"]) {
+    const candidate = value[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return null;
 }
 
 async function queryZhipuCoding(baseUrl, apiKey) {
@@ -1770,5 +1983,8 @@ module.exports = {
   queryGrokQuota,
   normalizeGrokBilling,
   queryZhipuCoding,
+  queryQwenCoding,
+  parseQwenCodingPlan,
+  readKimiCliCredential,
   testCodexConnection,
 };

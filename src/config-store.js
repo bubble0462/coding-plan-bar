@@ -33,8 +33,22 @@ function normalizeConfig(config) {
     privacy: normalizePrivacy(config.privacy),
     proxy: normalizeProxy(config.proxy),
     autoUpdate: normalizeAutoUpdate(config.autoUpdate),
+    notifications: normalizeNotifications(config.notifications),
     importHistory: normalizeImportHistory(config.importHistory),
     providers: Array.isArray(config.providers) ? config.providers.map(normalizeProvider) : [],
+  };
+}
+
+function normalizeNotifications(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const thresholds = (Array.isArray(source.quotaThresholds) ? source.quotaThresholds : [])
+    .map((entry) => Number(entry))
+    .filter((entry) => Number.isFinite(entry) && entry >= 50 && entry <= 100);
+  return {
+    enabled: source.enabled !== false,
+    quotaThresholds: thresholds.length ? [...new Set(thresholds)].sort((a, b) => a - b) : [80, 95],
+    onReset: source.onReset !== false,
+    onServiceError: source.onServiceError !== false,
   };
 }
 
@@ -303,7 +317,7 @@ function providerTemplates() {
       label: "Kimi For Coding",
       short: "K",
       category: "Coding Plan",
-      description: "Kimi 官方 Coding 订阅额度。",
+      description: "Kimi 官方 Coding 订阅额度；已登录 Kimi Code CLI 时自动复用本机凭据。",
       homepage: "https://www.kimi.com/code/docs",
       provider: {
         id: "kimi-coding",
@@ -311,6 +325,22 @@ function providerTemplates() {
         kind: "coding-plan",
         baseUrl: "https://api.kimi.com/coding/",
         apiKeyEnv: ["KIMI_CODING_API_KEY", "KIMI_API_KEY"],
+        enabled: true,
+      },
+    },
+    {
+      id: "qwen-coding",
+      label: "Qwen Coding Plan",
+      short: "QW",
+      category: "Coding Plan",
+      description: "阿里百炼 Qwen Coding 计划：5 小时 / 周 / 月额度。",
+      homepage: "https://bailian.console.aliyun.com",
+      provider: {
+        id: "qwen-coding",
+        name: "Qwen Coding",
+        kind: "coding-plan",
+        baseUrl: "https://bailian.console.aliyun.com",
+        apiKeyEnv: ["DASHSCOPE_API_KEY", "ALIBABA_QWEN_API_KEY"],
         enabled: true,
       },
     },

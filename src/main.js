@@ -6,6 +6,7 @@ const {
   ipcMain,
   dialog,
   nativeImage,
+  Notification,
   screen,
   safeStorage,
   shell,
@@ -46,6 +47,8 @@ const {
   writeProviderCache,
 } = require("./provider-cache");
 const { AppTimers } = require("./app-timers");
+const { detectQuotaEvents, quotaEventMessage } = require("./notifications");
+const { detectAgentActivity, nextRefreshDelayMs } = require("./refresh-plan");
 const { readAgentUsageCache, writeAgentUsageCache } = require("./agent-usage-cache");
 const {
   cleanupApplicationDataDirectory,
@@ -62,6 +65,11 @@ const AGENT_USAGE_FAILURE_RETRY_MS = 60 * 1000;
 const STORAGE_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const timers = new AppTimers();
+
+const quotaEventArmed = new Map();
+let prevQuotaEventProviders = null;
+let pendingCelebrations = [];
+let lastNotificationsConfig = null;
 
 let tray = null;
 let popupWindow = null;
@@ -239,6 +247,8 @@ function showPopup() {
   popupWindow.show();
   popupWindow.moveTop();
   sendSnapshot();
+  // The celebration payload rides the snapshot above; drop it once delivered.
+  if (popupWindow.isVisible() && !popupWindow.webContents.isDestroyed()) pendingCelebrations = [];
 
   if (!wasVisible && !popupWindow.webContents.isDestroyed()) {
     popupWindow.webContents.send("quota:visibility", { visible: true });
@@ -320,10 +330,15 @@ function sendSnapshot(options = {}) {
 }
 
 function snapshotPayload() {
+  const now = Date.now();
+  const celebrations = pendingCelebrations
+    .filter((entry) => now - entry.at < 60 * 60 * 1000)
+    .slice(-3);
   return {
     ...currentState,
     layoutKey: providerLayoutKey(currentState.providers),
     popupPlacement,
+    celebrations,
   };
 }
 
@@ -451,6 +466,7 @@ async function refreshAllNow(reason = "timer") {
       errorCount,
       providers,
     };
+    lastNotificationsConfig = config.notifications || null;
     persistLastSuccessCache(enabled);
   } catch (error) {
     if (generation !== refreshGeneration) return snapshotPayload();
@@ -464,8 +480,54 @@ async function refreshAllNow(reason = "timer") {
   }
 
   updateTrayTooltip();
+  processQuotaEvents();
   sendSnapshot();
   return snapshotPayload();
+}
+
+function processQuotaEvents() {
+  const notifications = lastNotificationsConfig || {};
+  const previous = prevQuotaEventProviders;
+  prevQuotaEventProviders = currentState.providers;
+  if (!previous || notifications.enabled === false) return;
+
+  const events = detectQuotaEvents(previous, currentState.providers, {
+    thresholds: notifications.quotaThresholds,
+    armed: quotaEventArmed,
+  });
+  for (const event of events) {
+    if (event.type === "threshold") {
+      notifyQuotaEvent(event);
+      continue;
+    }
+    if (event.type === "service-error") {
+      if (notifications.onServiceError !== false) notifyQuotaEvent(event);
+      continue;
+    }
+    // Reset events: weekly resets additionally queue the popup celebration.
+    if (notifications.onReset !== false) notifyQuotaEvent(event);
+    if (event.scope === "weekly") {
+      pendingCelebrations.push({
+        key: `${event.providerId}|${event.tierName}|${Date.now()}`,
+        providerId: event.providerId,
+        providerName: event.providerName,
+        tierLabel: event.tierLabel,
+        at: Date.now(),
+      });
+    }
+  }
+}
+
+function notifyQuotaEvent(event) {
+  if (!Notification?.isSupported()) return;
+  try {
+    const { title, body } = quotaEventMessage(event);
+    const notification = new Notification({ title, body });
+    notification.on("click", () => showPopup());
+    notification.show();
+  } catch {
+    // Windows toast can fail under odd shell states; quota display is unaffected.
+  }
 }
 
 function applyLastSuccessCache(providers, config) {
@@ -549,8 +611,27 @@ function cloneProvider(provider) {
 }
 
 function scheduleRefresh() {
-  const seconds = Math.max(30, Number(currentState.refreshIntervalSeconds || 300));
-  timers.setInterval("refresh", () => refreshAll("timer"), seconds * 1000);
+  timers.clear("refresh");
+  scheduleNextRefresh();
+}
+
+function scheduleNextRefresh() {
+  // Adaptive plan: poll tightly near quota resets, moderately while a local
+  // coding agent is running, otherwise at the configured interval. Process
+  // detection is cached internally and degrades to plain timed refresh.
+  detectAgentActivity().then((agentActive) => {
+    if (!configPath) return;
+    const delayMs = nextRefreshDelayMs({
+      providers: currentState.providers,
+      baseSeconds: currentState.refreshIntervalSeconds,
+      agentActive,
+    });
+    timers.setTimeout("refresh", () => {
+      refreshAll("timer").finally(() => {
+        if (configPath) scheduleNextRefresh();
+      });
+    }, delayMs);
+  });
 }
 
 function agentUsageRefreshIntervalMs(config) {

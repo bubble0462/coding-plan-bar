@@ -1413,7 +1413,63 @@ button {
   }
 }
 
+/* ===== Weekly-reset celebration ===== */
+.confetti-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 60;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -12px;
+  left: var(--x, 50%);
+  width: 6px;
+  height: 10px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: cpb-confetti var(--duration, 1.3s) var(--ease-out) var(--delay, 0s) both;
+}
+
+@keyframes cpb-confetti {
+  0% {
+    opacity: 1;
+    transform: translateY(-12px) rotate(0deg);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(380px) rotate(var(--spin, 540deg));
+  }
+}
+
+.reset-toast {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 61;
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: var(--text-strong);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  animation: cpb-rise 200ms var(--ease-out) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .confetti-layer {
+    display: none;
+  }
+
   *,
   *::before,
   *::after {

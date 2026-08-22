@@ -94,6 +94,8 @@ function main() {
   run("npm", ["run", "check"]);
   run("npm", ["run", "smoke"]);
   run("npm", ["run", "smoke:electron"]);
+  run("npm", ["run", "screenshot"]);
+  run("npm", ["run", "screenshot:deepseek"]);
   run("npm", ["run", "screenshot:grok"]);
   run("npm", ["run", "screenshot:reorder"]);
   run("npm", ["run", "screenshot:settings:import-drop"]);
@@ -101,6 +103,8 @@ function main() {
   run("npm", ["run", "screenshot:settings:import-claude"]);
   run("npm", ["run", "screenshot:settings:dirty"]);
   run("npm", ["run", "screenshot:settings:usage"]);
+  run("npm", ["run", "screenshot:settings:templates"]);
+  run("npm", ["run", "screenshot:settings:notifications"]);
   run("npm", ["run", "dist"]);
   if (!fs.existsSync(asset)) throw new Error(`未找到安装包：${asset}`);
 

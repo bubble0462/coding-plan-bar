@@ -16,10 +16,23 @@ const {
   queryGrokQuota,
   normalizeGrokBilling,
   queryZhipuCoding,
+  parseQwenCodingPlan,
+  readKimiCliCredential,
   readCodexCredentials,
   readClaudeCredentials,
   refreshProviders,
 } = require("../src/providers");
+const {
+  detectQuotaEvents,
+  isWeeklyTierName,
+  normalizeThresholds,
+  quotaEventMessage,
+} = require("../src/notifications");
+const {
+  commandOutputMatchesAgent,
+  nextRefreshDelayMs,
+  RESET_POLL_SECONDS,
+} = require("../src/refresh-plan");
 const {
   DEFAULT_TTL_MS,
   providerFingerprint,
@@ -1330,6 +1343,165 @@ async function runClaudeAgentUsageSmoke() {
 }
 
 runZhipuRequestSmoke()
+// ===== Quota events (notifications + celebrations) =====
+assert.deepStrictEqual(normalizeThresholds(null), [80, 95]);
+assert.deepStrictEqual(normalizeThresholds([95, 80, 80]), [80, 95]);
+assert.deepStrictEqual(normalizeThresholds([10, 120]), [80, 95]);
+assert.strictEqual(isWeeklyTierName("weekly_limit"), true);
+assert.strictEqual(isWeeklyTierName("seven_day_sonnet"), true);
+assert.strictEqual(isWeeklyTierName("five_hour"), false);
+
+const eventWindow = (overrides = {}) => ({
+  id: "glm",
+  name: "GLM",
+  status: "ok",
+  tiers: [
+    { name: "five_hour", label: "5h", utilization: 30, resetsAt: "2026-08-20T10:00:00.000Z" },
+    { name: "weekly_limit", label: "周额度", utilization: 30, resetsAt: "2026-08-24T10:00:00.000Z" },
+  ],
+  ...overrides,
+});
+const eventArmed = new Map();
+// Threshold crossing fires once per window+threshold and re-arms only after a reset.
+const crossingEvents = detectQuotaEvents(
+  [eventWindow()],
+  [eventWindow({ tiers: eventWindow().tiers.map((tier) => ({ ...tier, utilization: 85 })) })],
+  { armed: eventArmed },
+);
+assert.strictEqual(crossingEvents.length, 2);
+assert.ok(crossingEvents.every((event) => event.type === "threshold" && event.threshold === 80));
+const repeatEvents = detectQuotaEvents(
+  [eventWindow({ tiers: eventWindow().tiers.map((tier) => ({ ...tier, utilization: 85 })) })],
+  [eventWindow({ tiers: eventWindow().tiers.map((tier) => ({ ...tier, utilization: 96 })) })],
+  { armed: eventArmed },
+);
+assert.ok(repeatEvents.every((event) => event.type === "threshold" && event.threshold === 95));
+assert.strictEqual(repeatEvents.length, 2);
+// Same-values refresh produces no events.
+assert.strictEqual(detectQuotaEvents([eventWindow()], [eventWindow()], { armed: new Map() }).length, 0);
+// Weekly window rollover -> reset event with weekly scope + a 5h reset stays "window".
+const resetEvents = detectQuotaEvents(
+  [eventWindow({ tiers: eventWindow().tiers.map((tier) => ({ ...tier, utilization: 72 })) })],
+  [
+    eventWindow({
+      tiers: [
+        { name: "five_hour", label: "5h", utilization: 72, resetsAt: "2026-08-20T11:00:00.000Z" },
+        { name: "weekly_limit", label: "周额度", utilization: 72, resetsAt: "2026-08-31T10:00:00.000Z" },
+      ],
+    }),
+  ],
+  { armed: new Map() },
+);
+assert.strictEqual(resetEvents.length, 2);
+assert.ok(resetEvents.some((event) => event.type === "reset" && event.scope === "weekly"));
+assert.ok(resetEvents.some((event) => event.type === "reset" && event.scope === "window"));
+// A barely-used window rolling over is not a reset event.
+assert.strictEqual(
+  detectQuotaEvents(
+    [eventWindow({ tiers: eventWindow().tiers.map((tier) => ({ ...tier, utilization: 8 })) })],
+    [eventWindow({ tiers: eventWindow().tiers.map((tier) => ({ ...tier, utilization: 4, resetsAt: "2026-08-21T10:00:00.000Z" })) })],
+    { armed: new Map() },
+  ).length,
+  0,
+);
+// Service error transition fires once and re-arms after recovery.
+const errorArmed = new Map();
+const errorEvents = detectQuotaEvents(
+  [eventWindow()],
+  [eventWindow({ status: "error" })],
+  { armed: errorArmed },
+);
+assert.strictEqual(errorEvents.length, 1);
+assert.strictEqual(errorEvents[0].type, "service-error");
+assert.strictEqual(detectQuotaEvents([eventWindow({ status: "error" })], [eventWindow({ status: "error" })], { armed: errorArmed }).length, 0);
+assert.strictEqual(detectQuotaEvents([eventWindow({ status: "error" })], [eventWindow()], { armed: errorArmed }).length, 0);
+assert.ok(quotaEventMessage({ type: "threshold", providerName: "GLM", tierLabel: "周额度", threshold: 95, utilization: 96 }).title.includes("96%"));
+
+// ===== Adaptive refresh plan =====
+const planNow = Date.parse("2026-08-20T12:00:00.000Z");
+assert.strictEqual(nextRefreshDelayMs({ now: planNow, providers: [], baseSeconds: 300 }), 300 * 1000);
+assert.strictEqual(nextRefreshDelayMs({ now: planNow, providers: [], baseSeconds: 10 }), 30 * 1000);
+assert.strictEqual(
+  nextRefreshDelayMs({
+    now: planNow,
+    providers: [{ tiers: [{ name: "five_hour", utilization: 40, resetsAt: "2026-08-20T12:03:30.000Z" }] }],
+    baseSeconds: 300,
+  }),
+  RESET_POLL_SECONDS * 1000,
+);
+assert.strictEqual(
+  nextRefreshDelayMs({
+    now: planNow,
+    providers: [{ tiers: [{ name: "five_hour", utilization: 40, resetsAt: "2026-08-20T12:30:00.000Z" }] }],
+    baseSeconds: 600,
+    agentActive: true,
+  }),
+  90 * 1000,
+);
+assert.strictEqual(commandOutputMatchesAgent("node.exe,C:\\tools\\codex.exe --help"), true);
+assert.strictEqual(commandOutputMatchesAgent("chrome.exe,https://example.com"), false);
+
+// ===== Qwen Coding Plan parsing =====
+const qwenPlan = parseQwenCodingPlan({
+  code: "200",
+  data: {
+    codingPlanInstanceInfos: [
+      {
+        planName: "Qwen 尊享版",
+        status: "VALID",
+        endTime: "2099-01-01 00:00:00",
+        codingPlanQuotaInfo: {
+          per5HourUsedQuota: "25",
+          per5HourTotalQuota: "100",
+          per5HourQuotaNextRefreshTime: "2026-08-20 16:30:00",
+          perWeekUsedQuota: 40,
+          perWeekTotalQuota: 200,
+          perWeekQuotaNextRefreshTime: "2026-08-24 00:00:00",
+          perBillMonthUsedQuota: 0,
+          perBillMonthTotalQuota: 0,
+        },
+      },
+    ],
+  },
+});
+assert.strictEqual(qwenPlan.planName, "Qwen 尊享版");
+assert.deepStrictEqual(
+  qwenPlan.tiers.map((tier) => [tier.name, Math.round(tier.utilization)]),
+  [["five_hour", 25], ["weekly_limit", 20]],
+);
+assert.strictEqual(parseQwenCodingPlan({ code: "ConsoleNeedLogin", message: "login required" }).loginRequired, true);
+const qwenActiveNoQuota = parseQwenCodingPlan({
+  data: { codingPlanInstanceInfos: [{ planName: "Qwen 基础版", status: "VALID" }] },
+});
+assert.strictEqual(qwenActiveNoQuota.tiers.length, 0);
+assert.strictEqual(qwenActiveNoQuota.planName, "Qwen 基础版");
+assert.ok(parseQwenCodingPlan({ code: "500", message: "boom" }).error.includes("boom"));
+
+// ===== Kimi CLI credential reuse =====
+const kimiCredDir = fs.mkdtempSync(path.join(os.tmpdir(), "cpb-kimi-"));
+const kimiCredPath = path.join(kimiCredDir, "kimi-code.json");
+fs.writeFileSync(kimiCredPath, JSON.stringify({ accessToken: " kimi-cli-token ", refreshToken: "nope" }));
+assert.strictEqual(readKimiCliCredential(kimiCredPath), "kimi-cli-token");
+fs.writeFileSync(kimiCredPath, JSON.stringify({ access_token: "alt" }));
+assert.strictEqual(readKimiCliCredential(kimiCredPath), "alt");
+fs.writeFileSync(kimiCredPath, "{broken");
+assert.strictEqual(readKimiCliCredential(kimiCredPath), null);
+assert.strictEqual(readKimiCliCredential(path.join(kimiCredDir, "missing.json")), null);
+
+// ===== Notifications config normalization =====
+assert.deepStrictEqual(normalizeConfig({ refreshIntervalSeconds: 300 }).notifications, {
+  enabled: true,
+  quotaThresholds: [80, 95],
+  onReset: true,
+  onServiceError: true,
+});
+assert.deepStrictEqual(
+  normalizeConfig({ refreshIntervalSeconds: 300, notifications: { enabled: false, quotaThresholds: [70, 90, 90] } }).notifications,
+  { enabled: false, quotaThresholds: [70, 90], onReset: true, onServiceError: true },
+);
+assert(providerTemplates().some((template) => template.id === "qwen-coding"));
+
+Promise.resolve()
   .then(runGrokRefreshSmoke)
   .then(runGrokSourceSmoke)
   .then(runIncrementalRefreshSmoke)

@@ -41,6 +41,7 @@ let refreshHighlightTimer = null;
 // hide/show cycles; the resolved default is persisted to config via IPC.
 let selectedProviderId = null;
 let renderedSelectorSignature = "";
+const shownCelebrationKeys = new Set();
 
 window.codingPlanBar.onSnapshot((next) => {
   const nextLayoutKey = next.layoutKey || providerLayoutKey(next.providers);
@@ -52,7 +53,45 @@ window.codingPlanBar.onSnapshot((next) => {
   prevSnapshotUpdatedAt = next.updatedAt;
   snapshot = next;
   render(isDataRefresh);
+  handleCelebrations(next.celebrations);
 });
+
+function handleCelebrations(celebrations) {
+  for (const entry of Array.isArray(celebrations) ? celebrations : []) {
+    if (!entry?.key || shownCelebrationKeys.has(entry.key)) continue;
+    shownCelebrationKeys.add(entry.key);
+    showResetToast(entry);
+    spawnConfetti();
+  }
+}
+
+function showResetToast(entry) {
+  root.querySelector(".reset-toast")?.remove();
+  const toast = document.createElement("div");
+  toast.className = "reset-toast";
+  toast.textContent = `🎉 ${entry.providerName || entry.providerId || "供应商"} 周额度已重置`;
+  root.appendChild(toast);
+  window.setTimeout(() => toast.remove(), 4000);
+}
+
+function spawnConfetti() {
+  root.querySelector(".confetti-layer")?.remove();
+  const layer = document.createElement("div");
+  layer.className = "confetti-layer";
+  const colors = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#0891b2"];
+  for (let index = 0; index < 24; index += 1) {
+    const piece = document.createElement("i");
+    piece.className = "confetti-piece";
+    piece.style.setProperty("--x", `${4 + Math.random() * 92}%`);
+    piece.style.setProperty("--delay", `${(Math.random() * 0.35).toFixed(2)}s`);
+    piece.style.setProperty("--duration", `${(1.2 + Math.random() * 0.4).toFixed(2)}s`);
+    piece.style.setProperty("--spin", `${Math.round(360 + Math.random() * 540)}deg`);
+    piece.style.background = colors[index % colors.length];
+    layer.appendChild(piece);
+  }
+  root.appendChild(layer);
+  window.setTimeout(() => layer.remove(), 1900);
+}
 
 if (typeof window.codingPlanBar.onPopupVisibility === "function") {
   window.codingPlanBar.onPopupVisibility(({ visible }) => {

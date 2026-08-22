@@ -667,6 +667,29 @@ async function main() {
     if (codexRefresh && (!refreshAssertions.codexWeekly || refreshAssertions.codexWeekly.width !== "12%")) {
       throw new Error(`Popup codex weekly chip did not update after refresh: ${JSON.stringify(refreshAssertions.codexWeekly)}`);
     }
+
+    // Celebration overlay: one confetti burst + toast per reset event key.
+    await captureWindow.webContents.executeJavaScript(
+      `handleCelebrations([{ key: "celebrate-test-1", providerId: "glm", providerName: "GLM Coding Plan", tierLabel: "周额度" }])`,
+    );
+    await wait(200);
+    const celebrationAssertions = await captureWindow.webContents.executeJavaScript(`(() => ({
+      confettiPieces: document.querySelectorAll(".confetti-piece").length,
+      toastText: document.querySelector(".reset-toast")?.textContent || "",
+    }))()`);
+    if (celebrationAssertions.confettiPieces < 20 || !celebrationAssertions.toastText.includes("周额度已重置")) {
+      throw new Error(`Popup celebration overlay missing: ${JSON.stringify(celebrationAssertions)}`);
+    }
+    // The same key must not replay; a second, different key replays fine.
+    await captureWindow.webContents.executeJavaScript(
+      `handleCelebrations([{ key: "celebrate-test-1", providerId: "glm", providerName: "GLM Coding Plan", tierLabel: "周额度" }])`,
+    );
+    const dedupOk = await captureWindow.webContents.executeJavaScript(
+      `(() => document.querySelectorAll(".confetti-piece").length)()`,
+    );
+    if (dedupOk !== celebrationAssertions.confettiPieces) {
+      throw new Error(`Popup celebration dedup failed: ${dedupOk} vs ${celebrationAssertions.confettiPieces}`);
+    }
   }
 
   if (deepSeekMode) {
