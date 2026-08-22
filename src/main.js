@@ -34,8 +34,10 @@ const {
 } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { calculatePopupPlacement } = require("./popup-placement");
-const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials } = require("./providers");
+const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials, resolveApiKey } = require("./providers");
 const { classifyFailure } = require("./failure-classifier");
+const { probeProviderEndpoint } = require("./endpoint-probe");
+const { SECRET_MASK } = require("./secret-store");
 const { listCodexModels, probeCodexStream } = require("./chat-probe");
 const { applyProxySettings } = require("./proxy");
 const { collectCodexAgentUsage, collectClaudeAgentUsage } = require("./session-usage");
@@ -1445,6 +1447,35 @@ async function startApp() {
     }
   });
   ipcMain.handle("config:get", getConfigForSettings);
+  ipcMain.handle("provider:probe-endpoint", async (_event, { provider } = {}) => {
+    // The editor passes the provider as currently edited (possibly unsaved).
+    // A masked apiKey means "unchanged since load" — fall back to the stored
+    // config entry so probing works right after selecting a saved provider.
+    if (!provider || typeof provider !== "object") {
+      return { status: "invalid-url", error: "缺少供应商信息", models: [], httpStatus: null, latencyMs: null, url: null };
+    }
+    let apiKey = String(resolveApiKey(provider) || "");
+    if (apiKey.includes(SECRET_MASK)) apiKey = "";
+    if (!apiKey && configPath) {
+      try {
+        const stored = loadConfig(configPath).providers.find((entry) => entry.id === provider.id);
+        if (stored) apiKey = String(resolveApiKey(stored) || "");
+      } catch {
+        // Config read failures fall through to a keyless probe.
+      }
+    }
+    if (!apiKey) {
+      return {
+        status: "no-key",
+        error: "未配置 API Key（也未找到可用环境变量），请先在编辑器中填写",
+        models: [],
+        httpStatus: null,
+        latencyMs: null,
+        url: null,
+      };
+    }
+    return probeProviderEndpoint({ baseUrl: provider.baseUrl, apiKey });
+  });
   ipcMain.handle("usage:get-codex-agent", getCodexAgentUsage);
   ipcMain.handle("usage:get-agent", (_event, options) => getAgentUsage(options));
   ipcMain.handle("config:save", saveConfigFromSettings);

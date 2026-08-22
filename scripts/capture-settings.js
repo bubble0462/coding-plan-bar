@@ -17,6 +17,7 @@ const showHealth = process.argv.includes("--health");
 const showBackup = process.argv.includes("--backup");
 const showUsage = process.argv.includes("--usage");
 const showNotifications = process.argv.includes("--notifications");
+const showProbe = process.argv.includes("--probe");
 const darkMode = process.argv.includes("--dark");
 const baseOutputName = showTemplates
   ? "settings-screenshot-templates"
@@ -44,7 +45,9 @@ const baseOutputName = showTemplates
                       ? "settings-screenshot-usage"
                       : showNotifications
                         ? "settings-screenshot-notifications"
-                        : "settings-screenshot";
+                        : showProbe
+                          ? "settings-screenshot-probe"
+                          : "settings-screenshot";
 const outputPath = path.join(
   __dirname,
   "..",
@@ -228,6 +231,14 @@ async function main() {
   ipcMain.handle("config:save", (_event, config) => ({
     config,
     configPath: "C:\\Users\\bubble\\AppData\\Roaming\\coding-plan-bar\\config.json",
+  }));
+  ipcMain.handle("provider:probe-endpoint", () => ({
+    status: "ok",
+    httpStatus: 200,
+    latencyMs: 318,
+    url: "https://api.deepseek.com/models",
+    models: ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+    error: null,
   }));
   ipcMain.handle("config:open-json", () => {});
   ipcMain.handle("config:choose-import-accounts", () => ({
@@ -425,6 +436,39 @@ async function main() {
     if (!templateEscFocus.focusOnTrigger) throw new Error("Template popover Escape did not restore focus to the trigger");
     await window.webContents.executeJavaScript(`document.querySelector('[data-action="toggle-templates"]')?.click()`);
     await wait(160);
+  }
+
+  if (showProbe) {
+    window.showInactive();
+    await wait(120);
+    // Select the DeepSeek balance provider, run the mocked endpoint probe,
+    // and assert the connectivity status + model chips render.
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.provider-item[data-id="deepseek"] [data-action="select-provider"]')?.click();
+    `);
+    await wait(200);
+    const cardPresent = await window.webContents.executeJavaScript(
+      `(() => Boolean(document.querySelector('.endpoint-probe-card [data-action="probe-endpoint"]')))()`,
+    );
+    if (!cardPresent) throw new Error("Endpoint probe card missing for balance provider");
+    await window.webContents.executeJavaScript(`
+      document.querySelector('[data-action="probe-endpoint"]')?.click();
+    `);
+    await wait(300);
+    const probeResult = await window.webContents.executeJavaScript(`(() => ({
+      status: document.querySelector(".endpoint-probe-status")?.textContent || "",
+      modelChips: Array.from(document.querySelectorAll(".endpoint-probe-model")).map((chip) => chip.textContent.trim()),
+      url: document.querySelector(".endpoint-probe-url")?.textContent || "",
+    }))()`);
+    if (!probeResult.status.includes("连接成功") || !probeResult.status.includes("3 个模型")) {
+      throw new Error(`Endpoint probe status line wrong: ${JSON.stringify(probeResult.status)}`);
+    }
+    if (probeResult.modelChips.join(",") !== "deepseek-chat,deepseek-coder,deepseek-reasoner") {
+      throw new Error(`Endpoint probe model chips wrong: ${JSON.stringify(probeResult.modelChips)}`);
+    }
+    if (!probeResult.url.includes("api.deepseek.com")) {
+      throw new Error(`Endpoint probe url missing: ${JSON.stringify(probeResult.url)}`);
+    }
   }
 
   if (showUpdate) {

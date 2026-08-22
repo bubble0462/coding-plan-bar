@@ -2606,6 +2606,106 @@ button {
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.055);
 }
 
+/* ===== Endpoint probe (connectivity + model list) ===== */
+.endpoint-probe-card {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  border: 1px solid var(--blue-soft);
+  border-radius: 11px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(37, 99, 235, 0.08), transparent 32%),
+    linear-gradient(135deg, var(--panel), var(--blue-tint-2));
+  padding: 13px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.055);
+}
+
+.endpoint-probe-head {
+  display: grid;
+  gap: 4px;
+}
+
+.endpoint-probe-head strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.endpoint-probe-head span {
+  color: var(--muted-2);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.endpoint-probe-body {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.endpoint-probe-body .hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.endpoint-probe-result {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 8px;
+}
+
+.endpoint-probe-status {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.endpoint-probe-status.is-ok {
+  color: var(--green);
+}
+
+.endpoint-probe-status.is-error {
+  color: var(--red);
+}
+
+.endpoint-probe-models {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.endpoint-probe-model {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 3px 8px;
+  border: 1px solid var(--blue-soft);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--blue);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.endpoint-probe-model.is-more {
+  border-color: var(--border);
+  color: var(--muted);
+}
+
+.endpoint-probe-url {
+  overflow: hidden;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--muted-2);
+  font-size: 10.5px;
+  font-family: Consolas, "Courier New", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
 .chat-probe-head {
   display: grid;
   gap: 4px;

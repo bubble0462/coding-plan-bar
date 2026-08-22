@@ -1986,5 +1986,6 @@ module.exports = {
   queryQwenCoding,
   parseQwenCodingPlan,
   readKimiCliCredential,
+  resolveApiKey,
   testCodexConnection,
 };

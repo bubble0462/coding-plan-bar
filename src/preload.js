@@ -69,6 +69,9 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   probeCodexChat(args) {
     return ipcRenderer.invoke("chat:probe-codex", args);
   },
+  probeEndpoint(provider) {
+    return ipcRenderer.invoke("provider:probe-endpoint", { provider });
+  },
   onProbeEvent(callback) {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on("chat:probe-event", listener);

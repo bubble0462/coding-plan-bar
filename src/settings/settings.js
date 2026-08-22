@@ -41,6 +41,7 @@ let state = {
   },
   templates: [],
   templateSelectedId: null,
+  endpointProbe: null,
   snapshot: { providers: [], loading: false, updatedAt: null },
   selectedId: null,
   // "providers" shows the provider editor; auxiliary views show health, backup/security, and updates.
@@ -981,6 +982,7 @@ function renderEditor(provider) {
     <form class="form">
       ${renderAccountDetailCard(provider)}
       ${renderChatProbeCard(provider)}
+      ${renderEndpointProbeCard(provider)}
       <div class="form-grid">
         <div class="field">
           <label id="provider-id-label">供应商 ID</label>
@@ -1146,9 +1148,65 @@ function accountSourceLabel(provider) {
   return KIND_LABELS[provider.kind] || provider.kind;
 }
 
+function renderEndpointProbeCard(provider) {
+  if (provider.kind === "official-subscription") return "";
+  const probe = state.endpointProbe || {};
+  const active = probe.providerId === provider.id;
+  const loading = Boolean(active && probe.loading);
+  const result = active ? probe.result : null;
+  return `
+    <div class="endpoint-probe-card">
+      <div class="endpoint-probe-head">
+        <strong>连接测试</strong>
+        <span>用当前请求地址与 API Key 查询可用模型并验证连通性（只读，不消耗对话额度）。</span>
+      </div>
+      <div class="endpoint-probe-body">
+        <button class="btn" data-action="probe-endpoint" ${loading ? "disabled" : ""}>${loading ? "测试中…" : "测试连接与模型"}</button>
+        ${result ? renderEndpointProbeResult(result) : `<span class="hint">显示 HTTP 状态、延迟与模型列表。</span>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderEndpointProbeResult(result) {
+  const status = result?.status;
+  const ok = status === "ok" || status === "reachable-no-models";
+  let statusLine = result?.error || "测试失败";
+  if (status === "ok") statusLine = `连接成功 · HTTP ${result.httpStatus} · ${result.latencyMs}ms · ${result.models.length} 个模型`;
+  else if (status === "reachable-no-models") statusLine = `服务器可达 · HTTP ${result.httpStatus ?? "--"} · ${result.latencyMs ?? "--"}ms（无模型列表接口）`;
+  const models = Array.isArray(result?.models) ? result.models : [];
+  const visible = models.slice(0, 24);
+  const overflow = models.length - visible.length;
+  return `
+    <div class="endpoint-probe-result">
+      <div class="endpoint-probe-status ${ok ? "is-ok" : "is-error"}">${escapeHtml(statusLine)}</div>
+      ${models.length ? `
+      <div class="endpoint-probe-models">
+        ${visible.map((model) => `<span class="endpoint-probe-model">${escapeHtml(model)}</span>`).join("")}
+        ${overflow > 0 ? `<span class="endpoint-probe-model is-more">等 ${models.length} 个</span>` : ""}
+      </div>` : ""}
+      ${result?.url ? `<code class="endpoint-probe-url">${escapeHtml(result.url)}</code>` : ""}
+    </div>
+  `;
+}
+
+async function runEndpointProbe() {
+  const provider = selectedProvider();
+  if (!provider || typeof window.codingPlanBar.probeEndpoint !== "function") return;
+  state.endpointProbe = { providerId: provider.id, loading: true, result: null };
+  render();
+  let result;
+  try {
+    result = await window.codingPlanBar.probeEndpoint(provider);
+  } catch (error) {
+    result = { status: "network-error", models: [], httpStatus: null, latencyMs: null, url: null, error: String(error?.message || error) };
+  }
+  state.endpointProbe = { providerId: provider.id, loading: false, result };
+  if (state.view === "providers" && state.selectedId === provider.id) render();
+}
+
 function renderChatProbeCard(provider) {
-  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") return "";
-  const probe = state.chatProbe || {};
+  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") return "";  const probe = state.chatProbe || {};
   const active = probe.providerId === provider.id;
   const models = (active && probe.models) || [];
   const modelsLoading = active && probe.modelsLoading;
@@ -1343,7 +1401,7 @@ function templateCredentialLines(template) {
     : provider.apiKeyEnv
       ? [provider.apiKeyEnv]
       : [];
-  const lines = ["API Key（保存后加密存储）"];
+  const lines = ["API Key（添加后在右侧编辑器填写，保存后加密存储）"];
   if (envNames.length) lines.push(`支持环境变量：${envNames.join("、")}`);
   if (provider.kind === "coding-plan" && String(provider.baseUrl || "").includes("api.kimi.com")) {
     lines.push("或已登录 Kimi Code CLI（自动只读复用本机凭据）");
@@ -1676,6 +1734,11 @@ function bindProviderEditorEvents(scope = root) {
   const chatProbeCard = scope.querySelector(".chat-probe-card");
   if (chatProbeCard) {
     bindChatProbeEvents(chatProbeCard);
+  }
+
+  const endpointProbeBtn = scope.querySelector("[data-action='probe-endpoint']");
+  if (endpointProbeBtn) {
+    endpointProbeBtn.addEventListener("click", () => runEndpointProbe());
   }
 
   scope.querySelectorAll("[data-action='toggle-dropdown']").forEach((button) => {

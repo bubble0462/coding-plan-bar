@@ -33,6 +33,7 @@ const {
   nextRefreshDelayMs,
   RESET_POLL_SECONDS,
 } = require("../src/refresh-plan");
+const { buildModelListCandidates, extractModelIds } = require("../src/endpoint-probe");
 const {
   DEFAULT_TTL_MS,
   providerFingerprint,
@@ -1500,6 +1501,34 @@ assert.deepStrictEqual(
   { enabled: false, quotaThresholds: [70, 90], onReset: true, onServiceError: true },
 );
 assert(providerTemplates().some((template) => template.id === "qwen-coding"));
+
+// ===== Endpoint probe URL candidates =====
+assert.deepStrictEqual(buildModelListCandidates("https://api.deepseek.com"), [
+  "https://api.deepseek.com/models",
+  "https://api.deepseek.com/v1/models",
+]);
+assert.deepStrictEqual(buildModelListCandidates("https://api.moonshot.cn/v1"), [
+  "https://api.moonshot.cn/v1/models",
+]);
+assert.deepStrictEqual(buildModelListCandidates("https://api.siliconflow.cn/"), [
+  "https://api.siliconflow.cn/models",
+  "https://api.siliconflow.cn/v1/models",
+]);
+assert.deepStrictEqual(buildModelListCandidates("https://bailian.console.aliyun.com"), [
+  "https://dashscope.aliyuncs.com/compatible-mode/v1/models",
+  "https://bailian.console.aliyun.com/models",
+  "https://bailian.console.aliyun.com/v1/models",
+]);
+assert.deepStrictEqual(buildModelListCandidates("https://open.bigmodel.cn/api/coding/paas/v4"), [
+  "https://open.bigmodel.cn/api/coding/paas/v4/models",
+  "https://open.bigmodel.cn/api/paas/v4/models",
+]);
+assert.deepStrictEqual(buildModelListCandidates("not-a-url"), []);
+assert.deepStrictEqual(
+  extractModelIds({ data: [{ id: "b" }, { id: "a" }, { id: "a" }, "c", { model: "d" }, { noise: 1 }] }),
+  ["a", "b", "c", "d"],
+);
+assert.deepStrictEqual(extractModelIds({ data: "nope" }), []);
 
 Promise.resolve()
   .then(runGrokRefreshSmoke)
