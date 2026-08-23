@@ -1037,13 +1037,20 @@ async function getAntigravityAccessToken(credential) {
 }
 
 function antigravityTierPlanName(loadJson) {
-  const tierId = String(loadJson?.currentTier?.id || "").toLowerCase();
-  if (tierId === "free-tier") return "Free";
-  if (tierId === "standard-tier") return "Standard";
-  if (tierId.includes("ultra")) return "Google AI Ultra";
-  if (tierId.includes("pro")) return "Google AI Pro";
-  const name = loadJson?.currentTier?.name || loadJson?.paidTier?.name || null;
-  return typeof name === "string" && name.trim() ? name.trim() : null;
+  // paidTier 反映账号的 Google One（Antigravity 权益）关联——Pro 账号在
+  // currentTier 仍是 Code Assist 的 free-tier，但 paidTier 是 g1-pro-tier。
+  // 与主流账号管理工具一致：优先 paidTier，回退 currentTier。
+  for (const tier of [loadJson?.paidTier, loadJson?.currentTier]) {
+    if (!tier || typeof tier !== "object") continue;
+    const tierId = String(tier.id || "").toLowerCase();
+    if (tierId.includes("ultra")) return "Google AI Ultra";
+    if (tierId.includes("pro")) return "Google AI Pro";
+    if (tierId === "standard-tier") return "Standard";
+    if (tierId === "free-tier") continue;
+    const name = typeof tier.name === "string" && tier.name.trim() ? tier.name.trim() : null;
+    if (name) return name;
+  }
+  return null;
 }
 
 function parseAntigravityQuota(modelsJson, loadJson, nowMs = Date.now()) {

@@ -1601,11 +1601,20 @@ const antigravityFreeModels = {
   },
 };
 const antigravityFree = parseAntigravityQuota(antigravityFreeModels, { currentTier: { id: "free-tier", name: "Antigravity" } }, antigravityNow);
-assert.strictEqual(antigravityFree.planName, "Free");
+assert.strictEqual(antigravityFree.planName, null);
 assert.strictEqual(antigravityFree.tiers.length, 1);
 assert.strictEqual(antigravityFree.tiers[0].name, "five_hour");
 assert.ok(Math.abs(antigravityFree.tiers[0].utilization - 0.44) < 0.01);
 assert.strictEqual(antigravityFree.tiers[0].resetsAt, "2026-08-23T11:36:23.000Z");
+
+// 实测形态：Pro 账号 currentTier 仍是 free-tier，但 paidTier 是 g1-pro-tier，
+// 套餐显示优先 paidTier（与主流账号管理工具一致）。
+const antigravityProMixed = parseAntigravityQuota(
+  antigravityFreeModels,
+  { currentTier: { id: "free-tier", name: "Antigravity" }, paidTier: { id: "g1-pro-tier", name: "Google AI Pro" } },
+  antigravityNow,
+);
+assert.strictEqual(antigravityProMixed.planName, "Google AI Pro");
 
 // 付费双窗口：5h + 周（resetTime 远超 5.5h 判定为周额度）。
 const antigravityPaid = parseAntigravityQuota(

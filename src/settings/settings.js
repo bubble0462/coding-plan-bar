@@ -500,9 +500,20 @@ function providerSearchText(provider) {
   ].filter(Boolean).join(" "));
 }
 
+// Antigravity 凭证用 refresh_token 自动续期：凭证文件里的 access_token 过期
+// 时间只代表导出时刻的令牌寿命，不代表凭证失效，不参与过期状态判断。
+function isAntigravityProvider(provider) {
+  return provider.kind === "official-subscription" && provider.tool === "antigravity";
+}
+
+function credentialExpiryState(provider) {
+  if (isAntigravityProvider(provider)) return null;
+  return provider.expiresAt ? expiryState(provider.expiresAt) : null;
+}
+
 function providerNeedsAttention(provider) {
   const runtime = runtimeProvider(provider.id);
-  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const expiry = credentialExpiryState(provider);
   const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
   if (provider.enabled === false) return false;
   return (
@@ -549,6 +560,7 @@ function providerDetail(provider) {
     if (provider.importedFrom === "claude") parts.push("Claude 账号");
     else if (provider.importedFrom === "cpa") parts.push("CPA 账号");
     else if (provider.importedFrom === "sub2api") parts.push("sub2api 账号");
+    else if (provider.importedFrom === "antigravity") parts.push("Antigravity 账号");
     else parts.push(KIND_LABELS[provider.kind]);
     if (provider.accountEmail) parts.push(provider.accountEmail);
     if (provider.accountId) parts.push(`ID ${shortId(provider.accountId)}`);
@@ -561,7 +573,7 @@ function providerDetail(provider) {
 function providerBadge(provider) {
   if (provider.enabled === false) return { label: "停用", tone: "muted" };
   const runtime = runtimeProvider(provider.id);
-  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const expiry = credentialExpiryState(provider);
   const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
   if (["error", "missing"].includes(runtime?.status) || runtime?.failure) return { label: "失败", tone: "danger" };
   if (runtime?.status === "expired" || expiry?.expired) return { label: "过期", tone: "danger" };
@@ -738,7 +750,7 @@ function healthRows() {
 }
 
 function healthRow(provider, runtime) {
-  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const expiry = credentialExpiryState(provider);
   const status = runtime?.status || (expiry?.expired ? "expired" : "ok");
   const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
   const failure = runtime?.failure;
@@ -1067,7 +1079,7 @@ function renderEditor(provider) {
 
 function renderAccountDetailCard(provider) {
   const runtime = runtimeProvider(provider.id);
-  const expiry = provider.expiresAt ? expiryState(provider.expiresAt) : null;
+  const expiry = credentialExpiryState(provider);
   const rows = [
     ["来源", accountSourceLabel(provider)],
     ["邮箱", provider.accountEmail],
@@ -1075,7 +1087,9 @@ function renderAccountDetailCard(provider) {
     ["userId", provider.accountUserId ? shortId(provider.accountUserId) : ""],
     ["计划", provider.planType],
     ["token", provider.accessToken ? maskSecret(provider.accessToken) : ""],
-    ["过期时间", expiry ? expiry.absolute : "未知"],
+    isAntigravityProvider(provider)
+      ? ["续期", "自动（refresh token，访问令牌过期后自动刷新）"]
+      : ["过期时间", expiry ? expiry.absolute : "未知"],
     ["最近状态", runtime ? providerBadge(provider).label : "等待刷新"],
   ].filter(([, value]) => value);
 
@@ -1084,7 +1098,7 @@ function renderAccountDetailCard(provider) {
   return `
     <div class="account-detail-card">
       <div>
-        <strong>${escapeHtml(provider.importedFrom === "claude" ? "Claude 账号身份" : provider.importedFrom === "cpa" ? "CPA 账号身份" : provider.importedFrom === "sub2api" ? "sub2api 独立额度身份" : "账号身份")}</strong>
+        <strong>${escapeHtml(provider.importedFrom === "claude" ? "Claude 账号身份" : provider.importedFrom === "cpa" ? "CPA 账号身份" : provider.importedFrom === "sub2api" ? "sub2api 独立额度身份" : provider.importedFrom === "antigravity" ? "Antigravity 账号身份" : "账号身份")}</strong>
         <span>${escapeHtml(identityHelpText(provider))}</span>
       </div>
       <dl>
@@ -1260,6 +1274,7 @@ function identityHelpText(provider) {
   if (provider.importedFrom === "claude") return "按 Claude 文件中的邮箱匹配账号；再次导入同一邮箱会更新 access token，不会重复新增。";
   if (provider.importedFrom === "cpa") return "按 CPA 文件中的 accountId 匹配账号；再次导入同一账号会更新凭证，不会重复新增。";
   if (provider.importedFrom === "sub2api") return "按 sub2api 导出的独立额度记录保留，不会因为 Gmail 主邮箱或 accountId 相同而合并。";
+  if (provider.importedFrom === "antigravity") return "按凭证文件中的邮箱匹配账号；再次导入同一邮箱会更新凭证。访问令牌过期后应用会用 refresh_token 自动续期，凭证经 DPAPI 加密保存。";
   if (provider.kind === "official-subscription") return "官方账号 token 使用 Windows DPAPI 加密保存在本机 config.json，预览与历史记录不会显示原文。";
   return "普通供应商使用 Base URL 与 API Key/环境变量查询余额。";
 }

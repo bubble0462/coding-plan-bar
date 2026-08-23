@@ -93,6 +93,7 @@ let agentUsageLastError = null;
 let agentUsageRetryAfter = 0;
 let isPopupHovered = false;
 let measuredPopupHeight = 0;
+let lastPopupResizeAt = 0;
 let measuredPopupKey = "";
 let popupPlacement = { placement: "above", pointerOffset: 0, pointerVisible: true };
 let awaitingPopupExit = false;
@@ -393,13 +394,24 @@ function resizePopupToHeight(requestedHeight) {
     y: bounds.y || 0,
   });
   const maxHeight = Math.max(300, display.workArea.height - 16);
-  const targetHeight = Math.max(180, Math.min(numericHeight, maxHeight));
+  let targetHeight = Math.max(180, Math.min(numericHeight, maxHeight));
   const [width, height] = popupWindow.getSize();
+  // Guard against transient shrink-then-grow storms on the visible popup:
+  // a large shrink arriving right after another resize is almost always a
+  // half-laid-out measurement, and applying it repaints the top rows with
+  // stale content. Let the settled report (which always follows) win.
+  const nowMs = Date.now();
+  const isTransientShrink =
+    popupWindow.isVisible() &&
+    targetHeight < height - 24 &&
+    nowMs - lastPopupResizeAt < 250;
+  if (isTransientShrink) return;
   if (width !== POPUP_WIDTH || height !== targetHeight) {
     const wasResizable = popupWindow.isResizable();
     if (!wasResizable) popupWindow.setResizable(true);
     popupWindow.setSize(POPUP_WIDTH, targetHeight, false);
     if (!wasResizable) popupWindow.setResizable(false);
+    lastPopupResizeAt = nowMs;
     if (popupWindow.isVisible()) positionPopup();
   }
 }

@@ -1079,10 +1079,18 @@ function reportLayoutHeight() {
 
   const providerCount = (snapshot.providers || []).length;
   const rootStyle = getComputedStyle(root);
+  // Detail view renders a single .provider-detail wrapper (card + usage
+  // charts). The card-count formula below is only valid for the overview
+  // list — on the detail page it measures one <article> and misses the
+  // usage detail, briefly reporting a drastically short height right after
+  // the popup becomes visible (the shrink-then-grow resize storm that
+  // paints over the provider selector row).
+  const isDetailView = Boolean(providerList.querySelector(":scope > .provider-detail"));
   // Prefer the list's actual class (set by the content-overflow check) over
   // the raw count, so a single tall card that was upgraded to scrollable
   // reports a bounded height instead of its full natural height.
-  const isScrollable = providerList.classList.contains("is-scrollable") || providerCount > MAX_VISIBLE_PROVIDERS;
+  const isScrollable = !isDetailView &&
+    (providerList.classList.contains("is-scrollable") || providerCount > MAX_VISIBLE_PROVIDERS);
   const desiredHeight = isScrollable
     ? measureScrollableLayoutHeight(shell, providerList, rootStyle)
     : measureStaticLayoutHeight(shell, rootStyle);
