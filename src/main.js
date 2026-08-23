@@ -222,7 +222,14 @@ function positionPopup() {
   if (!tray || !popupWindow) return null;
   const [width, height] = popupWindow.getSize();
   const nextPlacement = popupPlacementFor(width, height);
-  if (nextPlacement) popupWindow.setPosition(nextPlacement.x, nextPlacement.y, false);
+  // 刷新期间每个快照都会走到这里：坐标没有真正变化时跳过原生调用，
+  // 避免一次刷新触发约 9 次无效的窗口移动。
+  if (nextPlacement) {
+    const bounds = popupWindow.getBounds();
+    if (bounds.x !== nextPlacement.x || bounds.y !== nextPlacement.y) {
+      popupWindow.setPosition(nextPlacement.x, nextPlacement.y, false);
+    }
+  }
   return popupPlacement;
 }
 
@@ -359,6 +366,10 @@ function snapshotPayload() {
 
 function resizePopupForState() {
   if (!popupWindow || popupWindow.isDestroyed()) return;
+  // 可见期间绝不改变窗口尺寸：透明窗口在可见状态下的任何 resize 都可能在
+  // 部分机器上留下绘制残影（内容整体上移盖住供应商选择器行）。高度只在
+  // 隐藏时调整；可见时内容超出由列表内部滚动消化，选择器行始终固定。
+  if (popupWindow.isVisible()) return;
   const layoutKey = providerLayoutKey(currentState.providers);
   // Prefer the renderer's measured height when the provider count is unchanged,
   // so re-showing the popup doesn't re-apply the (taller) estimate and leave a gap.
@@ -1553,6 +1564,9 @@ async function startApp() {
       measuredPopupHeight = numeric;
       measuredPopupKey = currentLayoutKey;
     }
+    // 可见期间只记录实测高度供下次显示使用，不 resize（见
+    // resizePopupForState 的说明）；隐藏状态下立即应用。
+    if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) return;
     resizePopupToHeight(height);
   });
   ipcMain.handle("quota:reorder-providers", reorderPopupProviders);
