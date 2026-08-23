@@ -93,7 +93,6 @@ let agentUsageLastError = null;
 let agentUsageRetryAfter = 0;
 let isPopupHovered = false;
 let measuredPopupHeight = 0;
-let lastPopupResizeAt = 0;
 let measuredPopupKey = "";
 let popupPlacement = { placement: "above", pointerOffset: 0, pointerVisible: true };
 let awaitingPopupExit = false;
@@ -221,16 +220,25 @@ function createSettingsWindow() {
 
 function positionPopup() {
   if (!tray || !popupWindow) return null;
+  const [width, height] = popupWindow.getSize();
+  const nextPlacement = popupPlacementFor(width, height);
+  if (nextPlacement) popupWindow.setPosition(nextPlacement.x, nextPlacement.y, false);
+  return popupPlacement;
+}
 
+// Compute (and record for the renderer pointer) the tray-anchored placement
+// for a popup of the given size. Shared by positionPopup and the atomic
+// resize path so both agree on geometry.
+function popupPlacementFor(width, height) {
+  if (!tray || !popupWindow) return null;
   const trayBounds = tray.getBounds();
-  const windowBounds = popupWindow.getBounds();
   const display = screen.getDisplayNearestPoint({
     x: trayBounds.x,
     y: trayBounds.y,
   });
   const nextPlacement = calculatePopupPlacement({
     trayBounds,
-    windowBounds,
+    windowBounds: { width, height },
     workArea: display.workArea,
   });
   popupPlacement = {
@@ -238,8 +246,7 @@ function positionPopup() {
     pointerOffset: nextPlacement.pointerOffset,
     pointerVisible: nextPlacement.pointerVisible,
   };
-  popupWindow.setPosition(nextPlacement.x, nextPlacement.y, false);
-  return popupPlacement;
+  return nextPlacement;
 }
 
 function showPopup() {
@@ -383,37 +390,58 @@ function providerLayoutKey(providers = []) {
     .join("|")}`;
 }
 
-function resizePopupToHeight(requestedHeight) {
+function applyPopupHeight(numericHeight) {
   if (!popupWindow || popupWindow.isDestroyed()) return;
-  const numericHeight = Math.round(Number(requestedHeight));
-  if (!Number.isFinite(numericHeight)) return;
-
   const bounds = popupWindow.getBounds();
   const display = screen.getDisplayNearestPoint({
     x: bounds.x || 0,
     y: bounds.y || 0,
   });
   const maxHeight = Math.max(300, display.workArea.height - 16);
-  let targetHeight = Math.max(180, Math.min(numericHeight, maxHeight));
+  const targetHeight = Math.max(180, Math.min(numericHeight, maxHeight));
   const [width, height] = popupWindow.getSize();
-  // Guard against transient shrink-then-grow storms on the visible popup:
-  // a large shrink arriving right after another resize is almost always a
-  // half-laid-out measurement, and applying it repaints the top rows with
-  // stale content. Let the settled report (which always follows) win.
-  const nowMs = Date.now();
-  const isTransientShrink =
-    popupWindow.isVisible() &&
-    targetHeight < height - 24 &&
-    nowMs - lastPopupResizeAt < 250;
-  if (isTransientShrink) return;
-  if (width !== POPUP_WIDTH || height !== targetHeight) {
-    const wasResizable = popupWindow.isResizable();
-    if (!wasResizable) popupWindow.setResizable(true);
+  if (width === POPUP_WIDTH && height === targetHeight) return;
+  const nextPlacement = popupPlacementFor(POPUP_WIDTH, targetHeight);
+  const wasResizable = popupWindow.isResizable();
+  if (!wasResizable) popupWindow.setResizable(true);
+  if (nextPlacement) {
+    // One atomic native call: size and position change together, so the
+    // bottom-anchored popup never composites an intermediate frame at the
+    // old position — the source of the stale paint that covered the
+    // provider selector row.
+    popupWindow.setBounds({
+      x: nextPlacement.x,
+      y: nextPlacement.y,
+      width: POPUP_WIDTH,
+      height: targetHeight,
+    });
+  } else {
     popupWindow.setSize(POPUP_WIDTH, targetHeight, false);
-    if (!wasResizable) popupWindow.setResizable(false);
-    lastPopupResizeAt = nowMs;
-    if (popupWindow.isVisible()) positionPopup();
   }
+  if (!wasResizable) popupWindow.setResizable(false);
+}
+
+function resizePopupToHeight(requestedHeight) {
+  if (!popupWindow || popupWindow.isDestroyed()) return;
+  const numericHeight = Math.round(Number(requestedHeight));
+  if (!Number.isFinite(numericHeight)) return;
+
+  const [, height] = popupWindow.getSize();
+  const isShrink = numericHeight < height - 2;
+  if (isShrink && popupWindow.isVisible()) {
+    // Trailing debounce for shrinks on the visible popup: a height decrease
+    // only applies after ~220ms of resize quiet. Transient under-measures
+    // (charts re-laying-out mid-refresh) are always followed by the settled
+    // height within that window, so the shrink is replaced and the
+    // shrink-then-grow storm that painted over the selector row cannot
+    // occur. Growth applies immediately so content is never clipped.
+    timers.setTimeout("popup-shrink", () => {
+      if (popupWindow && !popupWindow.isDestroyed()) applyPopupHeight(numericHeight);
+    }, 220);
+    return;
+  }
+  timers.clear("popup-shrink");
+  applyPopupHeight(numericHeight);
 }
 
 function updateTrayTooltip() {

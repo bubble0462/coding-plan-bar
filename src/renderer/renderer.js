@@ -1096,6 +1096,11 @@ function reportLayoutHeight() {
     : measureStaticLayoutHeight(shell, rootStyle);
 
   if (Math.abs(desiredHeight - lastReportedHeight) > 1) {
+    // 详情视图在同一布局形态内不回传明显更矮的瞬时高度（图表在 innerHTML
+    // 重建后重新排布的瞬间会短暂塌陷）：可见窗口先缩后涨会触发透明窗口的
+    // 绘制残影，把顶部供应商选择器行盖住。真正的收缩都会伴随布局形态变化
+    // （档位/用量行增删），那时 lastReportedHeight 已被重置，不受此限制。
+    if (isDetailView && lastReportedHeight > 0 && desiredHeight < lastReportedHeight - 24) return;
     lastReportedHeight = desiredHeight;
     window.codingPlanBar.resize(desiredHeight, snapshot.layoutKey || providerLayoutKey(snapshot.providers));
   }
