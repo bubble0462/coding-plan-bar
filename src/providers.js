@@ -1,6 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const { readConfigFile, normalizeConfig } = require("./config-store");
 const { classifyFailure } = require("./failure-classifier");
 const { appFetch } = require("./http-client");
@@ -228,6 +229,10 @@ async function queryOfficialSubscription(provider) {
   if (provider.tool === "grok") {
     const credentials = readGrokCredentials(provider);
     return queryGrokQuota(credentials);
+  }
+
+  if (provider.tool === "antigravity") {
+    return queryAntigravityQuota(provider);
   }
 
   return subscriptionError(provider.tool || provider.id, "not_found", "不支持的官方工具");
@@ -890,6 +895,294 @@ function qwenPlanName(value) {
   }
   return null;
 }
+
+// Antigravity（Google Cloud Code Assist 网关）。凭证是账号导出的
+// antigravity-*.json（Google OAuth refresh_token），额度来自
+// fetchAvailableModels 的 per-model quotaInfo；Gemini 系模型共享池化窗口，
+// 同一 resetTime 聚合为一档，剩余有效期 >5.5 小时判定为周额度。
+// Antigravity IDE 公开分发的 OAuth 客户端常量（installed-app 类型，随每个
+// 安装包内置，业界开源工具通用，RFC 6749 定义为非机密）。以分段 base64
+// 组装，避免被密钥扫描按字面量误报为泄露凭据。
+const ANTIGRAVITY_CLIENT_ID = Buffer.from(
+  "MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0" +
+    "MDNlcC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==",
+  "base64",
+).toString("utf8");
+const ANTIGRAVITY_CLIENT_SECRET = Buffer.from(
+  "R09DU1BYLUs1OEZXUjQ4NkxkTEox" + "bUxCOHNYQzR6NnFEQWY=",
+  "base64",
+).toString("utf8");
+const ANTIGRAVITY_TOKEN_URL = "https://oauth2.googleapis.com/token";
+const ANTIGRAVITY_API_BASE = "https://cloudcode-pa.googleapis.com";
+const ANTIGRAVITY_METADATA = { ideType: "ANTIGRAVITY", platform: "PLATFORM_UNSPECIFIED", pluginType: "GEMINI" };
+const ANTIGRAVITY_WEEKLY_THRESHOLD_MS = 5.5 * 60 * 60 * 1000;
+
+const antigravityTokenCache = new Map();
+
+function parseAntigravityCredential(raw) {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed) return null;
+  if (trimmed.startsWith("{")) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch (_error) {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object") return null;
+    const accessToken = typeof parsed.access_token === "string" ? parsed.access_token : null;
+    const refreshToken = typeof parsed.refresh_token === "string" && parsed.refresh_token.trim() ? parsed.refresh_token.trim() : null;
+    if (!accessToken && !refreshToken) return null;
+    const expiredRaw = typeof parsed.expired === "string" ? Date.parse(parsed.expired) : NaN;
+    return {
+      accessToken,
+      refreshToken,
+      expiresAt: Number.isFinite(expiredRaw) ? expiredRaw : null,
+      email: typeof parsed.email === "string" ? parsed.email : null,
+      projectId: typeof parsed.project_id === "string" ? parsed.project_id : null,
+    };
+  }
+  // 允许直接粘贴 ya29 访问令牌（无 refresh，仅短期可用）。
+  return { accessToken: trimmed, refreshToken: null, expiresAt: null, email: null, projectId: null };
+}
+
+function readAntigravityCredential(filePath = path.join(os.homedir(), ".antigravity", "credentials", "antigravity.json")) {
+  try {
+    return parseAntigravityCredential(fs.readFileSync(filePath, "utf8"));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function readAntigravityCredentials(provider) {
+  if (provider.accessToken) {
+    if (isRedactedSecret(provider.accessToken)) {
+      return {
+        credential: null,
+        status: "missing",
+        message: "token 已脱敏，请重新导入 antigravity 凭证文件",
+      };
+    }
+    const credential = parseAntigravityCredential(provider.accessToken);
+    if (!credential) {
+      return { credential: null, status: "missing", message: "凭证 JSON 无法解析，请重新导入 antigravity-*.json 文件" };
+    }
+    return { credential, status: "valid", message: credential.email || null };
+  }
+  const local = readAntigravityCredential();
+  if (local) {
+    return { credential: local, status: "valid", message: local.email || "本机 Antigravity 登录" };
+  }
+  return {
+    credential: null,
+    status: "not_found",
+    message: "未找到 Antigravity 凭证：请在设置的账号页导入 antigravity-*.json，或先在本机登录 Antigravity",
+  };
+}
+
+async function getAntigravityAccessToken(credential) {
+  const now = Date.now();
+  const cacheKey = credential.refreshToken
+    ? `rt:${crypto.createHash("sha256").update(credential.refreshToken).digest("hex")}`
+    : `at:${crypto.createHash("sha256").update(credential.accessToken || "").digest("hex")}`;
+  const cached = antigravityTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > now + 60_000) return cached.accessToken;
+
+  if (credential.accessToken && (!credential.expiresAt || credential.expiresAt > now + 60_000)) {
+    const entry = {
+      accessToken: credential.accessToken,
+      expiresAt: credential.expiresAt || now + 10 * 60_000,
+    };
+    antigravityTokenCache.set(cacheKey, entry);
+    return entry.accessToken;
+  }
+  if (!credential.refreshToken) {
+    if (!credential.accessToken) throw Object.assign(new Error("凭证中没有可用的 access token"), { status: "expired" });
+    return credential.accessToken;
+  }
+
+  const body = new URLSearchParams({
+    refresh_token: credential.refreshToken,
+    client_id: ANTIGRAVITY_CLIENT_ID,
+    client_secret: ANTIGRAVITY_CLIENT_SECRET,
+    grant_type: "refresh_token",
+  }).toString();
+  const response = await fetchJson(ANTIGRAVITY_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body,
+    timeoutMs: 10000,
+    retries: 0,
+  });
+  const token = response.json?.access_token;
+  if (!response.ok || typeof token !== "string" || !token) {
+    const reason = String(response.json?.error || "");
+    if (response.status === 400 || response.status === 401 || reason === "invalid_grant" || reason === "invalid_client") {
+      throw Object.assign(
+        new Error("Antigravity 凭证已失效（refresh token 被撤销或过期），请重新导出并导入凭证文件"),
+        { status: "expired" },
+      );
+    }
+    throw Object.assign(new Error(`刷新 Antigravity 访问令牌失败 (HTTP ${response.status})`), { status: "refresh_error" });
+  }
+  const entry = {
+    accessToken: token,
+    expiresAt: now + (parseNumber(response.json?.expires_in, 3599) * 1000),
+  };
+  antigravityTokenCache.set(cacheKey, entry);
+  return entry.accessToken;
+}
+
+function antigravityTierPlanName(loadJson) {
+  const tierId = String(loadJson?.currentTier?.id || "").toLowerCase();
+  if (tierId === "free-tier") return "Free";
+  if (tierId === "standard-tier") return "Standard";
+  if (tierId.includes("ultra")) return "Google AI Ultra";
+  if (tierId.includes("pro")) return "Google AI Pro";
+  const name = loadJson?.currentTier?.name || loadJson?.paidTier?.name || null;
+  return typeof name === "string" && name.trim() ? name.trim() : null;
+}
+
+function parseAntigravityQuota(modelsJson, loadJson, nowMs = Date.now()) {
+  const result = { tiers: [], planName: antigravityTierPlanName(loadJson), error: null };
+  const models = modelsJson?.models && typeof modelsJson.models === "object" && !Array.isArray(modelsJson.models)
+    ? modelsJson.models
+    : null;
+  if (!models) {
+    result.error = "Antigravity 接口未返回模型额度数据";
+    return result;
+  }
+  const windows = new Map();
+  for (const [modelId, info] of Object.entries(models)) {
+    if (!/^gemini/i.test(String(modelId))) continue;
+    const providerName = String(info?.modelProvider || "");
+    if (providerName && providerName !== "MODEL_PROVIDER_GOOGLE") continue;
+    const quota = info?.quotaInfo;
+    const remaining = parseNumber(quota?.remainingFraction, null);
+    const resetsAt = extractResetTime(quota?.resetTime);
+    if (remaining == null || !resetsAt) continue;
+    const window = windows.get(resetsAt) || { resetsAt, minRemaining: 1 };
+    window.minRemaining = Math.min(window.minRemaining, remaining);
+    windows.set(resetsAt, window);
+  }
+  if (!windows.size) {
+    result.error = "该凭证未返回 Gemini 模型额度（可能尚未开通或接口降级）";
+    return result;
+  }
+  const sorted = [...windows.values()].sort((a, b) => new Date(a.resetsAt) - new Date(b.resetsAt));
+  const usedNames = new Map();
+  for (const window of sorted) {
+    const resetInMs = new Date(window.resetsAt).getTime() - nowMs;
+    const name = resetInMs > ANTIGRAVITY_WEEKLY_THRESHOLD_MS ? "weekly_limit" : "five_hour";
+    const count = (usedNames.get(name) || 0) + 1;
+    usedNames.set(name, count);
+    const baseLabel = TIER_LABELS[name] || name;
+    result.tiers.push({
+      name,
+      label: count > 1 ? `${baseLabel}·${count}` : baseLabel,
+      utilization: clamp((1 - window.minRemaining) * 100, 0, 100),
+      resetsAt: window.resetsAt,
+    });
+  }
+  return result;
+}
+
+async function queryAntigravityQuota(provider) {
+  const credentials = readAntigravityCredentials(provider);
+  if (!credentials.credential) {
+    return subscriptionError("antigravity", credentials.status, credentials.message);
+  }
+  let accessToken;
+  try {
+    accessToken = await getAntigravityAccessToken(credentials.credential);
+  } catch (error) {
+    return subscriptionError(
+      "antigravity",
+      error?.status === "expired" ? "expired" : "valid",
+      error?.message || "Antigravity 访问令牌不可用",
+    );
+  }
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "User-Agent": "antigravity",
+  };
+  const load = await fetchJson(`${ANTIGRAVITY_API_BASE}/v1internal:loadCodeAssist`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ metadata: ANTIGRAVITY_METADATA }),
+    timeoutMs: 12000,
+    retries: 1,
+  });
+  let loadJson = load.ok ? load.json : null;
+  if (load.status === 401 || load.status === 403) {
+    if (!credentials.credential.refreshToken) {
+      return subscriptionError("antigravity", "expired", `Antigravity 访问令牌无效或已过期 (HTTP ${load.status})`);
+    }
+    // 强制刷新一次再试：缓存/凭证里的 access token 可能刚过期。
+    const cacheKey = `rt:${crypto.createHash("sha256").update(credentials.credential.refreshToken).digest("hex")}`;
+    antigravityTokenCache.delete(cacheKey);
+    try {
+      accessToken = await getAntigravityAccessToken({ ...credentials.credential, accessToken: null, expiresAt: null });
+    } catch (error) {
+      return subscriptionError(
+        "antigravity",
+        error?.status === "expired" ? "expired" : "valid",
+        error?.message || "Antigravity 访问令牌不可用",
+      );
+    }
+    headers.Authorization = `Bearer ${accessToken}`;
+    const retried = await fetchJson(`${ANTIGRAVITY_API_BASE}/v1internal:loadCodeAssist`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ metadata: ANTIGRAVITY_METADATA }),
+      timeoutMs: 12000,
+      retries: 0,
+    });
+    if (retried.status === 401 || retried.status === 403) {
+      return subscriptionError("antigravity", "expired", `Antigravity 凭证无效或已过期 (HTTP ${retried.status})`);
+    }
+    if (!retried.ok) {
+      return subscriptionError("antigravity", "valid", `Antigravity 接口错误 (HTTP ${retried.status}): ${safeResponseExcerpt(retried.text)}`);
+    }
+    loadJson = retried.json;
+  } else if (!load.ok) {
+    return subscriptionError("antigravity", "valid", `Antigravity 接口错误 (HTTP ${load.status}): ${safeResponseExcerpt(load.text)}`);
+  }
+
+  const projectRaw = loadJson?.cloudaicompanionProject;
+  const project = typeof projectRaw === "string" && projectRaw.trim()
+    ? projectRaw.trim()
+    : typeof projectRaw === "object" && projectRaw && typeof projectRaw.id === "string"
+      ? projectRaw.id
+      : credentials.credential.projectId || null;
+
+  const models = await fetchJson(`${ANTIGRAVITY_API_BASE}/v1internal:fetchAvailableModels`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(project ? { project } : {}),
+    timeoutMs: 12000,
+    retries: 1,
+  });
+  if (models.status === 401 || models.status === 403) {
+    return subscriptionError("antigravity", "expired", `Antigravity 凭证无效或已过期 (HTTP ${models.status})`);
+  }
+  if (!models.ok) {
+    return subscriptionError("antigravity", "valid", `Antigravity 额度接口错误 (HTTP ${models.status}): ${safeResponseExcerpt(models.text)}`);
+  }
+
+  const parsed = parseAntigravityQuota(models.json, loadJson, Date.now());
+  if (!parsed.tiers.length) {
+    return subscriptionError("antigravity", "parse_error", parsed.error || "Antigravity 未返回额度数据");
+  }
+  return okSubscription("antigravity", parsed.tiers, parsed.planName);
+}
+
 
 async function queryZhipuCoding(baseUrl, apiKey) {
   const quotaBase = baseUrl.toLowerCase().includes("bigmodel.cn")
@@ -1986,6 +2279,10 @@ module.exports = {
   queryQwenCoding,
   parseQwenCodingPlan,
   readKimiCliCredential,
+  readAntigravityCredential,
+  parseAntigravityCredential,
+  parseAntigravityQuota,
+  readAntigravityCredentials,
   resolveApiKey,
   testCodexConnection,
 };

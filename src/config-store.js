@@ -100,11 +100,12 @@ function normalizeAutoUpdate(autoUpdate) {
 
 function inferImportedFrom(importedFrom, importPath) {
   const fileName = path.basename(String(importPath || "")).toLowerCase();
-  const { isCpaAccountFileName, isClaudeAccountFileName } = require("./account-importer");
+  const { isCpaAccountFileName, isClaudeAccountFileName, isAntigravityAccountFileName } = require("./account-importer");
   if (isClaudeAccountFileName(fileName)) return "claude";
+  if (isAntigravityAccountFileName(fileName)) return "antigravity";
   if (isCpaAccountFileName(fileName)) return "cpa";
   if (/(?:^|[._-])sub2api(?:[._-].*)?\.json$/i.test(fileName)) return "sub2api";
-  if (["claude", "cpa", "sub2api"].includes(importedFrom)) return importedFrom;
+  if (["claude", "cpa", "sub2api", "antigravity"].includes(importedFrom)) return importedFrom;
   return importedFrom || undefined;
 }
 
@@ -277,6 +278,21 @@ function providerTemplates() {
         name: "Grok Build",
         kind: "official-subscription",
         tool: "grok",
+        enabled: true,
+      },
+    },
+    {
+      id: "antigravity",
+      label: "Antigravity",
+      short: "AG",
+      category: "官方订阅",
+      description: "导入 antigravity-*.json 凭证（支持多账号），显示 Gemini 模型 5 小时 / 周额度。",
+      homepage: "https://antigravity.google",
+      provider: {
+        id: "antigravity",
+        name: "Antigravity",
+        kind: "official-subscription",
+        tool: "antigravity",
         enabled: true,
       },
     },

@@ -21,6 +21,7 @@
 - 额度面板卡片左侧也可直接拖拽排序，顺序会立即写回设置。
 - Grok/SuperGrok 支持 Grok Build CLI、Web Billing 回退、月度积分和按量付费状态。
 - 支持 Qwen（阿里百炼）Coding Plan（5 小时/周/月额度，DashScope API Key）与 Kimi 凭据自动复用（已登录 Kimi Code CLI 时无需 API Key）。
+- 支持 Antigravity（Google）：导入 `antigravity-*.json` 凭证（多账号）或自动读取本机登录，自动用 refresh_token 续期，显示 Gemini 模型的 5 小时 / 周额度。
 - 额度系统通知：档位越过 80%/95%、周额度等窗口重置、供应商查询失败时发送 Windows 通知（可在设置中开关）。
 - 自适应刷新：临近额度重置或检测到本机 agent 运行时自动加密轮询，平时保持低频节省资源。
 - 添加供应商采用左右分栏选择器：左侧分类分组，右侧预览所需凭据与环境变量；编辑器内置连接测试（连通性 + 可用模型列表）。

@@ -154,6 +154,7 @@ function collectCandidates(value) {
 
 function detectFormat(value, sourcePath = "") {
   const base = path.basename(sourcePath || "").toLowerCase();
+  if (isAntigravityAccount(value, base)) return "antigravity";
   if (isClaudeAccount(value, base)) return "claude";
   if (isCpaAccount(value, base)) return "cpa";
   if (base.includes("sub2api") || (value && typeof value === "object" && Array.isArray(value.accounts) && value.exported_at)) {
@@ -171,6 +172,30 @@ function normalizeImportedAccount(candidate, format) {
   const extra = candidate.extra && typeof candidate.extra === "object" ? candidate.extra : {};
   const user = candidate.user && typeof candidate.user === "object" ? candidate.user : {};
   const account = candidate.account && typeof candidate.account === "object" ? candidate.account : {};
+
+  if (format === "antigravity") {
+    const accessToken = firstString([
+      credentials.access_token,
+      credentials.accessToken,
+      candidate.access_token,
+      candidate.accessToken,
+      candidate.token,
+    ]);
+    if (!accessToken) return null;
+    const email = firstString([credentials.email, candidate.email, extra.email]);
+    return {
+      format,
+      tool: "antigravity",
+      name: email || "Antigravity",
+      email,
+      accountId: null,
+      userId: null,
+      accessToken,
+      expiresAt: normalizeDateString(firstString([credentials.expired, candidate.expired])),
+      planType: null,
+      rawCredential: JSON.stringify(candidate),
+    };
+  }
 
   const platform = String(candidate.platform || credentials.platform || candidate.authProvider || (format === "claude" ? "claude" : "openai")).toLowerCase();
   const supportedPlatforms = format === "claude" ? ["anthropic", "claude"] : ["openai", "chatgpt", "codex"];
@@ -252,7 +277,9 @@ function accountToProvider(account, sourcePath) {
     kind: "official-subscription",
     tool,
     enabled: true,
-    accessToken: account.accessToken,
+    // Antigravity 保存完整凭证 JSON（含 refresh_token）以便自动续期；
+    // 其它工具沿用裸 access token。
+    accessToken: tool === "antigravity" && account.rawCredential ? account.rawCredential : account.accessToken,
     accountId: account.accountId || undefined,
     accountEmail: account.email || undefined,
     accountUserId: account.userId || undefined,
@@ -378,6 +405,10 @@ function importHistoryEntry(parsed, applied, sourcePath) {
 }
 
 function importedAccountKey(account) {
+  if (account.format === "antigravity") {
+    if (account.email) return `antigravity:${canonicalEmail(account.email)}`;
+    return `antigravity:${tokenHash(account.accessToken)}`;
+  }
   if (account.format === "claude") {
     if (account.email) return `claude:${canonicalEmail(account.email)}`;
     if (account.userId) return `claude:${account.userId}`;
@@ -439,6 +470,9 @@ function refreshPreviewNames(items, providers) {
 }
 
 function previewIdentity(account, provider) {
+  if (account.format === "antigravity" || provider.importedFrom === "antigravity") {
+    return { method: "email", label: account.email || provider.accountEmail ? "Antigravity 邮箱" : "token 指纹" };
+  }
   if (account.format === "claude" || provider.importedFrom === "claude") {
     return { method: account.email || provider.accountEmail ? "email" : "token", label: account.email || provider.accountEmail ? "Claude 邮箱" : "Claude token 指纹" };
   }
@@ -477,6 +511,7 @@ function updateReason(existing, incoming) {
 }
 
 function identityReason(provider) {
+  if (provider.importedFrom === "antigravity") return "新的 Antigravity 账号邮箱，将新增官方订阅账号";
   if (provider.importedFrom === "claude") return "新的 Claude 邮箱，将新增官方订阅账号";
   if (provider.importedFrom === "cpa") return "新的 CPA accountId，将新增官方订阅账号";
   if (provider.importedFrom === "sub2api") return "新的 sub2api 独立额度条目，将新增账号";
@@ -505,7 +540,29 @@ function importMessage(format, importedCount, updatedCount, skippedCount) {
 }
 
 function formatLabel(format) {
-  return format === "claude" ? "Claude" : format === "cpa" ? "CPA" : format === "sub2api" ? "sub2api" : format === "sessions" ? "sessions.json" : "账号 JSON";
+  return format === "claude" ? "Claude" : format === "cpa" ? "CPA" : format === "antigravity" ? "Antigravity" : format === "sub2api" ? "sub2api" : format === "sessions" ? "sessions.json" : "账号 JSON";
+}
+
+function isAntigravityAccountFileName(fileName = "") {
+  const base = path.basename(String(fileName || "")).toLowerCase();
+  return /^antigravity[-_].+\.json$/i.test(base);
+}
+
+function isAntigravityAccountShape(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Boolean(
+    value.access_token &&
+    value.refresh_token &&
+    String(value.type || "").toLowerCase() === "antigravity",
+  );
+}
+
+function isAntigravityAccount(value, baseName = "") {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  if (isAntigravityAccountShape(value)) return true;
+  if (!isAntigravityAccountFileName(baseName)) return false;
+  // 文件名带 antigravity 前缀时放宽 type 要求，兼容不同导出工具。
+  return Boolean(value.access_token && value.refresh_token);
 }
 
 function isClaudeAccountFileName(fileName = "") {
@@ -637,6 +694,9 @@ module.exports = {
   isCpaAccountFileName,
   isCpaAccountShape,
   isCpaAccount,
+  isAntigravityAccountFileName,
+  isAntigravityAccountShape,
+  isAntigravityAccount,
   isClaudeAccountFileName,
   isClaudeAccountShape,
   isClaudeAccount,

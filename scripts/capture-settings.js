@@ -388,6 +388,7 @@ async function main() {
         previewLabel: preview?.querySelector(".template-preview-head strong")?.textContent || "",
         previewRequirements: Array.from(preview?.querySelectorAll(".template-requirement") || []).map((node) => node.textContent.trim()),
         hasQwen: rows.some((row) => row.dataset.template === "qwen-coding"),
+        hasAntigravity: rows.some((row) => row.dataset.template === "antigravity"),
       };
     })()`);
     if (splitAssertions.menuGroups < 3) {
@@ -397,6 +398,7 @@ async function main() {
       throw new Error(`Template menu rows incomplete: ${splitAssertions.rowCount} of ${providerTemplates().length}`);
     }
     if (!splitAssertions.hasQwen) throw new Error("Template menu must include qwen-coding");
+    if (!splitAssertions.hasAntigravity) throw new Error("Template menu must include antigravity");
     if (!splitAssertions.previewLabel) throw new Error("Template preview did not render a label");
     if (!splitAssertions.selectedTemplate) throw new Error("Template menu must have a selected row");
     await window.webContents.executeJavaScript(

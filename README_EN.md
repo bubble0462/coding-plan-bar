@@ -21,6 +21,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Drag cards directly from the quota panel to persist their display order.
 - Grok/SuperGrok supports the Grok Build CLI, Web Billing fallback, monthly credits, and on-demand status.
 - Supports the Qwen (Alibaba Bailian) Coding Plan (5-hour/weekly/monthly quotas via a DashScope API key) and automatic reuse of a local Kimi Code CLI login for Kimi.
+- Supports Antigravity (Google): import `antigravity-*.json` credentials (multiple accounts) or reuse the local login, auto-refreshes via the refresh token, and shows the 5-hour / weekly quotas for Gemini models.
 - Windows notifications when a quota tier crosses 80%/95%, when weekly windows reset, or when a provider query fails (toggleable in Settings).
 - Adaptive refresh: polls faster near quota resets or while a local coding agent is running, and stays low-frequency otherwise.
 - The add-provider dialog is a split selector: grouped template list on the left, credential and environment-variable preview on the right. The editor includes a connection test (connectivity + available model list).

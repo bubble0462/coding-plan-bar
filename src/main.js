@@ -31,6 +31,8 @@ const {
   isCpaAccountShape,
   isClaudeAccountFileName,
   isClaudeAccountShape,
+  isAntigravityAccountFileName,
+  isAntigravityAccountShape,
 } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { calculatePopupPlacement } = require("./popup-placement");
@@ -764,7 +766,9 @@ function latestDownloadsImportFile() {
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
   // Fast path: filename already looks like a supported account export.
-  const byName = files.find((file) => isClaudeAccountFileName(file.name) || isCpaAccountFileName(file.name));
+  const byName = files.find(
+    (file) => isClaudeAccountFileName(file.name) || isCpaAccountFileName(file.name) || isAntigravityAccountFileName(file.name),
+  );
   if (byName) return byName.filePath;
 
   // Slow path: sniff recent small JSON files so exports without a recognized
@@ -776,7 +780,7 @@ function latestDownloadsImportFile() {
     try {
       const raw = fs.readFileSync(file.filePath, "utf8");
       const parsed = JSON.parse(raw);
-      if (isClaudeAccountShape(parsed) || isCpaAccountShape(parsed)) return file.filePath;
+      if (isClaudeAccountShape(parsed) || isCpaAccountShape(parsed) || isAntigravityAccountShape(parsed)) return file.filePath;
     } catch (_error) {
       // Ignore unreadable / non-JSON files while scanning Downloads.
     }

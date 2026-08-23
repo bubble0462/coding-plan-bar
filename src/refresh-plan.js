@@ -16,7 +16,7 @@ const AGENT_CACHE_MS = 5 * 60 * 1000;
 
 // Substrings matched against full process command lines (wmic) or image
 // names (tasklist fallback) to detect a local coding agent in use.
-const AGENT_PROCESS_PATTERN = /codex|claude|zcode|kimi-code|kimi_code|qwen/i;
+const AGENT_PROCESS_PATTERN = /codex|claude|zcode|kimi-code|kimi_code|qwen|antigravity/i;
 
 let agentActivityCache = { at: 0, value: false };
 

@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0] - 2026-08-23
+
+### Added
+
+- 新增 Antigravity（Google）供应商：在设置的账号页导入 `antigravity-*.json` 凭证文件即可显示额度，支持同一邮箱重复导入更新与多账号并存；也可留空自动读取本机 Antigravity 登录（只读）。额度取自 Google Cloud Code Assist 网关的 `fetchAvailableModels`，只展示 Gemini 系模型的池化窗口：同一重置时间聚合为一档，剩余有效期超过 5.5 小时判定为周额度，否则为 5 小时额度（免费账号通常只有单窗口）。套餐名按 currentTier 显示（Free / Google AI Pro / Google AI Ultra）。
+- 凭证含 `refresh_token` 时自动向 Google OAuth 续期访问令牌（进程内缓存，磁盘只存加密的凭证 JSON），token 失效时给出明确的重新导入提示；Claude/GPT 系模型的共享池按需求不展示。
+- 账号 JSON 导入、下载目录自动识别、导入历史、供应商筛选与模板选择器全面支持 antigravity 格式（`type: "antigravity"` 或 `antigravity-*.json` 文件名，且优先于 CPA 的「邮箱+套餐」文件名规则判定）。
+- 自适应刷新的本机 agent 进程检测加入 Antigravity（IDE 运行时把刷新间隔压到 90 秒）。
+
+### Notes
+
+升级前请从系统托盘完全退出旧版本，再运行新安装包。
+
 ## [0.7.2] - 2026-08-22
 
 ### Fixed

@@ -18,6 +18,9 @@ const {
   queryZhipuCoding,
   parseQwenCodingPlan,
   readKimiCliCredential,
+  readAntigravityCredential,
+  parseAntigravityCredential,
+  parseAntigravityQuota,
   readCodexCredentials,
   readClaudeCredentials,
   refreshProviders,
@@ -59,6 +62,8 @@ const {
   isCpaAccountShape,
   isClaudeAccountFileName,
   isClaudeAccountShape,
+  isAntigravityAccountFileName,
+  isAntigravityAccountShape,
 } = require("../src/account-importer");
 const { classifyFailure } = require("../src/failure-classifier");
 const { parseGrokWebBilling } = require("../src/grok-web-billing");
@@ -1523,6 +1528,108 @@ assert.strictEqual(readKimiCliCredential(kimiCredPath), "alt");
 fs.writeFileSync(kimiCredPath, "{broken");
 assert.strictEqual(readKimiCliCredential(kimiCredPath), null);
 assert.strictEqual(readKimiCliCredential(path.join(kimiCredDir, "missing.json")), null);
+
+// ===== Antigravity credential import + quota parsing =====
+const antigravityFixture = {
+  access_token: "ya29.fake-access",
+  refresh_token: "1//0fake-refresh",
+  email: "ag-user@gmail.com",
+  expired: "2026-08-23T11:45:13Z",
+  project_id: "aicode-consumers",
+  type: "antigravity",
+};
+assert.strictEqual(isAntigravityAccountFileName("antigravity-ag-user@gmail.com.json"), true);
+assert.strictEqual(isAntigravityAccountFileName("random-notes.json"), false);
+assert.strictEqual(isAntigravityAccountShape(antigravityFixture), true);
+assert.strictEqual(isAntigravityAccountShape({ access_token: "x", refresh_token: "y", type: "codex" }), false);
+// antigravity-<email>-plus.json 会被 CPA 的邮箱+套餐文件名规则命中，detectFormat 必须先判 antigravity。
+const parsedAntigravityPlus = parseAccountImport(
+  { ...antigravityFixture, email: "plus-user@gmail.com" },
+  "antigravity-plus-user@gmail.com-plus.json",
+);
+assert.strictEqual(parsedAntigravityPlus.format, "antigravity");
+assert.strictEqual(parsedAntigravityPlus.accounts.length, 1);
+const antigravityAccount = parsedAntigravityPlus.accounts[0];
+assert.strictEqual(antigravityAccount.tool, "antigravity");
+assert.strictEqual(antigravityAccount.email, "plus-user@gmail.com");
+assert.ok(antigravityAccount.rawCredential.includes("1//0fake-refresh"));
+
+const antigravityImport = importAccountsIntoConfig(
+  { refreshIntervalSeconds: 300, providers: [] },
+  antigravityFixture,
+  "antigravity-ag-user@gmail.com.json",
+);
+assert.strictEqual(antigravityImport.importedCount, 1);
+const antigravityProvider = antigravityImport.config.providers[0];
+assert.strictEqual(antigravityProvider.kind, "official-subscription");
+assert.strictEqual(antigravityProvider.tool, "antigravity");
+assert.strictEqual(antigravityProvider.importedFrom, "antigravity");
+assert.strictEqual(antigravityProvider.accountEmail, "ag-user@gmail.com");
+assert.ok(antigravityProvider.accessToken.includes("1//0fake-refresh"));
+// 重复导入同一邮箱按 importKey 更新，不新增条目。
+const antigravityReimport = importAccountsIntoConfig(
+  antigravityImport.config,
+  { ...antigravityFixture, access_token: "ya29.rotated" },
+  "antigravity-ag-user@gmail.com.json",
+);
+assert.strictEqual(antigravityReimport.importedCount, 0);
+assert.strictEqual(antigravityReimport.updatedCount, 1);
+
+const parsedAntigravityCred = parseAntigravityCredential(JSON.stringify(antigravityFixture));
+assert.strictEqual(parsedAntigravityCred.refreshToken, "1//0fake-refresh");
+assert.strictEqual(parsedAntigravityCred.email, "ag-user@gmail.com");
+assert.strictEqual(parsedAntigravityCred.projectId, "aicode-consumers");
+assert.strictEqual(parseAntigravityCredential("ya29.bare-token").accessToken, "ya29.bare-token");
+assert.strictEqual(parseAntigravityCredential("{broken"), null);
+assert.strictEqual(parseAntigravityCredential(""), null);
+
+const agCredDir = fs.mkdtempSync(path.join(os.tmpdir(), "cpb-antigravity-"));
+const agCredPath = path.join(agCredDir, "antigravity.json");
+fs.writeFileSync(agCredPath, JSON.stringify(antigravityFixture));
+assert.strictEqual(readAntigravityCredential(agCredPath).email, "ag-user@gmail.com");
+assert.strictEqual(readAntigravityCredential(path.join(agCredDir, "missing.json")), null);
+
+// 免费账号实测结构：Gemini 全系共享一个 5h 窗口，Claude/GPT 另池不展示。
+const antigravityNow = Date.parse("2026-08-23T10:51:50Z");
+const antigravityFreeModels = {
+  models: {
+    "gemini-2.5-pro": { displayName: "Gemini 2.5 Pro", modelProvider: "MODEL_PROVIDER_GOOGLE", quotaInfo: { remainingFraction: 0.9955938, resetTime: "2026-08-23T11:36:23Z" } },
+    "gemini-3.6-flash-high": { modelProvider: "MODEL_PROVIDER_GOOGLE", quotaInfo: { remainingFraction: 0.9955938, resetTime: "2026-08-23T11:36:23Z" } },
+    "chat_20706": { modelProvider: "MODEL_PROVIDER_GOOGLE", quotaInfo: { remainingFraction: 1 } },
+    "claude-sonnet-4-6": { modelProvider: "MODEL_PROVIDER_ANTHROPIC", quotaInfo: { remainingFraction: 1, resetTime: "2026-08-23T15:50:44Z" } },
+    "gpt-oss-120b-medium": { modelProvider: "MODEL_PROVIDER_OPENAI", quotaInfo: { remainingFraction: 1, resetTime: "2026-08-23T15:50:44Z" } },
+  },
+};
+const antigravityFree = parseAntigravityQuota(antigravityFreeModels, { currentTier: { id: "free-tier", name: "Antigravity" } }, antigravityNow);
+assert.strictEqual(antigravityFree.planName, "Free");
+assert.strictEqual(antigravityFree.tiers.length, 1);
+assert.strictEqual(antigravityFree.tiers[0].name, "five_hour");
+assert.ok(Math.abs(antigravityFree.tiers[0].utilization - 0.44) < 0.01);
+assert.strictEqual(antigravityFree.tiers[0].resetsAt, "2026-08-23T11:36:23.000Z");
+
+// 付费双窗口：5h + 周（resetTime 远超 5.5h 判定为周额度）。
+const antigravityPaid = parseAntigravityQuota(
+  {
+    models: {
+      "gemini-3-pro": { modelProvider: "MODEL_PROVIDER_GOOGLE", quotaInfo: { remainingFraction: 0.4, resetTime: "2026-08-23T14:00:00Z" } },
+      "gemini-3-flash": { modelProvider: "MODEL_PROVIDER_GOOGLE", quotaInfo: { remainingFraction: 0.42, resetTime: "2026-08-23T14:00:00Z" } },
+      "gemini-3-weekly": { modelProvider: "MODEL_PROVIDER_GOOGLE", quotaInfo: { remainingFraction: 0.75, resetTime: "2026-08-27T09:00:00Z" } },
+    },
+  },
+  { currentTier: { id: "g1-pro-tier", name: "Google AI Pro" } },
+  antigravityNow,
+);
+assert.deepStrictEqual(
+  antigravityPaid.tiers.map((tier) => [tier.name, Math.round(tier.utilization)]),
+  [["five_hour", 60], ["weekly_limit", 25]],
+);
+assert.strictEqual(antigravityPaid.planName, "Google AI Pro");
+
+assert.ok(parseAntigravityQuota({ models: {} }, null, antigravityNow).error);
+assert.ok(parseAntigravityQuota({}, null, antigravityNow).error);
+assert.strictEqual(parseAntigravityQuota({ models: { "chat_x": { quotaInfo: { remainingFraction: 1, resetTime: "2026-08-23T12:00:00Z" } } } }, null, antigravityNow).tiers.length, 0);
+assert(providerTemplates().some((template) => template.id === "antigravity"));
+
 
 // ===== Notifications config normalization =====
 assert.deepStrictEqual(normalizeConfig({ refreshIntervalSeconds: 300 }).notifications, {

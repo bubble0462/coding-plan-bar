@@ -470,8 +470,8 @@ function syncSelectedProviderWithFilters() {
 function matchesAccountFilter(provider) {
   const filter = state.accountFilter || "all";
   if (filter === "all") return true;
-  if (filter === "accounts") return (provider.kind === "official-subscription" && !["claude", "cpa", "sub2api"].includes(provider.importedFrom)) || provider.kind === "coding-plan";
-  if (filter === "imported") return provider.kind === "official-subscription" && ["claude", "cpa", "sub2api"].includes(provider.importedFrom);
+  if (filter === "accounts") return (provider.kind === "official-subscription" && !["claude", "cpa", "sub2api", "antigravity"].includes(provider.importedFrom)) || provider.kind === "coding-plan";
+  if (filter === "imported") return provider.kind === "official-subscription" && ["claude", "cpa", "sub2api", "antigravity"].includes(provider.importedFrom);
   if (filter === "balance") return provider.kind === "balance";
   if (filter === "disabled") return provider.enabled === false;
   if (filter === "attention") return providerNeedsAttention(provider);
@@ -1011,6 +1011,7 @@ function renderEditor(provider) {
                   ["codex", "Codex"],
                   ["claude", "Claude"],
                   ["grok", "Grok"],
+                  ["antigravity", "Antigravity"],
                 ], "provider-tool-label")}
               </div>
             `
@@ -1142,6 +1143,7 @@ function renderCodexTestBlock(provider) {
 function accountSourceLabel(provider) {
   if (provider.importedFrom === "claude") return "Claude JSON 导入";
   if (provider.importedFrom === "cpa") return "CPA JSON 导入";
+  if (provider.importedFrom === "antigravity") return "Antigravity JSON 导入";
   if (provider.importedFrom === "sub2api") return "sub2api JSON 导入";
   if (provider.importedFrom === "sessions") return "sessions.json 导入";
   if (provider.importedFrom) return `${provider.importedFrom} 导入`;
@@ -1266,6 +1268,23 @@ function renderOfficialNotice(provider) {
   const imported = provider.importedFrom || provider.accessToken;
   const email = provider.accountEmail || provider.name || "";
   const expires = provider.expiresAt ? new Date(provider.expiresAt).toLocaleString("zh-CN") : "未知";
+  if ((provider.tool || "codex") === "antigravity") {
+    if (imported) {
+      return `
+        <div class="notice-box import-notice">
+          <strong>已导入 Antigravity 凭证</strong>
+          <span>${escapeHtml(email)}。应用会自动用 refresh_token 续期，仅在本机查询额度。</span>
+          <span>过期时间：${escapeHtml(expires)}。凭证经 Windows DPAPI 加密后保存在本机 config.json。</span>
+        </div>
+      `;
+    }
+    return `
+      <div class="notice-box">
+        <strong>Antigravity 不使用请求地址或 API Key</strong>
+        <span>留空时自动读取本机 Antigravity 登录；也可在账号页导入 antigravity-*.json 凭证文件（支持多账号）。</span>
+      </div>
+    `;
+  }
   if (imported) {
     const service = (provider.tool || "codex") === "claude" ? "Claude" : "OpenAI";
     return `
@@ -1394,6 +1413,13 @@ function renderTemplatePreview(template) {
 function templateCredentialLines(template) {
   const provider = template.provider || {};
   if (provider.kind === "official-subscription") {
+    if ((provider.tool || "codex") === "antigravity") {
+      return [
+        "导入 antigravity-*.json 凭证文件（账号页「导入账号 JSON」，支持多账号）",
+        "留空时自动读取本机 Antigravity 登录（只读，不回写）",
+        "显示 Gemini 模型的 5 小时 / 周额度",
+      ];
+    }
     return ["自动读取本机 CLI 登录，无需填写 API Key"];
   }
   const envNames = Array.isArray(provider.apiKeyEnv)

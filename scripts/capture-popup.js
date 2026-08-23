@@ -239,6 +239,30 @@ const sampleProviders = [
       currency: "USD",
     },
   },
+  {
+    id: "antigravity",
+    name: "Antigravity · pro-user@gmail.com",
+    kind: "official-subscription",
+    tool: "antigravity",
+    kindLabel: "官方订阅",
+    planLabel: "Google AI Pro",
+    status: "ok",
+    statusText: "可用",
+    tiers: [
+      {
+        name: "five_hour",
+        label: "5h",
+        utilization: 62,
+        resetsAt: new Date(now + 1.4 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        name: "weekly_limit",
+        label: "周额度",
+        utilization: 25,
+        resetsAt: new Date(now + 4 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+    ],
+  },
 ];
 
 function sampleSnapshotFor(count) {
@@ -577,6 +601,10 @@ async function main() {
   const glmRow = assertions.overviewRows.find((entry) => entry.id === "glm");
   if (glmRow && !(glmRow.tierChips.some((chip) => chip.label === "5h") && glmRow.tierChips.some((chip) => chip.label === "周"))) {
     throw new Error(`Popup GLM overview row must show 5h and weekly chips: ${JSON.stringify(glmRow)}`);
+  }
+  const antigravityRow = assertions.overviewRows.find((entry) => entry.id === "antigravity");
+  if (antigravityRow && !(antigravityRow.tierChips.some((chip) => chip.label === "5h") && antigravityRow.tierChips.some((chip) => chip.label === "周"))) {
+    throw new Error(`Popup Antigravity overview row must show 5h and weekly chips: ${JSON.stringify(antigravityRow)}`);
   }
   const snapshotIds = firstSnapshot.providers.map((provider) => provider.id);
   if (snapshotIds.includes("deepseek") && !assertions.overviewRows.some((row) => row.id === "deepseek" && row.value.startsWith("￥"))) {
