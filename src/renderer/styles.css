@@ -151,6 +151,7 @@ button {
 .header {
   position: relative;
   z-index: 1;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -341,6 +342,8 @@ button {
 .provider-selector {
   position: relative;
   z-index: 1;
+  flex: 0 0 auto;
+  min-height: 34px;
   display: flex;
   gap: 6px;
   padding: 8px 10px 0;
@@ -388,6 +391,7 @@ button {
 
 .provider-detail {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 8px;
 }
@@ -1106,6 +1110,7 @@ button {
 .footer {
   position: relative;
   z-index: 1;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1315,6 +1320,11 @@ button {
 .provider-list.is-scrollable {
   -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
   mask-image: linear-gradient(180deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+}
+
+.provider-list.is-detail {
+  -webkit-mask-image: none;
+  mask-image: none;
 }
 
 /* Staggered card reveal on first data load only — kept restrained: short,

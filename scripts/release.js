@@ -95,6 +95,7 @@ function main() {
   run("npm", ["run", "smoke"]);
   run("npm", ["run", "smoke:electron"]);
   run("npm", ["run", "screenshot"]);
+  run("npm", ["run", "screenshot:detail"]);
   run("npm", ["run", "screenshot:deepseek"]);
   run("npm", ["run", "screenshot:grok"]);
   run("npm", ["run", "screenshot:reorder"]);

@@ -94,6 +94,7 @@ let agentUsageRetryAfter = 0;
 let isPopupHovered = false;
 let measuredPopupHeight = 0;
 let measuredPopupKey = "";
+let appliedPopupViewKey = "";
 let popupPlacement = { placement: "above", pointerOffset: 0, pointerVisible: true };
 let awaitingPopupExit = false;
 let currentState = {
@@ -220,15 +221,22 @@ function createSettingsWindow() {
 
 function positionPopup() {
   if (!tray || !popupWindow) return null;
-  const [width, height] = popupWindow.getSize();
-  const nextPlacement = popupPlacementFor(width, height);
+  // Use outer bounds consistently. On Windows a frameless transparent window
+  // can report getSize() one pixel taller than getBounds(); combining that
+  // value with a bottom-anchored setPosition() grows the window on every call.
+  const bounds = popupWindow.getBounds();
+  const nextPlacement = popupPlacementFor(bounds.width, bounds.height);
   // 刷新期间每个快照都会走到这里：坐标没有真正变化时跳过原生调用，
   // 避免一次刷新触发约 9 次无效的窗口移动。
-  if (nextPlacement) {
-    const bounds = popupWindow.getBounds();
-    if (bounds.x !== nextPlacement.x || bounds.y !== nextPlacement.y) {
-      popupWindow.setPosition(nextPlacement.x, nextPlacement.y, false);
-    }
+  if (nextPlacement && (bounds.x !== nextPlacement.x || bounds.y !== nextPlacement.y)) {
+    // Preserve the outer size in the same native call. setPosition() alone can
+    // preserve content size instead and reintroduce the one-pixel growth loop.
+    popupWindow.setBounds({
+      x: nextPlacement.x,
+      y: nextPlacement.y,
+      width: bounds.width,
+      height: bounds.height,
+    });
   }
   return popupPlacement;
 }
@@ -260,10 +268,11 @@ function showPopup() {
   if (!popupWindow) createPopupWindow();
   cancelHide();
   awaitingPopupExit = false;
-  resizePopupForState();
-  positionPopup();
-
   const wasVisible = popupWindow.isVisible();
+  if (!wasVisible) {
+    resizePopupForState();
+    positionPopup();
+  }
   popupWindow.show();
   popupWindow.moveTop();
   sendSnapshot();
@@ -335,15 +344,13 @@ function isCursorInsidePopup(margin = 8) {
 }
 
 function sendSnapshot(options = {}) {
-  // Transparent windows repaint badly across rapid successive resizes. While
-  // the popup is visible, only the renderer's measured-height report may
-  // resize it; estimate-based resizes run while it is hidden so the next
-  // open is pre-sized. This is the generalization of the v0.6.0 fix that
-  // covered provider-selection switches — data refreshes need it too.
+  // Transparent windows repaint badly across rapid geometry changes. Resize
+  // estimates and tray anchoring happen only while hidden; visible snapshots
+  // update DOM state, and only a renderer report for a new selected view may
+  // perform one atomic resize through the quota:resize handler.
   const popupVisible = Boolean(popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible());
   if (!options.skipResize && !popupVisible) resizePopupForState();
   if (popupWindow && !popupWindow.webContents.isDestroyed()) {
-    if (popupWindow.isVisible()) positionPopup();
     popupWindow.webContents.send("quota:snapshot", snapshotPayload());
   }
   if (settingsWindow && !settingsWindow.webContents.isDestroyed()) {
@@ -366,9 +373,8 @@ function snapshotPayload() {
 
 function resizePopupForState() {
   if (!popupWindow || popupWindow.isDestroyed()) return;
-  // 可见期间绝不改变窗口尺寸：透明窗口在可见状态下的任何 resize 都可能在
-  // 部分机器上留下绘制残影（内容整体上移盖住供应商选择器行）。高度只在
-  // 隐藏时调整；可见时内容超出由列表内部滚动消化，选择器行始终固定。
+  // Estimate-based resizing is hidden-only. A visible selection change uses
+  // the renderer's natural-height report exactly once in quota:resize.
   if (popupWindow.isVisible()) return;
   const layoutKey = providerLayoutKey(currentState.providers);
   // Prefer the renderer's measured height when the provider count is unchanged,
@@ -378,6 +384,7 @@ function resizePopupForState() {
       ? measuredPopupHeight
       : computePopupHeight(currentState.providers);
   resizePopupToHeight(targetHeight);
+  appliedPopupViewKey = popupViewKey();
 }
 
 function invalidateMeasuredPopupHeight() {
@@ -410,11 +417,8 @@ function applyPopupHeight(numericHeight) {
   });
   const maxHeight = Math.max(300, display.workArea.height - 16);
   const targetHeight = Math.max(180, Math.min(numericHeight, maxHeight));
-  const [width, height] = popupWindow.getSize();
-  if (width === POPUP_WIDTH && height === targetHeight) return;
+  if (bounds.width === POPUP_WIDTH && bounds.height === targetHeight) return;
   const nextPlacement = popupPlacementFor(POPUP_WIDTH, targetHeight);
-  const wasResizable = popupWindow.isResizable();
-  if (!wasResizable) popupWindow.setResizable(true);
   if (nextPlacement) {
     // One atomic native call: size and position change together, so the
     // bottom-anchored popup never composites an intermediate frame at the
@@ -429,29 +433,18 @@ function applyPopupHeight(numericHeight) {
   } else {
     popupWindow.setSize(POPUP_WIDTH, targetHeight, false);
   }
-  if (!wasResizable) popupWindow.setResizable(false);
+}
+
+function popupViewKey() {
+  const density = currentState.panelDensity || "comfortable";
+  const selection = currentState.popupSelectedProvider || "all";
+  return `${density}|sel:${selection}`;
 }
 
 function resizePopupToHeight(requestedHeight) {
   if (!popupWindow || popupWindow.isDestroyed()) return;
   const numericHeight = Math.round(Number(requestedHeight));
   if (!Number.isFinite(numericHeight)) return;
-
-  const [, height] = popupWindow.getSize();
-  const isShrink = numericHeight < height - 2;
-  if (isShrink && popupWindow.isVisible()) {
-    // Trailing debounce for shrinks on the visible popup: a height decrease
-    // only applies after ~220ms of resize quiet. Transient under-measures
-    // (charts re-laying-out mid-refresh) are always followed by the settled
-    // height within that window, so the shrink is replaced and the
-    // shrink-then-grow storm that painted over the selector row cannot
-    // occur. Growth applies immediately so content is never clipped.
-    timers.setTimeout("popup-shrink", () => {
-      if (popupWindow && !popupWindow.isDestroyed()) applyPopupHeight(numericHeight);
-    }, 220);
-    return;
-  }
-  timers.clear("popup-shrink");
   applyPopupHeight(numericHeight);
 }
 
@@ -1564,10 +1557,18 @@ async function startApp() {
       measuredPopupHeight = numeric;
       measuredPopupKey = currentLayoutKey;
     }
-    // 可见期间只记录实测高度供下次显示使用，不 resize（见
-    // resizePopupForState 的说明）；隐藏状态下立即应用。
-    if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) return;
-    resizePopupToHeight(height);
+    if (popupWindow && !popupWindow.isDestroyed() && popupWindow.isVisible()) {
+      // A selection change may resize the visible popup exactly once so a
+      // detail view can expand to its natural height. Refreshes within the
+      // same view only update DOM data and never touch native geometry.
+      const currentViewKey = popupViewKey();
+      if (currentViewKey === appliedPopupViewKey) return;
+      resizePopupToHeight(numeric);
+      appliedPopupViewKey = currentViewKey;
+      return;
+    }
+    resizePopupToHeight(numeric);
+    appliedPopupViewKey = popupViewKey();
   });
   ipcMain.handle("quota:reorder-providers", reorderPopupProviders);
   ipcMain.handle("quota:select-provider", selectPopupProvider);

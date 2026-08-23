@@ -192,6 +192,7 @@ function render(isDataRefresh = false) {
       renderedProviderSignatures.clear();
     }
     patchProviderList(list, providers, { fresh, isDataRefresh });
+    list.classList.remove("is-detail");
     // Use provider count as a fast default, but after the first layout pass
     // upgrade to scrollable when content overflows the window — a single tall
     // card (e.g. Grok with three tiers) can exceed the work area even with
@@ -205,9 +206,12 @@ function render(isDataRefresh = false) {
     list.innerHTML = selected
       ? `<div class="provider-detail">${renderProvider(selected, 0, false, false, false)}${renderUsageDetail(selected)}</div>`
       : renderEmpty();
-    list.classList.remove("is-scrollable");
-    list.classList.add("is-static");
-    upgradeToScrollableIfOverflowing(list);
+    // Detail content (especially GLM usage charts) can be taller than the
+    // current popup. Make the content region scroll immediately so flexbox
+    // never shrinks and clips the provider selector while waiting for the
+    // post-layout overflow check.
+    list.classList.remove("is-static");
+    list.classList.add("is-scrollable", "is-detail");
   }
 
   const fatal = root.querySelector("[data-role='fatal']");
@@ -1091,9 +1095,11 @@ function reportLayoutHeight() {
   // reports a bounded height instead of its full natural height.
   const isScrollable = !isDetailView &&
     (providerList.classList.contains("is-scrollable") || providerCount > MAX_VISIBLE_PROVIDERS);
-  const desiredHeight = isScrollable
-    ? measureScrollableLayoutHeight(shell, providerList, rootStyle)
-    : measureStaticLayoutHeight(shell, rootStyle);
+  const desiredHeight = isDetailView
+    ? measureDetailLayoutHeight(shell, providerList, rootStyle)
+    : isScrollable
+      ? measureScrollableLayoutHeight(shell, providerList, rootStyle)
+      : measureStaticLayoutHeight(shell, rootStyle);
 
   if (Math.abs(desiredHeight - lastReportedHeight) > 1) {
     // 详情视图在同一布局形态内不回传明显更矮的瞬时高度（图表在 innerHTML
@@ -1163,6 +1169,36 @@ function measureScrollableLayoutHeight(shell, providerList, rootStyle) {
     parsePixel(shellStyle.borderBottomWidth) +
     fixedHeight +
     Math.ceil(listHeight)
+  );
+}
+
+function measureDetailLayoutHeight(shell, providerList, rootStyle) {
+  const shellStyle = getComputedStyle(shell);
+  const listStyle = getComputedStyle(providerList);
+  const detail = providerList.querySelector(":scope > .provider-detail");
+  const detailHeight = detail
+    ? Math.ceil(detail.getBoundingClientRect().height)
+    : Math.ceil(providerList.scrollHeight);
+  const listHeight =
+    parsePixel(listStyle.paddingTop) +
+    parsePixel(listStyle.paddingBottom) +
+    detailHeight;
+  const fixedHeight = [
+    ".header",
+    ".provider-selector",
+    ".fatal",
+    ".footer",
+  ].reduce((total, selector) => {
+    const element = shell.querySelector(selector);
+    return total + (element && !element.hidden ? Math.ceil(element.getBoundingClientRect().height) : 0);
+  }, 0);
+  return (
+    parsePixel(rootStyle.paddingTop) +
+    parsePixel(rootStyle.paddingBottom) +
+    parsePixel(shellStyle.borderTopWidth) +
+    parsePixel(shellStyle.borderBottomWidth) +
+    fixedHeight +
+    listHeight
   );
 }
 

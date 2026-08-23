@@ -314,9 +314,13 @@ async function main() {
   ipcMain.handle("quota:resize", (_event, height) => {
     if (!captureWindow || captureWindow.isDestroyed()) return;
     if (debugLayout) console.log(`resize:${height}`);
-    captureWindow.setResizable(true);
-    captureWindow.setSize(POPUP_WIDTH, Math.round(Number(height)), false);
-    captureWindow.setResizable(false);
+    const bounds = captureWindow.getBounds();
+    captureWindow.setBounds({
+      x: bounds.x,
+      y: bounds.y,
+      width: POPUP_WIDTH,
+      height: Math.round(Number(height)),
+    });
   });
   ipcMain.handle("quota:reorder-providers", (_event, ids) => {
     const order = new Map(ids.map((id, index) => [id, index]));
@@ -762,14 +766,20 @@ async function main() {
   }
 
   if (detailMode) {
+    const overviewHeight = captureWindow.getBounds().height;
     await captureWindow.webContents.executeJavaScript(
       `document.querySelector('[data-select-provider="glm"]')?.click()`,
     );
     await wait(400);
+    const detailHeight = captureWindow.getBounds().height;
     const detailAssertions = await captureWindow.webContents.executeJavaScript(`(() => {
       const line = document.querySelector('.detail-chart polyline');
       const selector = document.querySelector('.provider-selector');
       const rect = selector?.getBoundingClientRect();
+      const activeChip = document.querySelector('.selector-chip.is-active');
+      const activeChipRect = activeChip?.getBoundingClientRect();
+      const listRect = document.querySelector('.provider-list')?.getBoundingClientRect();
+      const detailRect = document.querySelector('.provider-detail')?.getBoundingClientRect();
       const footer = document.querySelector('.footer');
       const footerRect = footer?.getBoundingClientRect();
       return {
@@ -778,6 +788,17 @@ async function main() {
         statChips: document.querySelectorAll('.usage-detail .stat-chip').length,
         mcpTier: Boolean(document.querySelector('.usage-detail .mcp-tier')),
         activeChip: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
+        selectorHeight: rect ? Math.round(rect.height) : 0,
+        activeChipFullyVisible: Boolean(
+          rect && activeChipRect &&
+          activeChipRect.top >= rect.top - 0.5 &&
+          activeChipRect.bottom <= rect.bottom + 0.5
+        ),
+        detailBelowSelector: Boolean(
+          rect && listRect && detailRect &&
+          listRect.top >= rect.bottom - 0.5 &&
+          detailRect.top >= rect.bottom - 0.5
+        ),
         selectorVisible: Boolean(
           rect && rect.height > 4 && rect.top >= -1 && rect.bottom <= window.innerHeight + 1,
         ),
@@ -805,16 +826,48 @@ async function main() {
         `Popup provider selector is not visible in detail view: top=${detailAssertions.selectorTop} viewport=${detailAssertions.viewportHeight}`,
       );
     }
+    if (detailAssertions.selectorHeight < 34 || !detailAssertions.activeChipFullyVisible) {
+      throw new Error(
+        `Popup GLM selector was flex-shrunk or clipped: ${JSON.stringify(detailAssertions)}`,
+      );
+    }
+    if (!detailAssertions.detailBelowSelector) {
+      throw new Error(
+        `Popup GLM detail overlapped the provider selector: ${JSON.stringify(detailAssertions)}`,
+      );
+    }
     if (!detailAssertions.footerVisible) {
       throw new Error(
         `Popup footer is clipped in detail view: bottom=${detailAssertions.footerBottom} viewport=${detailAssertions.viewportHeight}`,
       );
     }
-    const afterRerender = await captureWindow.webContents.executeJavaScript(
-      `(() => { render(false); return document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || ''; })()`,
-    );
-    if (afterRerender !== 'glm') {
-      throw new Error(`Popup selection did not survive a re-render: ${JSON.stringify(afterRerender)}`);
+    if (detailHeight <= overviewHeight + 80) {
+      throw new Error(`Popup GLM detail did not expand to its natural height: overview=${overviewHeight}, detail=${detailHeight}`);
+    }
+    await captureWindow.webContents.executeJavaScript(`(() => {
+      render(true);
+      reportLayoutHeight();
+    })()`);
+    await wait(200);
+    const afterRerender = await captureWindow.webContents.executeJavaScript(`(() => {
+      const selector = document.querySelector('.provider-selector')?.getBoundingClientRect();
+      const chip = document.querySelector('.selector-chip.is-active')?.getBoundingClientRect();
+      const detail = document.querySelector('.provider-detail')?.getBoundingClientRect();
+      return {
+        active: document.querySelector('.selector-chip.is-active')?.dataset.selectProvider || '',
+        selectorHeight: selector ? Math.round(selector.height) : 0,
+        chipVisible: Boolean(selector && chip && chip.top >= selector.top - 0.5 && chip.bottom <= selector.bottom + 0.5),
+        detailBelow: Boolean(selector && detail && detail.top >= selector.bottom - 0.5),
+      };
+    })()`);
+    if (afterRerender.active !== 'glm') {
+      throw new Error(`Popup selection did not survive a refresh render: ${JSON.stringify(afterRerender)}`);
+    }
+    if (afterRerender.selectorHeight < 34 || !afterRerender.chipVisible || !afterRerender.detailBelow) {
+      throw new Error(`Popup GLM refresh clipped or overlapped the selector: ${JSON.stringify(afterRerender)}`);
+    }
+    if (captureWindow.getBounds().height !== detailHeight) {
+      throw new Error(`Popup GLM refresh changed detail height: before=${detailHeight}, after=${captureWindow.getBounds().height}`);
     }
 
     // Transition back to the all view must not leave any detail markup behind.

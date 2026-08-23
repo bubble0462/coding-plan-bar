@@ -98,6 +98,14 @@ const {
   resolveApplicationDataDirectory,
 } = require("../src/app-storage");
 
+// Windows can report a one-pixel difference between content-oriented size APIs
+// and outer bounds for the transparent popup. Reintroducing either call below
+// recreates a bottom-anchored 1px growth loop on every snapshot refresh.
+const mainProcessSource = fs.readFileSync(path.join(__dirname, "..", "src", "main.js"), "utf8");
+assert.strictEqual(mainProcessSource.includes("popupWindow.getSize("), false);
+assert.strictEqual(mainProcessSource.includes("popupWindow.setPosition("), false);
+assert.strictEqual(mainProcessSource.includes("popupWindow.setResizable("), false);
+
 
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
 assert.strictEqual(windowSecondsToTierName(604800), "seven_day");
