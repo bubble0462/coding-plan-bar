@@ -2,6 +2,14 @@ function classifyFailure(message, status) {
   const text = String(message || "").toLowerCase();
   const code = Number(status || httpStatusFromMessage(text));
 
+  if (isQuotaExhaustion(text, code)) {
+    return {
+      kind: "quota_exhausted",
+      label: "额度已用尽",
+      action: "等待额度重置、充值或切换账号。",
+    };
+  }
+
   if (code === 401 || text.includes("unauthorized") || text.includes("authentication failed")) {
     return {
       kind: "auth_expired",
@@ -75,6 +83,24 @@ function classifyFailure(message, status) {
     label: "查询失败",
     action: "查看错误详情，确认配置后重新刷新。",
   };
+}
+
+function isQuotaExhaustion(text, code) {
+  const quotaText = [
+    "insufficient_quota",
+    "quota exceeded",
+    "quota exhausted",
+    "exceeded your current quota",
+    "usage limit reached",
+    "billing hard limit",
+    "credit balance is too low",
+    "额度不足",
+    "额度已用尽",
+    "超出额度",
+    "余额不足",
+    "余额已用尽",
+  ].some((marker) => text.includes(marker));
+  return quotaText && (code === 429 || code === 402 || code === 403 || !code);
 }
 
 function httpStatusFromMessage(text) {

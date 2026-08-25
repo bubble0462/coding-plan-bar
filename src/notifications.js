@@ -43,7 +43,9 @@ function providerTierIndex(providers) {
     }
     map.set(id, {
       name: String(provider.name || id),
-      status: String(provider.status || ""),
+      status: provider.failure?.kind === "quota_exhausted"
+        ? "quota_exhausted"
+        : String(provider.status || ""),
       tiers,
     });
   }

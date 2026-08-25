@@ -514,13 +514,12 @@ function credentialExpiryState(provider) {
 function providerNeedsAttention(provider) {
   const runtime = runtimeProvider(provider.id);
   const expiry = credentialExpiryState(provider);
-  const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
+  const quotaOnlyFailure = runtime?.failure?.kind === "quota_exhausted";
   if (provider.enabled === false) return false;
   return (
-    ["error", "expired", "missing", "danger"].includes(runtime?.status) ||
-    Boolean(runtime?.failure) ||
-    Boolean(expiry?.expired || expiry?.soon) ||
-    maxUsage >= 90
+    (!quotaOnlyFailure && ["error", "expired", "missing"].includes(runtime?.status)) ||
+    (!quotaOnlyFailure && Boolean(runtime?.failure)) ||
+    Boolean(expiry?.expired || expiry?.soon)
   );
 }
 
@@ -575,6 +574,7 @@ function providerBadge(provider) {
   const runtime = runtimeProvider(provider.id);
   const expiry = credentialExpiryState(provider);
   const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
+  if (runtime?.failure?.kind === "quota_exhausted") return { label: "额度用尽", tone: "danger" };
   if (["error", "missing"].includes(runtime?.status) || runtime?.failure) return { label: "失败", tone: "danger" };
   if (runtime?.status === "expired" || expiry?.expired) return { label: "过期", tone: "danger" };
   if (maxUsage >= 90 || runtime?.status === "danger") return { label: "紧张", tone: "danger" };
@@ -707,7 +707,7 @@ function renderHealthPage() {
     <div class="editor-head">
       <div class="section-title">
         <strong>诊断中心</strong>
-        <span>只显示需要关注的账号、token 过期、查询失败和额度风险。</span>
+        <span>只显示需要处理的账号配置、凭证和查询故障；额度预警不会列入诊断。</span>
       </div>
       <button class="btn" data-action="refresh-quota">立即刷新</button>
     </div>
@@ -752,8 +752,8 @@ function healthRows() {
 function healthRow(provider, runtime) {
   const expiry = credentialExpiryState(provider);
   const status = runtime?.status || (expiry?.expired ? "expired" : "ok");
-  const maxUsage = Math.max(0, ...(runtime?.tiers || []).map((tier) => Number(tier.utilization || 0)));
   const failure = runtime?.failure;
+  const quotaOnlyFailure = failure?.kind === "quota_exhausted";
   let tone = "ok";
   let label = "可用";
   let action = "无需处理";
@@ -761,7 +761,7 @@ function healthRow(provider, runtime) {
     tone = "warn";
     label = "已停用";
     action = "需要时可在左侧重新启用";
-  } else if (["error", "missing"].includes(status)) {
+  } else if (!quotaOnlyFailure && ["error", "missing"].includes(status)) {
     tone = "danger";
     label = failure?.label || runtime?.statusText || "查询失败";
     action = failure?.action || "检查配置后重新刷新";
@@ -769,10 +769,6 @@ function healthRow(provider, runtime) {
     tone = "danger";
     label = "token 已过期";
     action = "重新登录或重新导入账号";
-  } else if (maxUsage >= 90 || status === "danger") {
-    tone = "danger";
-    label = "额度接近上限";
-    action = "等待重置或切换账号";
   } else if (expiry?.soon) {
     tone = "warn";
     label = "token 即将过期";

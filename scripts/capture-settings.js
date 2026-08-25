@@ -81,6 +81,13 @@ const sampleConfig = {
       apiKeyEnv: "DEEPSEEK_API_KEY",
       enabled: true,
     },
+    ...(showHealth ? [{
+      id: "quota-exhausted",
+      name: "额度已用尽账号",
+      kind: "official-subscription",
+      tool: "codex",
+      enabled: true,
+    }] : []),
   ],
 };
 
@@ -100,9 +107,19 @@ const healthThresholdSnapshot = {
       id: "deepseek",
       name: "DeepSeek",
       kind: "balance",
-      status: "danger",
-      statusText: "接近上限",
-      tiers: [{ name: "monthly", label: "月额度", utilization: 90 }],
+      status: "error",
+      statusText: "登录过期",
+      failure: { kind: "auth_expired", label: "登录过期", action: "重新登录后再刷新。" },
+      tiers: [],
+    },
+    {
+      id: "quota-exhausted",
+      name: "额度已用尽账号",
+      kind: "official-subscription",
+      status: "error",
+      statusText: "额度已用尽",
+      failure: { kind: "quota_exhausted", label: "额度已用尽", action: "等待额度重置。" },
+      tiers: [],
     },
   ],
 };
@@ -549,13 +566,17 @@ async function main() {
       const rows = [...document.querySelectorAll(".health-row")];
       const codexItem = document.querySelector('.provider-item[data-id="codex"]');
       const deepseekItem = document.querySelector('.provider-item[data-id="deepseek"]');
+      const quotaItem = document.querySelector('.provider-item[data-id="quota-exhausted"]');
       return text.includes("1 个项目需要处理") &&
         rows.length === 1 &&
         (rows[0].textContent || "").includes("DeepSeek") &&
         !(rows[0].textContent || "").includes("Codex") &&
+        !(rows[0].textContent || "").includes("额度已用尽账号") &&
         codexItem?.querySelector(".provider-badge")?.textContent === "关注" &&
         !codexItem.classList.contains("is-attention") &&
-        deepseekItem?.classList.contains("is-attention");
+        deepseekItem?.classList.contains("is-attention") &&
+        quotaItem?.querySelector(".provider-badge")?.textContent === "额度用尽" &&
+        !quotaItem?.classList.contains("is-attention");
     })()`);
     if (!healthSummary) throw new Error("Health page quota threshold regression failed");
   }

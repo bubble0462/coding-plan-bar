@@ -811,17 +811,15 @@ function cssEscape(value) {
 }
 
 function providerAlertClass(provider) {
-  if (providerServiceClass(provider)) return "is-attention";
-  const risk = providerQuotaRisk(provider);
-  if (risk === "danger") return "is-attention";
-  return "";
+  return providerServiceClass(provider) ? "is-attention" : "";
 }
 
 function providerServiceClass(provider) {
-  const hasTiers = Array.isArray(provider.tiers) && provider.tiers.length > 0;
-  const serviceFailure = Boolean(provider.failure) || ["error", "expired", "missing"].includes(provider.status);
-  const balanceFailure = !hasTiers && provider.status === "danger";
-  return serviceFailure || balanceFailure ? "is-service-attention" : "";
+  const quotaOnlyFailure = provider.failure?.kind === "quota_exhausted";
+  const serviceFailure = !quotaOnlyFailure && (
+    Boolean(provider.failure) || ["error", "expired", "missing"].includes(provider.status)
+  );
+  return serviceFailure ? "is-service-attention" : "";
 }
 
 function providerServiceStatus(provider) {

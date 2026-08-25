@@ -110,6 +110,23 @@ assert.strictEqual(mainProcessSource.includes("popupWindow.setResizable("), fals
 assert.strictEqual(windowSecondsToTierName(18000), "five_hour");
 assert.strictEqual(windowSecondsToTierName(604800), "seven_day");
 assert.strictEqual(classifyFailure("Grok billing 响应缺少可识别的额度字段").kind, "parse_error");
+assert.strictEqual(classifyFailure("API error (HTTP 429): insufficient_quota", 429).kind, "quota_exhausted");
+assert.strictEqual(classifyFailure("余额不足", 402).kind, "quota_exhausted");
+assert.strictEqual(classifyFailure("API error (HTTP 429): too many requests", 429).kind, "rate_limited");
+assert.deepStrictEqual(
+  detectQuotaEvents(
+    [{ id: "codex", name: "Codex", status: "ok", tiers: [] }],
+    [{
+      id: "codex",
+      name: "Codex",
+      status: "error",
+      failure: { kind: "quota_exhausted" },
+      tiers: [],
+    }],
+    { armed: new Map() },
+  ),
+  [],
+);
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "coding-plan-bar-"));
 const atomicPath = path.join(tempDir, "auth.json");

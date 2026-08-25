@@ -506,6 +506,15 @@ async function main() {
       statusText: '使用偏高',
       tiers: [{ name: 'monthly', label: '月额度', utilization: 75 }],
     }, 0, false, false, false));
+    const emptyBalanceCard = providerCardFromMarkup(renderProvider({
+      id: 'empty-balance-fixture',
+      name: 'Empty Balance Fixture',
+      kind: 'balance',
+      status: 'danger',
+      statusText: '余额不足',
+      tiers: [],
+      balance: { remaining: 0, unit: 'CNY' },
+    }, 0, false, false, false));
     const serviceErrorCard = providerCardFromMarkup(renderProvider({
       id: 'service-error-fixture',
       name: 'Service Error Fixture',
@@ -536,7 +545,7 @@ async function main() {
       attentionFocusLabel: focusedCard?.getAttribute('aria-label') || '',
       quotaRiskSeparated: Boolean(
         quotaRiskCard?.classList.contains('is-quota-danger') &&
-        quotaRiskCard.dataset.needsAttention === 'true' &&
+        quotaRiskCard.dataset.needsAttention === 'false' &&
         !quotaRiskCard.classList.contains('is-service-attention') &&
         quotaRiskCard.querySelector('.status-pill')?.textContent === '可用' &&
         quotaRiskCard.querySelector('.tier.is-quota-danger .tier-risk-label')?.textContent === '接近上限'
@@ -545,6 +554,11 @@ async function main() {
         quotaWatchCard?.classList.contains('is-quota-watch') &&
         quotaWatchCard.dataset.needsAttention === 'false' &&
         quotaWatchCard.querySelector('.tier.is-quota-watch .tier-risk-label')?.textContent === '需要关注'
+      ),
+      emptyBalanceIsVisualOnly: Boolean(
+        emptyBalanceCard?.dataset.needsAttention === 'false' &&
+        !emptyBalanceCard.classList.contains('is-service-attention') &&
+        emptyBalanceCard.querySelector('.status-pill')?.textContent === '余额不足'
       ),
       serviceErrorSeparated: Boolean(
         serviceErrorCard?.classList.contains('is-service-attention') &&
@@ -628,10 +642,13 @@ async function main() {
     throw new Error(`Popup attention summary did not focus an accessible provider card: ${JSON.stringify(assertions)}`);
   }
   if (!assertions.quotaRiskSeparated) {
-    throw new Error('Popup quota risk must not present a healthy service as a service error');
+    throw new Error('Popup quota risk must remain visual without becoming actionable');
   }
   if (!assertions.quotaWatchIsVisualOnly) {
     throw new Error('Popup quota watch state must remain visual without becoming actionable');
+  }
+  if (!assertions.emptyBalanceIsVisualOnly) {
+    throw new Error('Popup exhausted balance must remain visual without becoming actionable');
   }
   if (!assertions.serviceErrorSeparated) {
     throw new Error('Popup service error must retain a distinct card-level warning');
