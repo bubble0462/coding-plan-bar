@@ -1404,6 +1404,15 @@ function renderTemplatePreview(template) {
         .map((line) => `<div class="template-requirement">${escapeHtml(line)}</div>`)
         .join("")}
     </div>
+    ${(template.compatibility || [])
+      .map(
+        (group) => `
+    <div class="template-preview-section">
+      <div class="template-preview-title">${escapeHtml(group.title)}</div>
+      ${group.items.map((item) => `<div class="template-requirement is-dim">${escapeHtml(item)}</div>`).join("")}
+    </div>`,
+      )
+      .join("")}
     ${provider.baseUrl ? `
     <div class="template-preview-section">
       <div class="template-preview-title">请求地址</div>
@@ -1439,6 +1448,9 @@ function templateCredentialLines(template) {
       ? [provider.apiKeyEnv]
       : [];
   const lines = ["API Key（添加后在右侧编辑器填写，保存后加密存储）"];
+  if (template.id === "custom") {
+    lines.unshift("请求地址（Base URL）：填下表中的地址即可自动识别供应商");
+  }
   if (envNames.length) lines.push(`支持环境变量：${envNames.join("、")}`);
   if (provider.kind === "coding-plan" && String(provider.baseUrl || "").includes("api.kimi.com")) {
     lines.push("或已登录 Kimi Code CLI（自动只读复用本机凭据）");

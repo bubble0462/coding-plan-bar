@@ -802,6 +802,21 @@ assert(templates.some((template) => template.id === "deepseek"));
 assert(templates.some((template) => template.id === "generic-balance"));
 assert(templates.some((template) => template.id === "kimi-coding"));
 assert(!templates.some((template) => template.id === "openrouter"));
+// 自定义模板必须把可接入的供应商列全，且与 providers.js 的 URL 自动识别
+// 范围保持一致（关键字逐一对应 detectCodingPlanProvider / detectBalanceProvider）。
+const customTemplate = templates.find((template) => template.id === "custom");
+assert(customTemplate, "custom template missing");
+const compatibilityText = (customTemplate.compatibility || [])
+  .flatMap((group) => [group.title, ...(group.items || [])])
+  .join("\n");
+for (const keyword of [
+  "open.bigmodel.cn", "api.z.ai", "api.kimi.com/coding", "bailian.console.aliyun.com",
+  "api.minimaxi.com", "api.minimax.io", "zenmux",
+  "api.deepseek.com", "api.moonshot", "openrouter.ai", "api.siliconflow", "v1/usage",
+]) {
+  assert(compatibilityText.includes(keyword), `custom template compatibility missing: ${keyword}`);
+}
+assert(compatibilityText.includes("手动额度"), "custom template missing manual kind hint");
 assert.deepStrictEqual(
   parseGenericBalanceResponse({
     remaining: "12.34",

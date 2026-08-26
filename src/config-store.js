@@ -428,7 +428,36 @@ function providerTemplates() {
       label: "自定义供应商",
       short: "+",
       category: "自定义",
-      description: "用于手动接入其它已兼容的官方接口。",
+      description: "手动接入已兼容的官方接口：填写请求地址后自动识别供应商。",
+      // 与 providers.js 的 detectCodingPlanProvider / detectBalanceProvider
+      // 保持一致：这里列出的地址关键字就是编辑器能自动识别的全部范围。
+      compatibility: [
+        {
+          title: "Coding Plan 额度（按请求地址识别）",
+          items: [
+            "智谱 GLM — open.bigmodel.cn",
+            "Z.AI 国际站 — api.z.ai",
+            "Kimi For Coding — api.kimi.com/coding",
+            "Qwen 百炼 / Model Studio — bailian.console.aliyun.com",
+            "MiniMax — api.minimaxi.com（国际站 api.minimax.io）",
+            "ZenMux — 请求地址包含 zenmux",
+          ],
+        },
+        {
+          title: "余额查询（按请求地址识别）",
+          items: [
+            "DeepSeek — api.deepseek.com",
+            "Moonshot / Kimi API — api.moonshot.ai / api.moonshot.cn",
+            "OpenRouter — openrouter.ai",
+            "硅基流动 — api.siliconflow.cn / api.siliconflow.com",
+            "其它兼容站 — 自动尝试 基址/v1/usage、基址/usage，解析 remaining / balance / quota 字段",
+          ],
+        },
+        {
+          title: "手动额度（不发起网络请求）",
+          items: ["任意名称，手动填写档位、百分比与重置时间"],
+        },
+      ],
       provider: {
         id: "custom-provider",
         name: "自定义供应商",

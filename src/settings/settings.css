@@ -1042,6 +1042,15 @@ button {
   color: var(--blue);
 }
 
+/* Compatibility lists in template previews: informational, lower emphasis. */
+.template-requirement.is-dim {
+  color: var(--muted);
+}
+
+.template-requirement.is-dim::before {
+  color: var(--muted-3);
+}
+
 .template-preview code {
   display: block;
   padding: 7px 9px;

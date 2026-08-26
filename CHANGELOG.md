@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.6] - 未发布
+
+### Changed
+
+- 「添加供应商」的自定义模板现在明确列出可接入的供应商清单：Coding Plan（智谱 GLM、Z.AI、Kimi、Qwen 百炼、MiniMax、ZenMux）、余额查询（DeepSeek、Moonshot、OpenRouter、硅基流动及兼容 `/v1/usage` 的中转站）与手动额度，均按请求地址自动识别。
+
 ## [0.8.5] - 2026-08-25
 
 ### Fixed

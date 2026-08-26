@@ -432,6 +432,19 @@ async function main() {
       `(() => document.querySelector(".template-row.is-selected")?.dataset.template || "")()`,
     );
     if (qwenSelected !== "qwen-coding") throw new Error(`Qwen row selection state did not update: ${qwenSelected}`);
+    // The custom template must document every connectable provider up front.
+    await window.webContents.executeJavaScript(
+      `document.querySelector(".template-row[data-template='custom']")?.click()`,
+    );
+    await wait(120);
+    const customPreview = await window.webContents.executeJavaScript(
+      `(() => document.querySelector(".template-preview")?.textContent || "")()`,
+    );
+    for (const expected of ["Coding Plan 额度", "余额查询", "手动额度", "api.deepseek.com", "openrouter.ai", "bailian.console.aliyun.com", "api.kimi.com/coding", "v1/usage"]) {
+      if (!customPreview.includes(expected)) {
+        throw new Error(`Custom template preview missing "${expected}": ${customPreview.slice(0, 160)}`);
+      }
+    }
     // Template dialog must move keyboard focus into itself so it is operable
     // without the mouse, and Escape must close it back to the trigger.
     const templateFocus = await window.webContents.executeJavaScript(`(() => {
