@@ -89,7 +89,11 @@ let state = {
     streamingText: "",
     meta: null,
     error: null,
+    fetchMeta: null,
+    fetchError: null,
   },
+  // 每个供应商已获取的模型清单缓存：切走再切回不需要重新请求。
+  chatModelsCache: {},
 };
 
 let templatesCloseTimer = null;
@@ -980,8 +984,8 @@ function renderEditor(provider) {
           <span></span>
         </label>
         ${
-          provider.kind === "official-subscription" && (provider.tool || "codex") === "codex"
-            ? `<button class="btn" data-action="test-codex" title="向 ChatGPT 后端发送一次额度查询请求">测试连通</button>`
+          provider.kind === "official-subscription"
+            ? `<button class="btn" data-action="test-codex" title="向官方后端发送一次额度查询请求（只读）">测试连通</button>`
             : ""
         }
         <button class="btn danger" data-action="delete-provider">删除</button>
@@ -1107,7 +1111,7 @@ function renderAccountDetailCard(provider) {
 }
 
 function renderCodexTestBlock(provider) {
-  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") return "";
+  if (provider.kind !== "official-subscription") return "";
   const cached = state.testCodexResult && state.testCodexResult.providerId === provider.id
     ? state.testCodexResult.result
     : null;
@@ -1161,7 +1165,9 @@ function accountSourceLabel(provider) {
 }
 
 function renderEndpointProbeCard(provider) {
-  if (provider.kind === "official-subscription") return "";
+  // coding-plan 供应商的连通测试已并入「模型与对话测试」卡片（获取模型即连通测试）；
+  // 这里只保留余额类供应商的端点探测。
+  if (provider.kind !== "balance") return "";
   const probe = state.endpointProbe || {};
   const active = probe.providerId === provider.id;
   const loading = Boolean(active && probe.loading);
@@ -1217,47 +1223,88 @@ async function runEndpointProbe() {
   if (state.view === "providers" && state.selectedId === provider.id) render();
 }
 
+function chatProbeHint(provider) {
+  if (provider.kind === "official-subscription" && (provider.tool || "codex") === "antigravity") {
+    return "先获取该账号可用的 Gemini 模型，再发送一条真实消息验证（消耗少量额度）";
+  }
+  if (provider.kind === "official-subscription") {
+    return "先实时获取 ChatGPT 后端的模型清单，再发送一条真实消息验证（消耗少量额度）";
+  }
+  return "先获取该接口的模型清单（同时验证连通），再发送一条真实消息验证（消耗少量额度）";
+}
+
+function chatProbeUnsupportedNote(provider) {
+  if ((provider.tool || "codex") === "claude") {
+    return "Claude 暂不提供对话测试（避免消耗 Pro 额度）；可用上方「测试连通」验证凭据与额度接口。";
+  }
+  return "该订阅暂无公开的对话接口；可用上方「测试连通」验证凭据与额度接口。";
+}
+
 function renderChatProbeCard(provider) {
-  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") return "";  const probe = state.chatProbe || {};
+  if (provider.kind === "balance" || provider.kind === "manual") return "";
+  if (provider.kind === "official-subscription" && !["codex", "antigravity"].includes(provider.tool || "codex")) {
+    return `
+      <div class="chat-probe-card is-unsupported">
+        <div class="chat-probe-head">
+          <strong>模型与对话测试</strong>
+          <span>${escapeHtml(chatProbeUnsupportedNote(provider))}</span>
+        </div>
+      </div>
+    `;
+  }
+  const probe = state.chatProbe || {};
   const active = probe.providerId === provider.id;
   const models = (active && probe.models) || [];
-  const modelsLoading = active && probe.modelsLoading;
+  const modelsLoading = Boolean(active && probe.modelsLoading);
   const selectedModel = (active && probe.selectedModel) || "";
   const prompt = (active && probe.prompt) || "hi";
   const status = (active && probe.status) || "idle";
   const streamingText = (active && probe.streamingText) || "";
   const meta = active && probe.meta;
   const error = active && probe.error;
+  const fetchMeta = active && probe.fetchMeta;
+  const fetchError = active && probe.fetchError;
   const busy = status === "loading" || status === "streaming";
 
-  let modelOptions;
-  if (models.length) {
-    modelOptions = models
-      .map((m) => `<option value="${escapeAttr(m.slug)}"${m.slug === selectedModel ? " selected" : ""}>${escapeHtml(m.label)}</option>`)
-      .join("");
-  } else {
-    modelOptions = `<option value="">${modelsLoading ? "加载模型中…" : "点击加载模型清单"}</option>`;
-  }
+  const modelOptions = models.map((m) => [m.id ?? m.slug, m.label || m.id || m.slug]);
+  const modelSelect = renderCustomSelect(
+    "chat-model",
+    selectedModel,
+    modelOptions,
+    "",
+    modelsLoading ? "获取模型中…" : "先获取模型",
+  );
 
-  const sendLabel = busy ? "发送中…" : (status === "idle" && !streamingText ? "发送 hi" : "重新发送");
+  const sendDisabled = busy || !selectedModel;
+  const sendLabel = busy ? "发送中…" : (status === "idle" && !streamingText ? `发送 ${prompt || "hi"}` : "重新发送");
   const replyBody = streamingText
     ? escapeHtml(streamingText)
-    : `<span class="chat-reply-placeholder">${busy ? "等待回复…" : "点击「发送」后会在这里显示模型回复"}</span>`;
+    : `<span class="chat-reply-placeholder">${busy ? "等待回复…" : "获取模型并选择后，点击「发送」会在这里显示模型回复"}</span>`;
+
+  let fetchLine = "";
+  if (fetchError) {
+    fetchLine = `<div class="chat-meta is-error"><strong>获取模型失败：</strong>${escapeHtml(fetchError)}</div>`;
+  } else if (fetchMeta) {
+    const parts = [`已获取 ${fetchMeta.count} 个模型`];
+    if (fetchMeta.latencyMs != null) parts.push(`${fetchMeta.latencyMs}ms`);
+    parts.push(fetchMeta.source === "live" ? "在线" : "本地缓存");
+    if (fetchMeta.note) parts.push(fetchMeta.note);
+    fetchLine = `<div class="chat-meta">${parts.map(escapeHtml).join(" · ")}</div>`;
+  }
 
   return `
     <div class="chat-probe-card">
       <div class="chat-probe-head">
-        <strong>对话探测</strong>
-        <span>实际向 ChatGPT 后端发送一条消息，验证模型可回复（消耗少量额度）</span>
+        <strong>模型与对话测试</strong>
+        <span>${escapeHtml(chatProbeHint(provider))}</span>
       </div>
       <div class="chat-probe-controls">
-        <select class="chat-model-select" data-action="select-chat-model" ${busy ? "disabled" : ""} aria-label="选择测试模型">
-          ${modelOptions}
-        </select>
-        ${!models.length && !modelsLoading ? `<button class="btn" data-action="load-chat-models" ${busy ? "disabled" : ""}>加载模型</button>` : ""}
+        <div class="chat-model-select">${modelSelect}</div>
+        <button class="btn" data-action="load-chat-models" ${busy || modelsLoading ? "disabled" : ""}>${modelsLoading ? "获取中…" : models.length ? "重新获取" : "获取模型"}</button>
         <input class="chat-prompt-input" data-action="edit-chat-prompt" value="${escapeAttr(prompt)}" placeholder="测试消息（默认 hi）" ${busy ? "disabled" : ""} aria-label="测试消息" />
-        <button class="btn primary" data-action="send-chat-probe" ${busy ? "disabled" : ""}>${escapeHtml(sendLabel)}</button>
+        <button class="btn primary" data-action="send-chat-probe" ${sendDisabled ? "disabled" : ""}>${escapeHtml(sendLabel)}</button>
       </div>
+      ${fetchLine}
       <div class="chat-reply-area" data-role="chat-reply">${replyBody}${status === "streaming" ? '<span class="chat-cursor">▋</span>' : ""}</div>
       ${(meta || error) ? `<div class="chat-meta ${error ? "is-error" : ""}">${error
         ? `<strong>失败：</strong>${escapeHtml(error)}`
@@ -1461,15 +1508,15 @@ function templateCredentialLines(template) {
   return lines;
 }
 
-function renderCustomSelect(field, value, options, labelId = "") {
+function renderCustomSelect(field, value, options, labelId = "", placeholder = "请选择") {
   const open = state.openDropdown === field;
   const closing = state.closingDropdown === field;
   const selected = options.find(([optionValue]) => optionValue === value) || options[0];
   const listId = `provider-${field}-options`;
   return `
     <div class="custom-select ${open ? "is-open" : ""} ${closing ? "is-closing" : ""}" data-field="${escapeAttr(field)}" data-open="${open ? "true" : "false"}">
-      <button class="custom-select-trigger" type="button" data-action="toggle-dropdown" data-field="${escapeAttr(field)}" aria-haspopup="listbox" aria-controls="${listId}" aria-labelledby="${escapeAttr(labelId)}" aria-expanded="${open ? "true" : "false"}">
-        <span>${escapeHtml(selected?.[1] || value || "请选择")}</span>
+      <button class="custom-select-trigger" type="button" data-action="toggle-dropdown" data-field="${escapeAttr(field)}" ${options.length ? "" : "disabled"} aria-haspopup="listbox" aria-controls="${listId}" aria-labelledby="${escapeAttr(labelId)}" aria-expanded="${open ? "true" : "false"}">
+        <span class="${selected ? "" : "is-placeholder"}">${escapeHtml(selected?.[1] || value || placeholder)}</span>
         <svg class="select-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>
       </button>
       <div id="${listId}" class="custom-select-options" role="listbox" aria-label="${escapeAttr(selected?.[1] || field)}">
@@ -1477,7 +1524,7 @@ function renderCustomSelect(field, value, options, labelId = "") {
           .map(
             ([optionValue, label]) => `
               <button id="${listId}-${escapeAttr(optionValue)}" class="custom-select-option ${optionValue === value ? "is-selected" : ""}" type="button" role="option" aria-selected="${optionValue === value ? "true" : "false"}" data-action="select-option" data-field="${escapeAttr(field)}" data-value="${escapeAttr(optionValue)}">
-                ${escapeHtml(label)}
+                <span>${escapeHtml(label)}</span>
               </button>
             `,
           )
@@ -2041,6 +2088,12 @@ function updateSelectedFromField(field, shouldRender) {
 }
 
 function updateSelectedField(field, rawValue, shouldRender) {
+  // 模型下拉属于「模型与对话测试」卡片，不写供应商草稿、不产生未保存标记。
+  if (field === "chat-model") {
+    state.chatProbe.selectedModel = String(rawValue || "");
+    if (shouldRender) render();
+    return;
+  }
   const provider = selectedProvider();
   if (!provider) return;
   const oldId = provider.id;
@@ -2220,7 +2273,9 @@ async function runCodexConnectionTest(button) {
   state.statusTone = "loading";
   updateStatusText();
   try {
-    const result = await window.codingPlanBar.testCodexConnection(provider.id);
+    const result = typeof window.codingPlanBar.testQuota === "function"
+      ? await window.codingPlanBar.testQuota(provider.id)
+      : await window.codingPlanBar.testCodexConnection(provider.id);
     state.testCodexResult = { providerId: provider.id, result };
     refreshSelectedAccountDetail(provider.id);
     if (result.ok) {
@@ -2252,9 +2307,23 @@ function bindChatProbeEvents(scope) {
   if (!provider) return;
   ensureChatProbeForProvider(provider);
 
-  const modelSelect = scope.querySelector("[data-action='select-chat-model']");
-  modelSelect?.addEventListener("change", () => {
-    state.chatProbe.selectedModel = modelSelect.value;
+  scope.querySelectorAll("[data-action='toggle-dropdown']").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (state.openDropdown === button.dataset.field) {
+        closeDropdown({ restoreFocus: true });
+        return;
+      }
+      openDropdown(button.dataset.field);
+    });
+    button.addEventListener("keydown", (event) => handleDropdownTriggerKeydown(event, button));
+  });
+  scope.querySelectorAll("[data-action='select-option']").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectDropdownOption(button);
+    });
+    button.addEventListener("keydown", (event) => handleDropdownOptionKeydown(event, button));
   });
 
   const promptInput = scope.querySelector("[data-action='edit-chat-prompt']");
@@ -2273,43 +2342,81 @@ function bindChatProbeEvents(scope) {
 
 function ensureChatProbeForProvider(provider) {
   if (state.chatProbe.providerId !== provider.id) {
+    const cached = state.chatModelsCache[provider.id];
     state.chatProbe = {
       providerId: provider.id,
-      models: state.chatProbe.models,
+      models: cached?.models || [],
       modelsLoading: false,
-      modelsLoaded: state.chatProbe.modelsLoaded,
-      selectedModel: "",
+      modelsLoaded: Boolean(cached?.models?.length),
+      selectedModel: cached?.selectedModel || "",
       prompt: "hi",
       status: "idle",
       streamingText: "",
       meta: null,
       error: null,
+      fetchMeta: cached?.fetchMeta || null,
+      fetchError: cached?.fetchError || null,
     };
-  }
-  if (!state.chatProbe.modelsLoaded && !state.chatProbe.modelsLoading) {
-    loadChatProbeModels(provider);
   }
 }
 
 async function loadChatProbeModels(provider) {
+  if (!provider || typeof window.codingPlanBar.listModels !== "function") return;
+  ensureChatProbeForProvider(provider);
   state.chatProbe.modelsLoading = true;
-  state.chatProbe.providerId = provider.id;
+  state.chatProbe.fetchError = null;
   patchChatProbeCard(provider);
   try {
-    const models = await window.codingPlanBar.listCodexModels();
-    state.chatProbe.models = Array.isArray(models) ? models : [];
-    state.chatProbe.modelsLoaded = true;
-    if (!state.chatProbe.selectedModel && state.chatProbe.models.length) {
-      const preferred = ["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"];
-      const found = preferred.map((s) => state.chatProbe.models.find((m) => m.slug === s)).find(Boolean);
-      state.chatProbe.selectedModel = (found && found.slug) || state.chatProbe.models[0].slug;
+    const result = await window.codingPlanBar.listModels(provider.id);
+    if (state.chatProbe.providerId !== provider.id) return;
+    const models = Array.isArray(result?.models) ? result.models : [];
+    if (result?.ok && models.length) {
+      state.chatProbe.models = models;
+      state.chatProbe.modelsLoaded = true;
+      state.chatProbe.fetchMeta = {
+        count: models.length,
+        latencyMs: result.latencyMs ?? null,
+        source: result.source || "live",
+        note: result.note || null,
+      };
+      if (!state.chatProbe.selectedModel) {
+        state.chatProbe.selectedModel = pickDefaultChatModel(provider, models);
+      }
+      state.chatModelsCache[provider.id] = {
+        models,
+        selectedModel: state.chatProbe.selectedModel,
+        fetchMeta: state.chatProbe.fetchMeta,
+        fetchError: null,
+      };
+    } else {
+      state.chatProbe.fetchError = result?.error || "没有获取到模型";
+      state.chatModelsCache[provider.id] = { models: [], fetchMeta: null, fetchError: state.chatProbe.fetchError };
     }
   } catch (error) {
-    state.chatProbe.error = `加载模型失败：${String(error?.message || error)}`;
+    if (state.chatProbe.providerId !== provider.id) return;
+    state.chatProbe.fetchError = String(error?.message || error);
   } finally {
-    state.chatProbe.modelsLoading = false;
-    patchChatProbeCard(provider);
+    if (state.chatProbe.providerId === provider.id) {
+      state.chatProbe.modelsLoading = false;
+      patchChatProbeCard(provider);
+    }
   }
+}
+
+function pickDefaultChatModel(provider, models) {
+  if (!models.length) return "";
+  if (provider.kind === "official-subscription" && (provider.tool || "codex") === "codex") {
+    const preferred = ["gpt-5.4-nano", "gpt-5.4-mini", "gpt-5.4"];
+    for (const slug of preferred) {
+      const found = models.find((m) => (m.id ?? m.slug) === slug);
+      if (found) return found.id ?? found.slug;
+    }
+  }
+  if (provider.kind === "official-subscription" && (provider.tool || "codex") === "antigravity") {
+    const flash = models.find((m) => /flash/i.test(m.id ?? m.slug ?? ""));
+    if (flash) return flash.id ?? flash.slug;
+  }
+  return models[0].id ?? models[0].slug;
 }
 
 async function runChatProbe(provider) {
@@ -2317,16 +2424,21 @@ async function runChatProbe(provider) {
   ensureChatProbeForProvider(provider);
   const probe = state.chatProbe;
   if (probe.status === "loading" || probe.status === "streaming") return;
+  if (!probe.selectedModel) {
+    probe.fetchError = probe.fetchError || "请先点击「获取模型」并选择一个模型";
+    patchChatProbeCard(provider);
+    return;
+  }
 
   probe.status = "loading";
   probe.streamingText = "";
   probe.meta = null;
   probe.error = null;
   patchChatProbeCard(provider);
-  updateStatusTextForChat("正在发送对话探测…", "loading", false);
+  updateStatusTextForChat("正在发送对话测试…", "loading", false);
 
   try {
-    const result = await window.codingPlanBar.probeCodexChat({
+    const result = await window.codingPlanBar.probeChat({
       provider: provider.id,
       model: probe.selectedModel,
       prompt: probe.prompt,
@@ -2871,7 +2983,11 @@ function openDropdown(field) {
   state.openDropdown = field;
   state.closingDropdown = null;
   const selected = select.querySelector(".custom-select-option.is-selected") || select.querySelector(".custom-select-option");
-  selected?.focus();
+  // 等样式/布局应用后再聚焦，确保焦点与键盘导航落进选项。
+  requestAnimationFrame(() => {
+    selected?.focus();
+    selected?.scrollIntoView({ block: "nearest" });
+  });
 }
 
 function closeDropdown(options = {}) {
@@ -2945,6 +3061,7 @@ function handleDropdownOptionKeydown(event, option) {
   if (!target) return;
   event.preventDefault();
   target.focus();
+  target.scrollIntoView({ block: "nearest" });
 }
 
 function dropdownOptions(field) {

@@ -1679,6 +1679,73 @@ assert.ok(parseAntigravityQuota({}, null, antigravityNow).error);
 assert.strictEqual(parseAntigravityQuota({ models: { "chat_x": { quotaInfo: { remainingFraction: 1, resetTime: "2026-08-23T12:00:00Z" } } } }, null, antigravityNow).tiers.length, 0);
 assert(providerTemplates().some((template) => template.id === "antigravity"));
 
+// ===== 统一「获取模型 + 对话测试」传输层（provider-chat） =====
+const {
+  chatTargets,
+  parseCodexModelsResponse,
+  parseOpenAiModelList,
+} = require("../src/provider-chat");
+const {
+  extractAntigravityModelIds,
+  antigravityChatRequestBody,
+  parseAntigravityChatResponse,
+} = require("../src/providers");
+
+// 每家 coding-plan 的模型/对话端点（与 detectCodingPlanProvider 的识别一一对应）。
+const glmTargets = chatTargets({ baseUrl: "https://open.bigmodel.cn" }, "zhipu");
+assert.strictEqual(glmTargets.modelsUrls[0], "https://open.bigmodel.cn/api/coding/paas/v4/models");
+assert.strictEqual(glmTargets.chatUrl, "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions");
+assert.strictEqual(chatTargets({ baseUrl: "https://api.z.ai/api/coding/paas/v4" }, "zhipu").chatUrl, "https://api.z.ai/api/coding/paas/v4/chat/completions");
+assert.strictEqual(chatTargets({ baseUrl: "https://api.kimi.com/coding/" }, "kimi").chatUrl, "https://api.kimi.com/coding/v1/chat/completions");
+assert.strictEqual(chatTargets({ baseUrl: "https://bailian.console.aliyun.com" }, "qwen").chatUrl, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions");
+assert.strictEqual(chatTargets({ baseUrl: "https://api.minimaxi.com" }, "minimax-cn").chatUrl, "https://api.minimaxi.com/v1/chat/completions");
+assert.strictEqual(chatTargets({ baseUrl: "https://api.minimax.io" }, "minimax-en").chatUrl, "https://api.minimax.io/v1/chat/completions");
+assert.strictEqual(chatTargets({ baseUrl: "https://zenmux.example/v1" }, "zenmux").chatUrl, "https://zenmux.example/v1/chat/completions");
+const genericTargets = chatTargets({ baseUrl: "https://relay.example.com" }, null);
+assert.ok(genericTargets.modelsUrls.includes("https://relay.example.com/v1/models"));
+assert.strictEqual(genericTargets.chatUrl, "https://relay.example.com/v1/chat/completions");
+assert.strictEqual(chatTargets({ baseUrl: "" }, null), null);
+
+// Codex 实时模型列表解析：{models:[...]} 与 {data:[...]} 两种形状，
+// 隐藏模型被过滤、按 priority 排序。
+assert.deepStrictEqual(
+  parseCodexModelsResponse({ models: [
+    { slug: "gpt-5.4", name: "GPT 5.4", priority: 2 },
+    { slug: "gpt-5.4-nano", priority: 0 },
+    { slug: "gpt-hidden", visibility: "hide", priority: -1 },
+  ] }).map((m) => m.id),
+  ["gpt-5.4-nano", "gpt-5.4"],
+);
+assert.deepStrictEqual(parseCodexModelsResponse({ data: ["m-a", "m-b"] }).map((m) => m.id), ["m-a", "m-b"]);
+assert.deepStrictEqual(parseCodexModelsResponse({}), []);
+assert.deepStrictEqual(parseCodexModelsResponse(null), []);
+assert.deepStrictEqual(parseOpenAiModelList({ data: [{ id: "glm-5" }, { model: "glm-4.7" }] }).map((m) => m.id), ["glm-4.7", "glm-5"]);
+
+// Antigravity：模型列表只保留 gemini-*；对话请求体结构（外层 request 包裹）
+// 与响应解析（response.candidates[].content.parts[].text）。
+assert.deepStrictEqual(
+  extractAntigravityModelIds({ models: {
+    "gemini-3-pro": { modelProvider: "MODEL_PROVIDER_GOOGLE" },
+    "chat_20706": {},
+    "gemini-2.5-flash": {},
+    "tab_jump_preview": {},
+  } }),
+  ["gemini-2.5-flash", "gemini-3-pro"],
+);
+const agBody = antigravityChatRequestBody("proj-1", "gemini-3-pro", "hi");
+assert.strictEqual(agBody.project, "proj-1");
+assert.strictEqual(agBody.model, "gemini-3-pro");
+assert.strictEqual(agBody.request.contents[0].role, "user");
+assert.strictEqual(agBody.request.contents[0].parts[0].text, "hi");
+assert.ok(!("contents" in agBody) && !("content" in agBody));
+assert.strictEqual(antigravityChatRequestBody(null, "m", "hi").project, undefined);
+assert.strictEqual(
+  parseAntigravityChatResponse({ response: { candidates: [{ content: { parts: [{ text: "你好" }, { text: "！", thoughtSignature: "x" }] } }] } }),
+  "你好！",
+);
+assert.strictEqual(parseAntigravityChatResponse({ response: {} }), "");
+assert.strictEqual(parseAntigravityChatResponse(null), "");
+
 
 // ===== Notifications config normalization =====
 assert.deepStrictEqual(normalizeConfig({ refreshIntervalSeconds: 300 }).notifications, {

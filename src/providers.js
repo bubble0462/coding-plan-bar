@@ -1190,6 +1190,172 @@ async function queryAntigravityQuota(provider) {
   return okSubscription("antigravity", parsed.tiers, parsed.planName);
 }
 
+// 拿到可复用的 Antigravity 会话：有效访问令牌 + 统一请求头 + 项目 ID。
+// 供额度查询、模型列表与对话测试共用；失败时抛出 {status, message}。
+async function antigravitySession(provider) {
+  const credentials = readAntigravityCredentials(provider);
+  if (!credentials.credential) {
+    throw { status: credentials.status || "not_found", message: credentials.message || "缺少 Antigravity 凭证" };
+  }
+  let accessToken;
+  try {
+    accessToken = await getAntigravityAccessToken(credentials.credential);
+  } catch (error) {
+    throw {
+      status: error?.status === "expired" ? "expired" : "valid",
+      message: error?.message || "Antigravity 访问令牌不可用",
+    };
+  }
+
+  const headers = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    "User-Agent": "antigravity/1.15.8 windows/amd64",
+  };
+  const load = await fetchJson(`${ANTIGRAVITY_API_BASE}/v1internal:loadCodeAssist`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ metadata: ANTIGRAVITY_METADATA }),
+    timeoutMs: 12000,
+    retries: 1,
+  });
+  if (load.status === 401 || load.status === 403) {
+    if (!credentials.credential.refreshToken) {
+      throw { status: "expired", message: `Antigravity 访问令牌无效或已过期 (HTTP ${load.status})` };
+    }
+    const cacheKey = `rt:${crypto.createHash("sha256").update(credentials.credential.refreshToken).digest("hex")}`;
+    antigravityTokenCache.delete(cacheKey);
+    try {
+      accessToken = await getAntigravityAccessToken({ ...credentials.credential, accessToken: null, expiresAt: null });
+    } catch (error) {
+      throw {
+        status: error?.status === "expired" ? "expired" : "valid",
+        message: error?.message || "Antigravity 访问令牌不可用",
+      };
+    }
+    headers.Authorization = `Bearer ${accessToken}`;
+    const retried = await fetchJson(`${ANTIGRAVITY_API_BASE}/v1internal:loadCodeAssist`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ metadata: ANTIGRAVITY_METADATA }),
+      timeoutMs: 12000,
+      retries: 0,
+    });
+    if (retried.status === 401 || retried.status === 403) {
+      throw { status: "expired", message: `Antigravity 凭证无效或已过期 (HTTP ${retried.status})` };
+    }
+    if (!retried.ok) {
+      throw { status: "valid", message: `Antigravity 接口错误 (HTTP ${retried.status}): ${safeResponseExcerpt(retried.text)}` };
+    }
+    load.json = retried.json;
+  } else if (!load.ok) {
+    throw { status: "valid", message: `Antigravity 接口错误 (HTTP ${load.status}): ${safeResponseExcerpt(load.text)}` };
+  }
+
+  const projectRaw = load.json?.cloudaicompanionProject;
+  const project = typeof projectRaw === "string" && projectRaw.trim()
+    ? projectRaw.trim()
+    : typeof projectRaw === "object" && projectRaw && typeof projectRaw.id === "string"
+      ? projectRaw.id
+      : credentials.credential.projectId || null;
+  return { accessToken, headers, project };
+}
+
+// fetchAvailableModels 的模型 map key 即可对话的模型 ID。与额度展示保持
+// 一致，只列出 gemini-* 模型（额度按 Gemini 池计量）。
+function extractAntigravityModelIds(modelsJson) {
+  const entries = modelsJson?.models && typeof modelsJson.models === "object"
+    ? Object.entries(modelsJson.models)
+    : [];
+  return entries
+    .filter(([id, info]) => /^gemini/i.test(id) && (info == null || info?.modelProvider !== "MODEL_PROVIDER_UNSUPPORTED"))
+    .map(([id]) => id)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+async function listAntigravityModels(provider) {
+  const startedAt = Date.now();
+  try {
+    const session = await antigravitySession(provider);
+    const res = await fetchJson(`${ANTIGRAVITY_API_BASE}/v1internal:fetchAvailableModels`, {
+      method: "POST",
+      headers: session.headers,
+      body: JSON.stringify(session.project ? { project: session.project } : {}),
+      timeoutMs: 12000,
+      retries: 1,
+    });
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, models: [], httpStatus: res.status, error: `Antigravity 凭证无效或已过期 (HTTP ${res.status})` };
+    }
+    if (!res.ok) {
+      return { ok: false, models: [], httpStatus: res.status, error: `Antigravity 接口错误 (HTTP ${res.status}): ${safeResponseExcerpt(res.text)}` };
+    }
+    const ids = extractAntigravityModelIds(res.json);
+    if (!ids.length) {
+      return { ok: false, models: [], httpStatus: res.status, error: "该账号没有可用的 Gemini 模型" };
+    }
+    return {
+      ok: true,
+      models: ids.map((id) => ({ id, label: id })),
+      httpStatus: res.status,
+      latencyMs: Date.now() - startedAt,
+      source: "live",
+    };
+  } catch (error) {
+    return { ok: false, models: [], error: error?.message || String(error) };
+  }
+}
+
+// v1internal:generateContent 的请求体（结构见社区逆向规范，已实测：
+// 错误结构会返回 400，正确结构直接进入额度校验）。
+function antigravityChatRequestBody(project, model, prompt) {
+  return {
+    ...(project ? { project } : {}),
+    model,
+    request: {
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 1024 },
+    },
+    userAgent: "antigravity",
+    requestId: `cpb-${Date.now().toString(36)}`,
+  };
+}
+
+function parseAntigravityChatResponse(json) {
+  const parts = json?.response?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return "";
+  return parts.map((part) => (typeof part?.text === "string" ? part.text : "")).join("");
+}
+
+async function probeAntigravityChat(provider, { model, prompt }) {
+  const session = await antigravitySession(provider);
+  const res = await fetchJson(`${ANTIGRAVITY_API_BASE}/v1internal:generateContent`, {
+    method: "POST",
+    headers: session.headers,
+    body: JSON.stringify(antigravityChatRequestBody(session.project, model, prompt)),
+    timeoutMs: 30000,
+    retries: 0,
+  });
+  if (res.status === 429) {
+    return { ok: false, httpStatus: 429, error: "额度窗口已用尽（RESOURCE_EXHAUSTED），请等窗口重置后再试" };
+  }
+  if (res.status === 401 || res.status === 403) {
+    return { ok: false, httpStatus: res.status, error: `凭证无效或已过期 (HTTP ${res.status})` };
+  }
+  if (res.status === 404) {
+    return { ok: false, httpStatus: 404, error: `模型不可用（HTTP 404）：${model}` };
+  }
+  if (!res.ok) {
+    return { ok: false, httpStatus: res.status, error: `Antigravity 接口错误 (HTTP ${res.status}): ${safeResponseExcerpt(res.text)}` };
+  }
+  const text = parseAntigravityChatResponse(res.json);
+  if (!text) {
+    return { ok: false, httpStatus: res.status, error: "模型没有返回文本内容" };
+  }
+  return { ok: true, text, httpStatus: res.status, model: res.json?.response?.modelVersion || model };
+}
+
 
 async function queryZhipuCoding(baseUrl, apiKey) {
   const quotaBase = baseUrl.toLowerCase().includes("bigmodel.cn")
@@ -2264,6 +2430,112 @@ async function testCodexConnection(provider) {
   };
 }
 
+// 官方订阅连通测试的统一入口：codex 走原有的富诊断实现，claude/grok/
+// antigravity 复用各自的额度查询（全部只读），映射到相同的结果结构。
+async function testOfficialSubscription(provider) {
+  const tool = provider?.kind === "official-subscription" ? (provider.tool || "codex") : null;
+  if (!tool) {
+    return {
+      ok: false,
+      stage: "credentials",
+      httpStatus: null,
+      latencyMs: 0,
+      credentialStatus: "not_found",
+      tiers: [],
+      resetCredits: null,
+      failure: classifyFailure("仅支持官方订阅供应商", null),
+      message: "仅支持官方订阅供应商",
+      testedAt: new Date().toISOString(),
+    };
+  }
+  if (tool === "codex") return testCodexConnection(provider);
+
+  const testedAt = new Date().toISOString();
+  const startedAt = Date.now();
+  let result = null;
+  try {
+    if (tool === "claude") {
+      const credentials = readClaudeCredentials(provider);
+      if (credentials.status !== "valid" && !credentials.accessToken) {
+        return {
+          ok: false,
+          stage: "credentials",
+          httpStatus: null,
+          latencyMs: 0,
+          credentialStatus: credentials.status,
+          tiers: [],
+          resetCredits: null,
+          failure: classifyFailure(credentials.message || credentials.status, null),
+          message: credentials.message || "Claude 凭据不可用",
+          testedAt,
+        };
+      }
+      result = await queryClaudeQuota(credentials.accessToken);
+    } else if (tool === "grok") {
+      result = await queryGrokQuota(readGrokCredentials(provider));
+    } else if (tool === "antigravity") {
+      result = await queryAntigravityQuota(provider);
+    } else {
+      return {
+        ok: false,
+        stage: "credentials",
+        httpStatus: null,
+        latencyMs: 0,
+        credentialStatus: "not_found",
+        tiers: [],
+        resetCredits: null,
+        failure: classifyFailure(`不支持的官方工具：${tool}`, null),
+        message: `不支持的官方工具：${tool}`,
+        testedAt,
+      };
+    }
+  } catch (error) {
+    const message = String(error?.message || error);
+    return {
+      ok: false,
+      stage: "network",
+      httpStatus: null,
+      latencyMs: Date.now() - startedAt,
+      credentialStatus: "valid",
+      tiers: [],
+      resetCredits: null,
+      failure: classifyFailure(message),
+      message,
+      testedAt,
+    };
+  }
+
+  const latencyMs = Date.now() - startedAt;
+  if (result && result.success) {
+    return {
+      ok: true,
+      stage: "parsed",
+      httpStatus: 200,
+      latencyMs,
+      credentialStatus: result.credentialStatus || "valid",
+      tiers: result.tiers || [],
+      resetCredits: result.resetCredits || null,
+      failure: null,
+      message: result.credentialMessage || null,
+      testedAt,
+    };
+  }
+  const message = (result && (result.error || result.credentialMessage)) || "查询失败";
+  const failure = classifyFailure(message, null);
+  return {
+    ok: false,
+    stage: "http",
+    httpStatus: null,
+    latencyMs,
+    credentialStatus: (result && result.credentialStatus) || "valid",
+    tiers: [],
+    resetCredits: null,
+    failure,
+    message,
+    testedAt,
+  };
+}
+
 module.exports = {
   loadConfig,
   normalizeProviderConfig,
@@ -2290,6 +2562,13 @@ module.exports = {
   parseAntigravityCredential,
   parseAntigravityQuota,
   readAntigravityCredentials,
+  detectCodingPlanProvider,
+  extractAntigravityModelIds,
+  listAntigravityModels,
+  antigravityChatRequestBody,
+  parseAntigravityChatResponse,
+  probeAntigravityChat,
   resolveApiKey,
   testCodexConnection,
+  testOfficialSubscription,
 };

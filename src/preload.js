@@ -63,11 +63,14 @@ contextBridge.exposeInMainWorld("codingPlanBar", {
   testCodexConnection(providerOrId) {
     return ipcRenderer.invoke("quota:test-codex", providerOrId);
   },
-  listCodexModels() {
-    return ipcRenderer.invoke("chat:list-codex-models");
+  testQuota(providerOrId) {
+    return ipcRenderer.invoke("provider:test-quota", providerOrId);
   },
-  probeCodexChat(args) {
-    return ipcRenderer.invoke("chat:probe-codex", args);
+  listModels(providerOrId) {
+    return ipcRenderer.invoke("chat:list-models", providerOrId);
+  },
+  probeChat(args) {
+    return ipcRenderer.invoke("chat:probe", args);
   },
   probeEndpoint(provider) {
     return ipcRenderer.invoke("provider:probe-endpoint", { provider });

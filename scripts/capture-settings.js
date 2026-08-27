@@ -81,6 +81,25 @@ const sampleConfig = {
       apiKeyEnv: "DEEPSEEK_API_KEY",
       enabled: true,
     },
+    // 统一「模型与对话测试」卡片只在 --probe 模式需要 coding-plan 与
+    // antigravity 样例；其它模式保持原有供应商集合（顺序断言不受影响）。
+    ...(showProbe ? [
+      {
+        id: "glm",
+        name: "Zhipu GLM",
+        kind: "coding-plan",
+        baseUrl: "https://open.bigmodel.cn",
+        apiKey: "capture-glm-key",
+        enabled: true,
+      },
+      {
+        id: "antigravity",
+        name: "Agy",
+        kind: "official-subscription",
+        tool: "antigravity",
+        enabled: true,
+      },
+    ] : []),
     ...(showHealth ? [{
       id: "quota-exhausted",
       name: "额度已用尽账号",
@@ -277,28 +296,46 @@ async function main() {
   ipcMain.handle("quota:refresh", () => {});
   ipcMain.handle("usage:get-codex-agent", () => mockCodexAgentUsage);
   ipcMain.handle("usage:get-agent", () => mockAgentUsageEnvelope);
-  // Must match chat-probe listCodexModels shape ({ slug, label }[]).
-  // An empty array used to leave the probe card in a reload loop during capture.
+  // Must match provider-chat listModels shape ({ ok, models: [{id,label}] }).
+  // The chat card no longer auto-loads models — the capture flow clicks 获取模型.
   const mockCodexModels = [
-    { slug: "gpt-5.4-nano", label: "gpt-5.4-nano" },
-    { slug: "gpt-5.4-mini", label: "gpt-5.4-mini" },
-    { slug: "gpt-5.4", label: "gpt-5.4" },
-    { slug: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+    { id: "gpt-5.4-nano", label: "gpt-5.4-nano" },
+    { id: "gpt-5.4-mini", label: "gpt-5.4-mini" },
+    { id: "gpt-5.4", label: "gpt-5.4" },
+    { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
   ];
-  for (const channel of ["chat:list-codex-models", "chat:probe-codex"]) {
+  for (const channel of ["chat:list-models", "chat:probe", "chat:list-codex-models", "chat:probe-codex", "provider:test-quota"]) {
     try {
       ipcMain.removeHandler(channel);
     } catch (_error) {
       // Channel may not exist yet on first registration.
     }
   }
-  ipcMain.handle("chat:list-codex-models", () => mockCodexModels.slice());
-  ipcMain.handle("chat:probe-codex", () => ({
+  ipcMain.handle("chat:list-models", () => ({
+    ok: true,
+    models: mockCodexModels.slice(),
+    httpStatus: 200,
+    latencyMs: 321,
+    source: "live",
+  }));
+  ipcMain.handle("chat:probe", () => ({
     ok: true,
     text: "Capture probe reply.",
     latencyMs: 42,
     model: "gpt-5.4-nano",
     httpStatus: 200,
+  }));
+  ipcMain.handle("provider:test-quota", () => ({
+    ok: true,
+    stage: "parsed",
+    httpStatus: 200,
+    latencyMs: 210,
+    credentialStatus: "valid",
+    tiers: [{ name: "five_hour", utilization: 21.5, resetsAt: null }],
+    resetCredits: null,
+    failure: null,
+    message: null,
+    testedAt: new Date().toISOString(),
   }));
   ipcMain.handle("quota:open-config", () => {});
   ipcMain.handle("quota:hide", () => {});
@@ -501,6 +538,109 @@ async function main() {
     if (!probeResult.url.includes("api.deepseek.com")) {
       throw new Error(`Endpoint probe url missing: ${JSON.stringify(probeResult.url)}`);
     }
+
+    // ===== 统一「模型与对话测试」卡片 =====
+    // 1) Codex 官方订阅：手动获取模型 → 下拉渲染 → 对话测试。
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.provider-item[data-id="codex"] [data-action="select-provider"]')?.click();
+    `);
+    await wait(220);
+    const codexCardInitial = await window.webContents.executeJavaScript(`(() => {
+      const card = document.querySelector(".editor .chat-probe-card");
+      return {
+        present: Boolean(card),
+        title: card?.querySelector(".chat-probe-head strong")?.textContent || "",
+        loadButton: Boolean(card?.querySelector('[data-action="load-chat-models"]')),
+        sendDisabled: card?.querySelector('[data-action="send-chat-probe"]')?.disabled ?? null,
+        triggerPlaceholder: card?.querySelector(".chat-model-select .custom-select-trigger span")?.textContent || "",
+      };
+    })()`);
+    if (!codexCardInitial.present) throw new Error("Chat probe card missing on codex editor");
+    if (codexCardInitial.title !== "模型与对话测试") throw new Error(`Chat card title wrong: ${codexCardInitial.title}`);
+    if (!codexCardInitial.loadButton) throw new Error("Chat card missing 获取模型 button before fetch");
+    if (!codexCardInitial.sendDisabled) throw new Error("Send button must be disabled before a model is selected");
+    if (!codexCardInitial.triggerPlaceholder.includes("先获取模型")) {
+      throw new Error(`Model trigger placeholder wrong: ${codexCardInitial.triggerPlaceholder}`);
+    }
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.editor [data-action="load-chat-models"]')?.click();
+    `);
+    await wait(300);
+    const afterFetch = await window.webContents.executeJavaScript(`(() => ({
+      fetchLine: document.querySelector(".editor .chat-meta")?.textContent || "",
+      triggerText: document.querySelector(".editor .chat-model-select .custom-select-trigger span")?.textContent || "",
+      sendDisabled: document.querySelector('.editor [data-action="send-chat-probe"]')?.disabled ?? null,
+      optionCount: document.querySelectorAll(".editor .chat-model-select .custom-select-option").length,
+    }))()`);
+    if (!afterFetch.fetchLine.includes("已获取 4 个模型") || !afterFetch.fetchLine.includes("在线")) {
+      throw new Error(`Chat model fetch line wrong: ${JSON.stringify(afterFetch.fetchLine)}`);
+    }
+    if (afterFetch.triggerText !== "gpt-5.4-nano") throw new Error(`Default model not picked: ${afterFetch.triggerText}`);
+    if (afterFetch.sendDisabled) throw new Error("Send button must enable after model fetch");
+    if (afterFetch.optionCount !== 4) throw new Error(`Model dropdown option count wrong: ${afterFetch.optionCount}`);
+    // 打开下拉：玻璃浮层 + 选中态 ✓ + 焦点进入选项（键盘可导航）。
+    // capture 窗口是 showInactive 的，先让 webContents 拿到文档焦点。
+    window.webContents.focus();
+    await wait(60);
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.editor .chat-model-select .custom-select-trigger')?.click();
+    `);
+    await wait(300);
+    const dropdownOpen = await window.webContents.executeJavaScript(`(() => {
+      const select = document.querySelector(".editor .chat-model-select .custom-select");
+      return {
+        open: select?.classList.contains("is-open") || false,
+        options: document.querySelectorAll(".editor .chat-model-select .custom-select-option").length,
+        selected: document.querySelector(".editor .chat-model-select .custom-select-option.is-selected")?.textContent?.trim() || "",
+        focusInside: select ? select.contains(document.activeElement) : false,
+      };
+    })()`);
+    if (!dropdownOpen.open) throw new Error("Model dropdown did not open");
+    if (dropdownOpen.options !== 4) throw new Error(`Open dropdown option count wrong: ${dropdownOpen.options}`);
+    if (dropdownOpen.selected !== "gpt-5.4-nano") throw new Error(`Selected option wrong: ${dropdownOpen.selected}`);
+    if (!dropdownOpen.focusInside) throw new Error("Dropdown open did not move focus into options");
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.editor .chat-model-select .custom-select-trigger')?.click();
+    `);
+    await wait(260);
+    // 发送对话测试：mock 返回 ok。
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.editor [data-action="send-chat-probe"]')?.click();
+    `);
+    await wait(300);
+    const chatDone = await window.webContents.executeJavaScript(`(() => ({
+      meta: Array.from(document.querySelectorAll(".editor .chat-probe-card .chat-meta")).map((n) => n.textContent.trim()).join(" | "),
+    }))()`);
+    if (!chatDone.meta.includes("完成：HTTP 200") || !chatDone.meta.includes("gpt-5.4-nano")) {
+      throw new Error(`Chat probe result meta wrong: ${JSON.stringify(chatDone.meta)}`);
+    }
+
+    // 2) Coding Plan 供应商（GLM）：卡片在、旧「连接测试」卡不再渲染。
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.provider-item[data-id="glm"] [data-action="select-provider"]')?.click();
+    `);
+    await wait(220);
+    const glmCard = await window.webContents.executeJavaScript(`(() => ({
+      chatCard: Boolean(document.querySelector(".editor .chat-probe-card")),
+      endpointCard: Boolean(document.querySelector(".editor .endpoint-probe-card")),
+      loadButton: Boolean(document.querySelector('.editor [data-action="load-chat-models"]')),
+    }))()`);
+    if (!glmCard.chatCard || !glmCard.loadButton) throw new Error("GLM editor missing unified chat card");
+    if (glmCard.endpointCard) throw new Error("Coding-plan editor must not render the old endpoint probe card");
+
+    // 3) Antigravity 订阅：卡片在且提示 Gemini 模型。
+    await window.webContents.executeJavaScript(`
+      document.querySelector('.provider-item[data-id="antigravity"] [data-action="select-provider"]')?.click();
+    `);
+    await wait(220);
+    const agyCard = await window.webContents.executeJavaScript(`(() => ({
+      chatCard: Boolean(document.querySelector(".editor .chat-probe-card")),
+      hint: document.querySelector(".editor .chat-probe-head span")?.textContent || "",
+      testQuotaButton: Boolean(document.querySelector('.editor [data-action="test-codex"]')),
+    }))()`);
+    if (!agyCard.chatCard) throw new Error("Antigravity editor missing unified chat card");
+    if (!agyCard.hint.includes("Gemini")) throw new Error(`Antigravity chat hint wrong: ${agyCard.hint}`);
+    if (!agyCard.testQuotaButton) throw new Error("Antigravity editor missing 测试连通 button");
   }
 
   if (showUpdate) {

@@ -36,11 +36,17 @@ const {
 } = require("./account-importer");
 const { POPUP_WIDTH, computePopupHeight } = require("./layout");
 const { calculatePopupPlacement } = require("./popup-placement");
-const { loadConfig, refreshProviders, testCodexConnection, readCodexCredentials, resolveApiKey } = require("./providers");
+const {
+  loadConfig,
+  refreshProviders,
+  testCodexConnection,
+  resolveApiKey,
+  testOfficialSubscription,
+} = require("./providers");
 const { classifyFailure } = require("./failure-classifier");
 const { probeProviderEndpoint } = require("./endpoint-probe");
 const { SECRET_MASK } = require("./secret-store");
-const { listCodexModels, probeCodexStream } = require("./chat-probe");
+const { listProviderModels, probeProviderChatStream } = require("./provider-chat");
 const { applyProxySettings } = require("./proxy");
 const { collectCodexAgentUsage, collectClaudeAgentUsage } = require("./session-usage");
 const { buildUpdateResult, fetchLatestRelease, downloadAsset } = require("./updater");
@@ -1292,12 +1298,10 @@ function resolveProviderForProbe(providerOrId) {
     ? providerOrId
     : providerOrId?.id;
   if (!id) throw new Error("缺少供应商 ID");
+  // 总是从磁盘重读：渲染进程传来的密文掩码永远不该进入 Authorization 头。
   const config = readConfigFile(configPath);
   const provider = (config.providers || []).find((item) => item.id === id);
-  if (!provider) throw new Error(`找不到供应商：${id}`);
-  if (provider.kind !== "official-subscription" || (provider.tool || "codex") !== "codex") {
-    throw new Error("当前仅支持 Codex 官方订阅账号探测");
-  }
+  if (!provider) throw new Error(`找不到供应商：${id}（新增供应商请先保存）`);
   return provider;
 }
 
@@ -1452,26 +1456,26 @@ async function startApp() {
       };
     }
   });
-  ipcMain.handle("chat:list-codex-models", () => listCodexModels());
-  ipcMain.handle("chat:probe-codex", async (event, { provider, model, prompt }) => {
+  ipcMain.handle("chat:list-models", async (_event, providerOrId) => {
+    try {
+      return await listProviderModels(resolveProviderForProbe(providerOrId));
+    } catch (error) {
+      return { ok: false, models: [], error: String(error?.message || error) };
+    }
+  });
+  ipcMain.handle("chat:probe", async (event, { provider, model, prompt } = {}) => {
     const win = event.sender;
     let resolvedProvider;
     try {
       resolvedProvider = resolveProviderForProbe(provider);
     } catch (error) {
       const message = String(error?.message || error);
-      const failure = classifyFailure(message);
-      return { ok: false, error: message, failure };
-    }
-    const credentials = readCodexCredentials(resolvedProvider);
-    if (credentials.status !== "valid" && !credentials.accessToken) {
-      const failure = classifyFailure(credentials.message || credentials.status, null);
-      return { ok: false, error: credentials.message || failure.label, failure };
+      return { ok: false, error: message, failure: classifyFailure(message) };
     }
     const startedAt = Date.now();
     let fullText = "";
     try {
-      for await (const ev of probeCodexStream({ credentials, model, prompt })) {
+      for await (const ev of probeProviderChatStream(resolvedProvider, { model, prompt })) {
         if (ev.type === "started") {
           win.send("chat:probe-event", { type: "started", httpStatus: ev.httpStatus, model: ev.model });
         } else if (ev.type === "delta") {
@@ -1495,9 +1499,27 @@ async function startApp() {
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       const message = String(error?.message || error);
-      const failure = classifyFailure(message);
       win.send("chat:probe-event", { type: "error", error: message });
-      return { ok: false, error: message, latencyMs, failure };
+      return { ok: false, error: message, latencyMs, failure: classifyFailure(message) };
+    }
+  });
+  ipcMain.handle("provider:test-quota", async (_event, providerOrId) => {
+    try {
+      return await testOfficialSubscription(resolveProviderForProbe(providerOrId));
+    } catch (error) {
+      const message = String(error?.message || error);
+      return {
+        ok: false,
+        stage: "network",
+        httpStatus: null,
+        latencyMs: 0,
+        credentialStatus: "valid",
+        tiers: [],
+        resetCredits: null,
+        failure: classifyFailure(message),
+        message,
+        testedAt: new Date().toISOString(),
+      };
     }
   });
   ipcMain.handle("config:get", getConfigForSettings);

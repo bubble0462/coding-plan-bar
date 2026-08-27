@@ -25,6 +25,7 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Windows notifications when a quota tier crosses 80%/95%, when weekly windows reset, or when a provider query fails (toggleable in Settings).
 - Adaptive refresh: polls faster near quota resets or while a local coding agent is running, and stays low-frequency otherwise.
 - The add-provider dialog is a split selector: grouped template list on the left, credential and environment-variable preview on the right. The editor includes a connection test (connectivity + available model list).
+- Unified model & chat test: Codex, Antigravity and all coding-plan providers can fetch the live model list, then send a real one-shot message to verify the model replies (streamed). The connectivity test covers every official subscription (Codex, Claude, Grok, Antigravity).
 - Only Codex is enabled by default; all other providers are opt-in.
 - Generic `/v1/usage` balance template for compatible relay services.
 - DeepSeek CNY balances are displayed with `￥`.

@@ -2,8 +2,16 @@
 
 ## [0.8.6] - 未发布
 
+### Added
+
+- 全供应商统一的「模型与对话测试」卡片：Codex、Antigravity 与全部 Coding Plan（智谱 GLM、Z.AI、Kimi、Qwen、MiniMax、ZenMux 等）都支持先点击「获取模型」拉取实时模型清单，再选择模型发送一条真实消息做对话测试（流式显示回复）。Antigravity 走 cloudcode-pa 网关（Gemini 模型），Coding Plan 走 OpenAI 兼容接口，各家认证方式自动适配。
+
 ### Changed
 
+- Codex 的模型列表从「本地缓存 + 硬编码兜底」升级为实时请求 ChatGPT 后端（失败时自动回退本地缓存并在结果里注明来源）。
+- 下拉菜单按组件库设计重绘：玻璃拟态浮层（backdrop-blur）、打开时品牌色聚焦环、箭头旋转、悬停色洗底、选中项「✓」勾选、上浮缩放入场，颜色全部走主题变量，浅/深主题自动适配；打开后焦点自动落进选项，↑↓ 环绕导航并把当前项滚动到可视区。
+- Coding Plan 供应商的旧「连接测试」卡片并入统一卡片（获取模型即连通测试）；余额类供应商保留原端点探测；Claude/Grok 订阅显示明确的「暂不支持对话测试」说明（可用「测试连通」验证凭据与额度）。
+- 「测试连通」从 Codex 专属扩展到全部官方订阅（Codex、Claude、Grok、Antigravity），执行一次只读额度查询并显示档位利用率与诊断信息。
 - 「添加供应商」的自定义模板现在明确列出可接入的供应商清单：Coding Plan（智谱 GLM、Z.AI、Kimi、Qwen 百炼、MiniMax、ZenMux）、余额查询（DeepSeek、Moonshot、OpenRouter、硅基流动及兼容 `/v1/usage` 的中转站）与手动额度，均按请求地址自动识别。
 
 ## [0.8.5] - 2026-08-25
