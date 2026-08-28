@@ -256,6 +256,12 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// 解析 CSS 颜色的最大通道值，用于判断某个表面在深色主题下是否仍是浅色。
+function channelOf(color) {
+  const match = /rgba?\((\d+), (\d+), (\d+)/.exec(String(color));
+  return match ? Math.max(Number(match[1]), Number(match[2]), Number(match[3])) : 255;
+}
+
 async function main() {
   ipcMain.handle("config:get", () => ({
     config: sampleConfig,
@@ -362,7 +368,7 @@ async function main() {
     x: showTemplates || showUpdate || showReorder || showImport || showImportClaude || showHealth || showBackup || showUsage ? -2200 : undefined,
     y: showTemplates || showUpdate || showReorder || showImport || showImportClaude || showHealth || showBackup || showUsage ? 80 : undefined,
     frame: true,
-    backgroundColor: darkMode ? "#0f172a" : "#f6f8fb",
+    backgroundColor: darkMode ? "#0c1322" : "#f6f8fb",
     webPreferences: {
       preload: path.join(__dirname, "..", "src", "preload.js"),
       contextIsolation: true,
@@ -1022,9 +1028,37 @@ async function main() {
   }
 
   if (darkMode) {
-    const rootTheme = await window.webContents.executeJavaScript(`document.documentElement.dataset.theme || ''`);
-    if (rootTheme !== "dark") {
-      throw new Error(`Settings dark theme was not applied to root element: ${JSON.stringify(rootTheme)}`);
+    const darkAssertions = await window.webContents.executeJavaScript(`(() => {
+      const root = document.documentElement;
+      const cs = getComputedStyle(root);
+      const channel = (color) => {
+        const match = /rgba?\\((\\d+), (\\d+), (\\d+)/.exec(color);
+        return match ? Math.max(Number(match[1]), Number(match[2]), Number(match[3])) : 255;
+      };
+      const topbar = document.querySelector(".topbar");
+      return {
+        theme: root.dataset.theme || "",
+        surface: cs.getPropertyValue("--surface").trim(),
+        panel: cs.getPropertyValue("--panel").trim(),
+        bg: cs.getPropertyValue("--bg").trim(),
+        bodyBg: getComputedStyle(document.body).backgroundColor,
+        topbarMaxChannel: topbar ? channel(getComputedStyle(topbar).backgroundColor) : 255,
+      };
+    })()`);
+    if (darkAssertions.theme !== "dark") {
+      throw new Error(`Settings dark theme was not applied to root element: ${JSON.stringify(darkAssertions.theme)}`);
+    }
+    if (darkAssertions.surface === darkAssertions.panel || darkAssertions.panel === darkAssertions.bg) {
+      throw new Error(
+        `Settings dark surfaces must form a brightness ladder (bg/panel/surface): ${JSON.stringify(darkAssertions)}`,
+      );
+    }
+    // 深色主题里顶栏玻璃不允许残留白色底。
+    if (darkAssertions.topbarMaxChannel > 80) {
+      throw new Error(`Settings dark topbar still renders a light surface: ${JSON.stringify(darkAssertions)}`);
+    }
+    if (channelOf(darkAssertions.bodyBg) > 80) {
+      throw new Error(`Settings dark window background is not dark: ${JSON.stringify(darkAssertions)}`);
     }
   }
 

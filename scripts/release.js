@@ -107,6 +107,8 @@ function main() {
   run("npm", ["run", "screenshot:settings:templates"]);
   run("npm", ["run", "screenshot:settings:notifications"]);
   run("npm", ["run", "screenshot:settings:probe"]);
+  run("npm", ["run", "screenshot:dark"]);
+  run("npm", ["run", "screenshot:settings:dark"]);
   run("npm", ["run", "dist"]);
   if (!fs.existsSync(asset)) throw new Error(`未找到安装包：${asset}`);
 

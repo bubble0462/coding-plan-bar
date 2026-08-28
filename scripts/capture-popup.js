@@ -289,6 +289,17 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// 解析 CSS 颜色（hex 或 rgb）的最大通道值，用于判断深色主题下表面是否仍是浅色。
+function channelOf(color) {
+  const value = String(color).trim();
+  const hex = /^#([0-9a-f]{6})$/i.exec(value);
+  if (hex) {
+    return Math.max(parseInt(hex[1].slice(0, 2), 16), parseInt(hex[1].slice(2, 4), 16), parseInt(hex[1].slice(4, 6), 16));
+  }
+  const match = /rgba?\((\d+), (\d+), (\d+)/.exec(value);
+  return match ? Math.max(Number(match[1]), Number(match[2]), Number(match[3])) : 0;
+}
+
 async function main() {
   let captureWindow = null;
   const snapshots = providerSequence?.length
@@ -658,6 +669,25 @@ async function main() {
   }
   if (darkMode && assertions.rootTheme !== "dark") {
     throw new Error(`Popup dark theme was not applied to root element: ${JSON.stringify(assertions.rootTheme)}`);
+  }
+  if (darkMode) {
+    // 深色主题回归门禁：卡片必须比面板亮（亮度阶梯），否则卡片会沉进背景。
+    const darkLadder = await captureWindow.webContents.executeJavaScript(`(() => {
+      const cs = getComputedStyle(document.documentElement);
+      const card = document.querySelector(".provider");
+      return {
+        surface: cs.getPropertyValue("--surface").trim(),
+        panel: cs.getPropertyValue("--panel").trim(),
+        cardBg: card ? getComputedStyle(card).backgroundColor : "",
+        chartBg: cs.getPropertyValue("--chart-bg").trim(),
+      };
+    })()`);
+    if (channelOf(darkLadder.surface) <= channelOf(darkLadder.panel)) {
+      throw new Error(`Popup dark surface must be lighter than panel: ${JSON.stringify(darkLadder)}`);
+    }
+    if (channelOf(darkLadder.chartBg) > 80) {
+      throw new Error(`Popup dark chart card must not stay white: ${JSON.stringify(darkLadder)}`);
+    }
   }
 
   // Regression: overview tier chips must re-render bar width and risk color when

@@ -31,6 +31,16 @@
   --grid-line: rgba(15, 23, 42, 0.035);
   --grid-line-2: rgba(15, 23, 42, 0.025);
   --handle: #94a3b8;
+  /* 24h 用量图表：深色主题下改为深底浅线，不再是刺眼的白卡。 */
+  --chart-bg: #ffffff;
+  --chart-line: #2563eb;
+  --chart-area: rgba(37, 99, 235, 0.06);
+  --chart-label: #64748b;
+  --cost-text: #0f766e;
+  --grad-ok: linear-gradient(90deg, #20b455, #2dd4bf);
+  --grad-warn: linear-gradient(90deg, #f59e0b, #f97316);
+  --grad-danger: linear-gradient(90deg, #ef4444, #b91c1c);
+  --meter-track: linear-gradient(90deg, #16a34a 0%, #f59e0b 60%, #ef4444 100%);
   font-family:
     "Segoe UI",
     system-ui,
@@ -40,38 +50,49 @@
 }
 
 :root[data-theme="dark"] {
+  /* 深色主题重设计：分层靠"背景最暗 → 面板 → 卡片更亮"的亮度阶梯，
+     而不是浅色主题的直接换色。卡片必须比面板明显更亮才有浮起感。 */
   color-scheme: dark;
-  --bg: #0f172a;
-  --panel: #1e293b;
-  --surface: #1e293b;
-  --surface-2: #273449;
-  --text: #e2e8f0;
-  --text-strong: #f1f5f9;
-  --muted: #94a3b8;
-  --muted-2: #cbd5e1;
-  --border: #334155;
-  --border-strong: #475569;
-  --blue: #3b82f6;
-  --blue-soft: #1e3a5f;
-  --green: #22c55e;
+  --bg: #0b1120;
+  --panel: #151f33;
+  --surface: #1d2941;
+  --surface-2: #27354f;
+  --text: #dbe4f2;
+  --text-strong: #f2f6fc;
+  --muted: #93a1b8;
+  --muted-2: #bcc7d9;
+  --border: #2b3a57;
+  --border-strong: #3d4f70;
+  --blue: #6da4f8;
+  --blue-soft: #22375d;
+  --green: #34d399;
   --green-text: #4ade80;
-  --green-soft: #14301f;
+  --green-soft: rgba(52, 211, 153, 0.13);
   --amber: #f59e0b;
-  --amber-soft: #3a2f12;
+  --amber-soft: rgba(251, 191, 36, 0.13);
   --amber-text: #fbbf24;
   --red: #f87171;
-  --red-soft: #3a1212;
-  --red-text: #fca5a5;
+  --red-soft: rgba(248, 113, 113, 0.13);
+  --red-text: #fda4af;
   --reset-soon: #4ade80;
   --reset-watch: #fbbf24;
-  --warn-soft: #3a2f12;
-  --danger-soft: #3a1212;
-  --ring: 0 0 0 3px rgba(59, 130, 246, 0.3);
-  --shadow: 0 18px 48px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
-  --surface-glass: rgba(30, 41, 59, 0.88);
+  --warn-soft: rgba(251, 191, 36, 0.09);
+  --danger-soft: rgba(248, 113, 113, 0.1);
+  --ring: 0 0 0 3px rgba(109, 164, 248, 0.26);
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --surface-glass: rgba(29, 41, 65, 0.92);
   --grid-line: rgba(148, 163, 184, 0.05);
   --grid-line-2: rgba(148, 163, 184, 0.03);
-  --handle: #475569;
+  --handle: #4c5f80;
+  --chart-bg: #121b2f;
+  --chart-line: #5b9cf8;
+  --chart-area: rgba(91, 156, 248, 0.1);
+  --chart-label: #7f90ad;
+  --cost-text: #2dd4bf;
+  --grad-ok: linear-gradient(90deg, #2eb67d, #2dd4bf);
+  --grad-warn: linear-gradient(90deg, #f5a623, #fb923c);
+  --grad-danger: linear-gradient(90deg, #f87171, #ef4444);
+  --meter-track: linear-gradient(90deg, #22c55e 0%, #f59e0b 60%, #ef4444 100%);
 }
 
 * {
@@ -591,11 +612,11 @@ button {
 }
 
 .detail-chart {
-  /* The chart is intentionally a white card with a blue line in both themes. */
+  /* 图表底色/线色走主题变量：浅色白卡蓝线，深色改为深底亮线。 */
   padding: 8px 10px 6px;
   border: 1px solid var(--border);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--chart-bg);
 }
 
 .detail-chart svg {
@@ -606,25 +627,25 @@ button {
 
 .chart-line {
   fill: none;
-  stroke: #2563eb;
+  stroke: var(--chart-line);
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .chart-area {
-  fill: rgba(37, 99, 235, 0.06);
+  fill: var(--chart-area);
 }
 
 .chart-peak {
-  fill: #2563eb;
+  fill: var(--chart-line);
 }
 
 .chart-labels {
   display: flex;
   justify-content: space-between;
   padding: 3px 2px 0;
-  color: #64748b;
+  color: var(--chart-label);
   font-size: 9px;
   font-variant-numeric: tabular-nums;
 }
@@ -882,7 +903,7 @@ button {
 }
 
 .tier-usage .tier-cost strong {
-  color: #0f766e;
+  color: var(--cost-text);
 }
 
 .provider:hover .tier-usage {
@@ -960,15 +981,15 @@ button {
 }
 
 .bar-ok {
-  background: linear-gradient(90deg, #20b455, #2dd4bf);
+  background: var(--grad-ok);
 }
 
 .bar-warn {
-  background: linear-gradient(90deg, #f59e0b, #f97316);
+  background: var(--grad-warn);
 }
 
 .bar-danger {
-  background: linear-gradient(90deg, #ef4444, #b91c1c);
+  background: var(--grad-danger);
 }
 
 .tier-meta {
@@ -1026,7 +1047,7 @@ button {
 }
 
 .balance-box .balance-usage .tier-cost strong {
-  color: #0f766e;
+  color: var(--cost-text);
 }
 
 .balance-meter {
@@ -1034,7 +1055,7 @@ button {
   height: 7px;
   overflow: hidden;
   border-radius: 6px;
-  background: linear-gradient(90deg, #16a34a 0%, #f59e0b 60%, #ef4444 100%);
+  background: var(--meter-track);
   opacity: 0.4;
 }
 
@@ -1048,7 +1069,7 @@ button {
   height: 7px;
   overflow: hidden;
   border-radius: 6px;
-  background: linear-gradient(90deg, #16a34a 0%, #f59e0b 60%, #ef4444 100%);
+  background: var(--meter-track);
   opacity: 0.4;
 }
 
