@@ -26,6 +26,8 @@ A lightweight Windows tray app for monitoring Codex, Claude, coding-plan quotas,
 - Adaptive refresh: polls faster near quota resets or while a local coding agent is running, and stays low-frequency otherwise.
 - The add-provider dialog is a split selector: grouped template list on the left, credential and environment-variable preview on the right. The editor includes a connection test (connectivity + available model list).
 - Unified model & chat test: Codex, Antigravity and all coding-plan providers can fetch the live model list, then send a real one-shot message to verify the model replies (streamed). The connectivity test covers every official subscription (Codex, Claude, Grok, Antigravity).
+- Redesigned dark theme: a layered brightness ramp for floating cards, themed charts and status colors, with both themes unified through shared design tokens.
+- Interaction polish: toast notifications for actions, hover tooltips, inline button spinners, sliding segment indicators, and count-up number transitions on refresh.
 - Only Codex is enabled by default; all other providers are opt-in.
 - Generic `/v1/usage` balance template for compatible relay services.
 - DeepSeek CNY balances are displayed with `￥`.
