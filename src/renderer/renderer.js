@@ -250,8 +250,8 @@ function ensurePopupShell() {
           <button class="header-summary" type="button" data-action="focus-attention" hidden></button>
         </div>
         <div class="header-actions">
-          <button class="icon-button" data-action="refresh" title="刷新" aria-label="刷新" aria-busy="true">${ICONS.refresh}</button>
-          <button class="icon-button" data-action="config" title="设置" aria-label="设置">${ICONS.settings}</button>
+          <button class="icon-button" data-action="refresh" data-tip="立即刷新额度" data-tip-pos="bottom" aria-label="刷新" aria-busy="true">${ICONS.refresh}</button>
+          <button class="icon-button" data-action="config" data-tip="打开设置" data-tip-pos="bottom" aria-label="设置">${ICONS.settings}</button>
         </div>
       </header>
 
@@ -263,7 +263,7 @@ function ensurePopupShell() {
       <footer class="footer">
         <span data-role="refresh-interval"></span>
         <span data-role="freshness"></span>
-        <button class="footer-button" data-action="quit">退出</button>
+        <button class="footer-button" data-action="quit" data-tip="关闭弹窗并退出应用">退出</button>
       </footer>
       <div class="pointer pointer-above" aria-hidden="true"></div>
     </section>
@@ -331,6 +331,7 @@ function patchProviderList(list, providers, { fresh, isDataRefresh }) {
       card = providerCardFromMarkup(renderOverviewRow(provider, index, fresh, changed || isDataRefresh, canReorder));
     } else if (priorSignature !== signature || card.dataset.canReorder !== String(canReorder)) {
       const next = providerCardFromMarkup(renderOverviewRow(provider, index, false, changed, canReorder));
+      animateOverviewNumberChange(card, next);
       card.replaceWith(next);
       card = next;
       if (changed) flashChangedCard(card);
@@ -449,6 +450,51 @@ function flashChangedCard(card) {
   refreshHighlightTimer = window.setTimeout(() => {
     root.querySelectorAll(".provider.is-changed").forEach((node) => node.classList.remove("is-changed"));
   }, 520);
+}
+
+/* ===== 参考库移植：count-up 数字滚动 =====
+   数据刷新时，变化行的百分比数字从旧值缓动滚到新值（easeOutCubic，
+   先快后慢）；首次渲染没有旧值，保持静态文本，不打扰读数。 */
+const reduceMotion = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function parsePercent(text) {
+  const match = /(-?\d+(?:\.\d+)?)\s*%/.exec(String(text || ""));
+  return match ? Number(match[1]) : null;
+}
+
+function animateOverviewNumberChange(oldCard, newCard) {
+  if (!oldCard || !newCard || reduceMotion) return;
+  const pairUp = (selector, format) => {
+    const olds = Array.from(oldCard.querySelectorAll(selector));
+    const news = Array.from(newCard.querySelectorAll(selector));
+    olds.forEach((oldEl, pairIndex) => {
+      const target = news[pairIndex];
+      if (!target) return;
+      const from = parsePercent(oldEl.textContent);
+      const to = parsePercent(target.textContent);
+      if (from === null || to === null || from === to) return;
+      countUpTo(target, from, to, format);
+    });
+  };
+  pairUp(".overview-tier-value", (value) => `${Math.round(value)}%`);
+  pairUp(".overview-value", (value) => `剩余 ${Math.round(value)}%`);
+}
+
+function countUpTo(el, from, to, format, duration = 700) {
+  if (el.dataset.countUpFrame) window.cancelAnimationFrame(Number(el.dataset.countUpFrame));
+  const startedAt = performance.now();
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const tick = (now) => {
+    const progress = Math.min((now - startedAt) / duration, 1);
+    el.textContent = format(from + (to - from) * ease(progress));
+    if (progress < 1) {
+      el.dataset.countUpFrame = String(window.requestAnimationFrame(tick));
+    } else {
+      el.textContent = format(to);
+      delete el.dataset.countUpFrame;
+    }
+  };
+  el.dataset.countUpFrame = String(window.requestAnimationFrame(tick));
 }
 
 let lastAnnouncement = "";

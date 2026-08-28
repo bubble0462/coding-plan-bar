@@ -317,13 +317,17 @@ async function main() {
       // Channel may not exist yet on first registration.
     }
   }
-  ipcMain.handle("chat:list-models", () => ({
-    ok: true,
-    models: mockCodexModels.slice(),
-    httpStatus: 200,
-    latencyMs: 321,
-    source: "live",
-  }));
+  // 模拟真实网络延迟，让加载态（按钮内嵌转圈）可被门禁观察。
+  ipcMain.handle("chat:list-models", async () => {
+    await new Promise((resolve) => setTimeout(resolve, 280));
+    return {
+      ok: true,
+      models: mockCodexModels.slice(),
+      httpStatus: 200,
+      latencyMs: 321,
+      source: "live",
+    };
+  });
   ipcMain.handle("chat:probe", () => ({
     ok: true,
     text: "Capture probe reply.",
@@ -571,6 +575,14 @@ async function main() {
     await window.webContents.executeJavaScript(`
       document.querySelector('.editor [data-action="load-chat-models"]')?.click();
     `);
+    // 点击后立刻处于加载态：按钮带 is-loading 类和内嵌转圈。
+    const loadingState = await window.webContents.executeJavaScript(`(() => ({
+      isLoading: Boolean(document.querySelector('.editor [data-action="load-chat-models"].is-loading')),
+      hasSpinner: Boolean(document.querySelector('.editor [data-action="load-chat-models"] .btn-spinner')),
+    }))()`);
+    if (!loadingState.isLoading || !loadingState.hasSpinner) {
+      throw new Error(`Chat model fetch button missing loading spinner: ${JSON.stringify(loadingState)}`);
+    }
     await wait(300);
     const afterFetch = await window.webContents.executeJavaScript(`(() => ({
       fetchLine: document.querySelector(".editor .chat-meta")?.textContent || "",
@@ -756,6 +768,45 @@ async function main() {
       })()`,
     );
     if (!rendered) throw new Error("Backup page did not render expected controls");
+
+    // 分段控件滑动指示条：备份页有代理/密度/主题三组分段，必须有已贴位的指示条。
+    const indicatorResult = await window.webContents.executeJavaScript(`(() => {
+      const groups = [...document.querySelectorAll(".segmented[data-segment-key]")];
+      return {
+        groupCount: groups.length,
+        placed: groups.map((group) => {
+          const indicator = group.querySelector(".segment-indicator");
+          return Boolean(indicator && indicator.classList.contains("is-placed") && indicator.offsetWidth > 0);
+        }),
+      };
+    })()`);
+    if (indicatorResult.groupCount < 3 || indicatorResult.placed.some((ok) => !ok)) {
+      throw new Error(`Segmented controls missing placed indicators: ${JSON.stringify(indicatorResult)}`);
+    }
+
+    // 点击分段后指示条必须滑动（transform 变化）且激活项跟随。
+    const before = await window.webContents.executeJavaScript(`(() => {
+      const group = document.querySelector('.segmented[data-segment-key="density"]');
+      const indicator = group?.querySelector(".segment-indicator");
+      return { transform: indicator?.style.transform || "", active: group?.querySelector(".segment.is-active")?.textContent.trim() || "" };
+    })()`);
+    await window.webContents.executeJavaScript(`(() => {
+      const group = document.querySelector('.segmented[data-segment-key="density"]');
+      const target = [...group.querySelectorAll(".segment")].find((btn) => !btn.classList.contains("is-active"));
+      target?.click();
+    })()`);
+    await wait(500);
+    const after = await window.webContents.executeJavaScript(`(() => {
+      const group = document.querySelector('.segmented[data-segment-key="density"]');
+      const indicator = group?.querySelector(".segment-indicator");
+      return { transform: indicator?.style.transform || "", active: group?.querySelector(".segment.is-active")?.textContent.trim() || "" };
+    })()`);
+    if (!after.transform || after.transform === before.transform || after.active === before.active) {
+      throw new Error(`Segment indicator did not slide or active state did not follow: ${JSON.stringify({ before, after })}`);
+    }
+    // 还原未保存的改动，让截图回到该页的干净状态。
+    await window.webContents.executeJavaScript(`document.querySelector('[data-action="reset"]')?.click()`);
+    await wait(450);
   }
 
   if (showNotifications) {
@@ -807,13 +858,14 @@ async function main() {
       const latest = document.querySelector('[data-action="latest-import"]');
       if (!popover || !latest) return false;
       const text = popover.textContent || "";
+      const latestTip = latest.getAttribute("data-tip") || "";
       return text.includes("将 JSON 文件拖到这里") &&
         text.includes("选择文件") &&
         text.includes("粘贴内容") &&
         latest.textContent.includes("最新文件") &&
-        latest.title.includes("Downloads") &&
-        latest.title.includes("Claude") &&
-        latest.title.includes("CPA");
+        latestTip.includes("Downloads") &&
+        latestTip.includes("Claude") &&
+        latestTip.includes("CPA");
     })()`);
     if (!sourceRendered) throw new Error("Unified import source dialog did not render expected controls");
   }
@@ -908,6 +960,22 @@ async function main() {
     })()`);
     if (!dirtyResult.hasSave || !dirtyResult.hasReset || !dirtyResult.status.includes("未保存")) {
       throw new Error(`Dirty actions did not appear in the provider view: ${JSON.stringify(dirtyResult)}`);
+    }
+    await wait(220);
+
+    // 保存成功必须弹 toast 轻提示（参考库 toast 的接入回归）。
+    await window.webContents.executeJavaScript(`document.querySelector('[data-action="save"]')?.click()`);
+    await wait(500);
+    const toastResult = await window.webContents.executeJavaScript(`(() => {
+      const toast = document.querySelector("body > .toast-container .toast");
+      return {
+        present: Boolean(toast),
+        text: toast?.textContent || "",
+        isSuccess: Boolean(toast?.classList.contains("success")),
+      };
+    })()`);
+    if (!toastResult.present || !toastResult.text.includes("已保存") || !toastResult.isSuccess) {
+      throw new Error(`Save did not show a success toast: ${JSON.stringify(toastResult)}`);
     }
     await wait(220);
   }

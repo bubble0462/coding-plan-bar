@@ -193,7 +193,17 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Tab" && dialog) trapDialogFocus(event, dialog);
 });
 
+// 分段指示条的上一次位置记录（render() 会重建 DOM，靠它延续滑动）。
+const segmentIndicatorMemory = new Map();
+
 load();
+
+// 窗口尺寸变化后分段指示条需要重新贴位（直接落位，不做滑动动画）。
+window.addEventListener("resize", () => {
+  segmentIndicatorMemory.clear();
+  layoutSegmentIndicators();
+  positionSelectionBar();
+});
 
 // Subscribe to update state pushed from the main process, and pull the current
 // state once on load so the update page reflects any background auto-check.
@@ -312,8 +322,8 @@ function render() {
       <header class="topbar">
         <h1>设置</h1>
         <div class="top-actions">
-          <button class="btn" data-action="refresh">重新读取</button>
-          <button class="btn" data-action="open-json">高级 JSON</button>
+          <button class="btn" data-action="refresh" data-tip="放弃未保存的修改，从磁盘重新读取 config.json" data-tip-pos="bottom">重新读取</button>
+          <button class="btn" data-action="open-json" data-tip="查看 / 编辑配置文件原文（含密钥，注意保密）" data-tip-pos="bottom">高级 JSON</button>
         </div>
       </header>
 
@@ -322,9 +332,9 @@ function render() {
           <div class="sidebar-head">
             <strong>账号与供应商</strong>
             <div class="sidebar-head-actions">
-              <button class="btn small" data-action="latest-import" title="从 Downloads 查找最新 Claude 或 CPA 账号 JSON">最新文件</button>
-              <button class="btn small" data-action="import-accounts">导入</button>
-              <button class="btn small primary" data-action="toggle-templates">添加</button>
+              <button class="btn small" data-action="latest-import" data-tip="从 Downloads 查找最新的 Claude 或 CPA 账号 JSON" data-tip-pos="bottom">最新文件</button>
+              <button class="btn small" data-action="import-accounts" data-tip="从 JSON 文件导入 Claude / CPA 账号（自动去重）" data-tip-pos="bottom">导入</button>
+              <button class="btn small primary" data-action="toggle-templates" data-tip="从模板创建供应商" data-tip-pos="bottom">添加</button>
             </div>
           </div>
           ${renderAccountTools()}
@@ -393,6 +403,7 @@ function render() {
   hasRenderedSettingsShell = true;
   bindEvents();
   positionSelectionBar();
+  layoutSegmentIndicators();
   if (lastSelectedId !== state.selectedId) {
     flashFormSwap();
   }
@@ -400,6 +411,76 @@ function render() {
 }
 
 let lastSelectedId = null;
+
+/* ===== 参考库移植：toast 轻提示 + 分段控件滑动指示条 ===== */
+
+/* 轻提示：右上角滑入的玻璃小条。textContent 写入防 XSS；挂到 body 上，
+   不会被 render() 重建设置界面的 innerHTML 波及。 */
+function showToast(message, type = "info", duration = 3200) {
+  const safeType = ["info", "success", "error", "warning"].includes(type) ? type : "info";
+  let container = document.querySelector("body > .toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement("div");
+  toast.className = `toast ${safeType}`;
+  const msg = document.createElement("span");
+  msg.className = "toast-msg";
+  msg.textContent = message;
+  const closeButton = document.createElement("button");
+  closeButton.className = "toast-close";
+  closeButton.type = "button";
+  closeButton.setAttribute("aria-label", "关闭");
+  closeButton.innerHTML = "&times;";
+  toast.append(msg, closeButton);
+  const dismiss = () => {
+    toast.classList.remove("is-in");
+    window.setTimeout(() => toast.remove(), 360);
+  };
+  closeButton.addEventListener("click", dismiss);
+  container.appendChild(toast);
+  requestAnimationFrame(() => requestAnimationFrame(() => toast.classList.add("is-in")));
+  if (duration > 0) window.setTimeout(dismiss, duration);
+}
+
+/* 分段指示条：render() 会整体重建 DOM，靠内存里记录的上一次位置，
+   让新指示条先落旧位再滑到新位；位置没变则直接落位不闪动。 */
+function layoutSegmentIndicators() {
+  root.querySelectorAll(".segmented").forEach((group) => {
+    const indicator = group.querySelector(".segment-indicator");
+    const active = group.querySelector(".segment.is-active");
+    if (!indicator) return;
+    if (!active) {
+      indicator.classList.remove("is-placed");
+      return;
+    }
+    const next = { x: active.offsetLeft, y: active.offsetTop, w: active.offsetWidth, h: active.offsetHeight };
+    const key = group.dataset.segmentKey || "";
+    const prev = segmentIndicatorMemory.get(key);
+    if (!prev) {
+      indicator.style.transition = "none";
+      applySegmentIndicatorBox(indicator, next);
+      void indicator.offsetWidth;
+      indicator.style.transition = "";
+    } else if (prev.x !== next.x || prev.y !== next.y || prev.w !== next.w) {
+      applySegmentIndicatorBox(indicator, prev);
+      void indicator.offsetWidth;
+      applySegmentIndicatorBox(indicator, next);
+    } else {
+      applySegmentIndicatorBox(indicator, next);
+    }
+    indicator.classList.add("is-placed");
+    segmentIndicatorMemory.set(key, next);
+  });
+}
+
+function applySegmentIndicatorBox(indicator, box) {
+  indicator.style.transform = `translate(${box.x}px, ${box.y}px)`;
+  indicator.style.width = `${box.w}px`;
+  indicator.style.height = `${box.h}px`;
+}
 
 /* Translate the shared selection bar to cover the active provider row.
    Called after every render so the bar glides instead of jumping. */
@@ -682,7 +763,7 @@ function renderUpdatePage() {
 
       <div class="update-actions">
         ${primary}
-        <button class="btn" data-action="check-update" ${checking ? "disabled" : ""}>${checking ? "检查中…" : "检查更新"}</button>
+        <button class="btn${checking ? " is-loading" : ""}" data-action="check-update" ${checking ? "disabled" : ""}>${checking ? '<span class="btn-spinner" aria-hidden="true"></span>检查中…' : "检查更新"}</button>
         ${u.status === "available" && result.releaseUrl ? `<a class="btn" href="#" data-action="open-release">手动下载</a>` : ""}
       </div>
 
@@ -858,9 +939,10 @@ function renderNotificationsPage() {
           <strong>系统通知</strong>
           <span>总开关；关闭后所有额度提醒都不再发送。</span>
         </div>
-        <div class="segmented">
+        <div class="segmented" data-segment-key="notifications">
           <button class="segment ${notifications.enabled !== false ? "is-active" : ""}" data-action="set-notifications-enabled" data-value="on">开启</button>
           <button class="segment ${notifications.enabled === false ? "is-active" : ""}" data-action="set-notifications-enabled" data-value="off">关闭</button>
+          <i class="segment-indicator" aria-hidden="true"></i>
         </div>
       </div>
       <div class="section">
@@ -918,10 +1000,11 @@ function renderProxySection() {
         <strong>网络代理</strong>
         <span>让额度查询 / 测试连通 / 对话探测与浏览器出网一致。</span>
       </div>
-      <div class="segmented">
+      <div class="segmented" data-segment-key="proxy">
         <button class="segment ${mode === "system" ? "is-active" : ""}" data-action="set-proxy-mode" data-mode="system">系统代理</button>
         <button class="segment ${mode === "direct" ? "is-active" : ""}" data-action="set-proxy-mode" data-mode="direct">直连</button>
         <button class="segment ${mode === "manual" ? "is-active" : ""}" data-action="set-proxy-mode" data-mode="manual">手动代理</button>
+        <i class="segment-indicator" aria-hidden="true"></i>
       </div>
       ${
         showUrl
@@ -945,9 +1028,10 @@ function renderDensitySection() {
         <strong>额度面板密度</strong>
         <span>账号较多时可切换紧凑模式。</span>
       </div>
-      <div class="segmented">
+      <div class="segmented" data-segment-key="density">
         <button class="segment ${state.config.panelDensity !== "compact" ? "is-active" : ""}" data-action="set-density" data-density="comfortable">舒适</button>
         <button class="segment ${state.config.panelDensity === "compact" ? "is-active" : ""}" data-action="set-density" data-density="compact">紧凑</button>
+        <i class="segment-indicator" aria-hidden="true"></i>
       </div>
     </div>
   `;
@@ -960,9 +1044,10 @@ function renderThemeSection() {
         <strong>外观主题</strong>
         <span>切换面板和设置窗口的配色。</span>
       </div>
-      <div class="segmented">
+      <div class="segmented" data-segment-key="theme">
         <button class="segment ${state.config.theme !== "dark" ? "is-active" : ""}" data-action="set-theme" data-theme="light">浅色</button>
         <button class="segment ${state.config.theme === "dark" ? "is-active" : ""}" data-action="set-theme" data-theme="dark">深色</button>
+        <i class="segment-indicator" aria-hidden="true"></i>
       </div>
     </div>
   `;
@@ -985,10 +1070,10 @@ function renderEditor(provider) {
         </label>
         ${
           provider.kind === "official-subscription"
-            ? `<button class="btn" data-action="test-codex" title="向官方后端发送一次额度查询请求（只读）">测试连通</button>`
+            ? `<button class="btn" data-action="test-codex" data-tip="向官方后端发送一次额度查询请求（只读）" data-tip-pos="bottom">测试连通</button>`
             : ""
         }
-        <button class="btn danger" data-action="delete-provider">删除</button>
+        <button class="btn danger" data-action="delete-provider" data-tip="移除此供应商（保存后生效）" data-tip-pos="bottom">删除</button>
       </div>
     </div>
     <form class="form">
@@ -1179,7 +1264,7 @@ function renderEndpointProbeCard(provider) {
         <span>用当前请求地址与 API Key 查询可用模型并验证连通性（只读，不消耗对话额度）。</span>
       </div>
       <div class="endpoint-probe-body">
-        <button class="btn" data-action="probe-endpoint" ${loading ? "disabled" : ""}>${loading ? "测试中…" : "测试连接与模型"}</button>
+        <button class="btn${loading ? " is-loading" : ""}" data-action="probe-endpoint" ${loading ? "disabled" : ""}>${loading ? '<span class="btn-spinner" aria-hidden="true"></span>测试中…' : "测试连接与模型"}</button>
         ${result ? renderEndpointProbeResult(result) : `<span class="hint">显示 HTTP 状态、延迟与模型列表。</span>`}
       </div>
     </div>
@@ -1300,9 +1385,9 @@ function renderChatProbeCard(provider) {
       </div>
       <div class="chat-probe-controls">
         <div class="chat-model-select">${modelSelect}</div>
-        <button class="btn" data-action="load-chat-models" ${busy || modelsLoading ? "disabled" : ""}>${modelsLoading ? "获取中…" : models.length ? "重新获取" : "获取模型"}</button>
+        <button class="btn${busy || modelsLoading ? " is-loading" : ""}" data-action="load-chat-models" ${busy || modelsLoading ? "disabled" : ""}>${modelsLoading ? '<span class="btn-spinner" aria-hidden="true"></span>获取中…' : models.length ? "重新获取" : "获取模型"}</button>
         <input class="chat-prompt-input" data-action="edit-chat-prompt" value="${escapeAttr(prompt)}" placeholder="测试消息（默认 hi）" ${busy ? "disabled" : ""} aria-label="测试消息" />
-        <button class="btn primary" data-action="send-chat-probe" ${sendDisabled ? "disabled" : ""}>${escapeHtml(sendLabel)}</button>
+        <button class="btn primary${busy ? " is-loading" : ""}" data-action="send-chat-probe" ${sendDisabled ? "disabled" : ""}>${busy ? `<span class="btn-spinner" aria-hidden="true"></span>${escapeHtml(sendLabel)}` : escapeHtml(sendLabel)}</button>
       </div>
       ${fetchLine}
       <div class="chat-reply-area" data-role="chat-reply">${replyBody}${status === "streaming" ? '<span class="chat-cursor">▋</span>' : ""}</div>
@@ -2265,9 +2350,10 @@ function replaceEditorForSelectedProvider() {
 async function runCodexConnectionTest(button) {
   const provider = selectedProvider();
   if (!provider || button.disabled) return;
-  const originalLabel = button.textContent;
+  const originalHtml = button.innerHTML;
   button.disabled = true;
-  button.textContent = "测试中…";
+  button.classList.add("is-loading");
+  button.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span>测试中…';
   state.status = `正在测试 ${provider.name || provider.id} 的连通性…`;
   state.statusIsError = false;
   state.statusTone = "loading";
@@ -2286,19 +2372,23 @@ async function runCodexConnectionTest(button) {
       state.status = `连通正常 · ${result.latencyMs}ms · HTTP ${result.httpStatus}${tiers ? " · " + tiers : ""}`;
       state.statusIsError = false;
       state.statusTone = "success";
+      showToast(`连通正常 · ${result.latencyMs}ms`, "success");
     } else {
       state.status = `测试失败：${(result.failure && result.failure.label) || result.message || "未知错误"}`;
       state.statusIsError = true;
       state.statusTone = "error";
+      showToast(state.status, "error");
     }
   } catch (error) {
     state.status = `测试失败：${String(error?.message || error)}`;
     state.statusIsError = true;
     state.statusTone = "error";
+    showToast(state.status, "error");
   } finally {
     updateStatusText();
     button.disabled = false;
-    button.textContent = originalLabel;
+    button.classList.remove("is-loading");
+    button.innerHTML = originalHtml;
   }
 }
 
@@ -2696,11 +2786,13 @@ async function confirmImportAccounts() {
     state.statusTone = (result.importedCount || result.updatedCount) ? "success" : "dirty";
     render();
     flipList(firstPositions);
+    showToast(state.status, "success");
   } catch (error) {
     state.status = error.message || String(error);
     state.statusIsError = true;
     state.statusTone = "error";
     updateStatusText();
+    showToast(state.status, "error");
   }
 }
 
@@ -2879,6 +2971,7 @@ async function save() {
     state.statusTone = "error";
   }
   render();
+  showToast(state.statusIsError ? state.status : "已保存并刷新额度", state.statusIsError ? "error" : "success");
 }
 
 function selectedProvider() {

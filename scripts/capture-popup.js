@@ -747,6 +747,21 @@ async function main() {
       throw new Error(`Popup codex weekly chip did not update after refresh: ${JSON.stringify(refreshAssertions.codexWeekly)}`);
     }
 
+    // count-up：数值刷新后百分比数字从旧值滚动到新值，最终必须精确落位。
+    await wait(900);
+    const countUpResult = await captureWindow.webContents.executeJavaScript(`(() => ({
+      glmFiveHour: document.querySelector('.provider.overview-row[data-provider-id="glm"] .overview-tier:nth-child(1) .overview-tier-value')?.textContent || "",
+      glmWeekly: document.querySelector('.provider.overview-row[data-provider-id="glm"] .overview-tier:nth-child(2) .overview-tier-value')?.textContent || "",
+      refreshTip: document.querySelector('[data-action="refresh"]')?.getAttribute("data-tip") || "",
+      tipCss: getComputedStyle(document.documentElement).getPropertyValue("--tip-bg").trim(),
+    }))()`);
+    if (!grokOnly && (countUpResult.glmFiveHour !== "4%" || countUpResult.glmWeekly !== "22%")) {
+      throw new Error(`Popup count-up did not settle on the refreshed values: ${JSON.stringify(countUpResult)}`);
+    }
+    if (countUpResult.refreshTip !== "立即刷新额度" || !countUpResult.tipCss) {
+      throw new Error(`Popup tooltip wiring missing: ${JSON.stringify(countUpResult)}`);
+    }
+
     // Celebration overlay: one confetti burst + toast per reset event key.
     await captureWindow.webContents.executeJavaScript(
       `handleCelebrations([{ key: "celebrate-test-1", providerId: "glm", providerName: "GLM Coding Plan", tierLabel: "周额度" }])`,

@@ -75,6 +75,7 @@ module.exports = [
         // Browser CSS/layout APIs used by renderer/settings.
         getComputedStyle: "readonly",
         CSS: "readonly",
+        performance: "readonly",
         requestIdleCallback: "readonly",
         cancelIdleCallback: "readonly",
         MutationObserver: "readonly",
