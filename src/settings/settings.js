@@ -317,6 +317,13 @@ function render() {
   applyTheme();
   const selected = selectedProvider();
   const enterClass = hasRenderedSettingsShell ? "" : "is-entering";
+  // render() 会整体重建 DOM，滚动容器（编辑器表单 / 供应商列表）会被换新、
+  // 滚动位置归零——切分段、改配置时页面跳顶就是这里来的。
+  // 同一视图同一供应商的重渲染恢复原滚动位置；视图或选中项变化则回到顶部。
+  const formKey = `${state.view}:${state.selectedId || ""}`;
+  const restoreFormScroll = hasRenderedSettingsShell && formKey === lastRenderedFormKey;
+  const priorFormScroll = restoreFormScroll ? root.querySelector(".form")?.scrollTop || 0 : 0;
+  const priorListScroll = hasRenderedSettingsShell ? root.querySelector(".provider-list")?.scrollTop || 0 : 0;
   root.innerHTML = `
     <section class="settings-shell ${enterClass}">
       <header class="topbar">
@@ -404,6 +411,11 @@ function render() {
   bindEvents();
   positionSelectionBar();
   layoutSegmentIndicators();
+  const form = root.querySelector(".form");
+  if (form) form.scrollTop = priorFormScroll;
+  const providerListPane = root.querySelector(".provider-list");
+  if (providerListPane) providerListPane.scrollTop = priorListScroll;
+  lastRenderedFormKey = formKey;
   if (lastSelectedId !== state.selectedId) {
     flashFormSwap();
   }
@@ -411,6 +423,7 @@ function render() {
 }
 
 let lastSelectedId = null;
+let lastRenderedFormKey = "";
 
 /* ===== 参考库移植：toast 轻提示 + 分段控件滑动指示条 ===== */
 

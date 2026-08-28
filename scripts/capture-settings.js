@@ -785,10 +785,23 @@ async function main() {
     }
 
     // 点击分段后指示条必须滑动（transform 变化）且激活项跟随。
+    // 同时回归"跳顶"bug：重渲染后表单必须保持在原滚动位置。
+    await window.webContents.executeJavaScript(`(() => {
+      const form = document.querySelector(".backup-page.form");
+      if (form) {
+        form.style.maxHeight = "320px";
+        form.scrollTop = 130;
+      }
+    })()`);
+    await wait(80);
     const before = await window.webContents.executeJavaScript(`(() => {
       const group = document.querySelector('.segmented[data-segment-key="density"]');
       const indicator = group?.querySelector(".segment-indicator");
-      return { transform: indicator?.style.transform || "", active: group?.querySelector(".segment.is-active")?.textContent.trim() || "" };
+      return {
+        transform: indicator?.style.transform || "",
+        active: group?.querySelector(".segment.is-active")?.textContent.trim() || "",
+        scrollTop: document.querySelector(".backup-page.form")?.scrollTop ?? -1,
+      };
     })()`);
     await window.webContents.executeJavaScript(`(() => {
       const group = document.querySelector('.segmented[data-segment-key="density"]');
@@ -799,12 +812,27 @@ async function main() {
     const after = await window.webContents.executeJavaScript(`(() => {
       const group = document.querySelector('.segmented[data-segment-key="density"]');
       const indicator = group?.querySelector(".segment-indicator");
-      return { transform: indicator?.style.transform || "", active: group?.querySelector(".segment.is-active")?.textContent.trim() || "" };
+      const form = document.querySelector(".backup-page.form");
+      return {
+        transform: indicator?.style.transform || "",
+        active: group?.querySelector(".segment.is-active")?.textContent.trim() || "",
+        scrollTop: form ? form.scrollTop : -1,
+      };
     })()`);
     if (!after.transform || after.transform === before.transform || after.active === before.active) {
       throw new Error(`Segment indicator did not slide or active state did not follow: ${JSON.stringify({ before, after })}`);
     }
-    // 还原未保存的改动，让截图回到该页的干净状态。
+    if (before.scrollTop < 100 || Math.abs(after.scrollTop - before.scrollTop) > 4) {
+      throw new Error(`Segment toggle must not scroll the form back to top: ${JSON.stringify({ before, after })}`);
+    }
+    // 还原未保存的改动与滚动注入，让截图回到该页的干净状态。
+    await window.webContents.executeJavaScript(`(() => {
+      const form = document.querySelector(".backup-page.form");
+      if (form) {
+        form.style.maxHeight = "";
+        form.scrollTop = 0;
+      }
+    })()`);
     await window.webContents.executeJavaScript(`document.querySelector('[data-action="reset"]')?.click()`);
     await wait(450);
   }
